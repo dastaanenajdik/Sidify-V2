@@ -298,9 +298,27 @@ lagaya gaya hai, isliye **koi UI file, icon ya layout touch nahi hua** — click
 |---|---|
 | DB | **PostgreSQL** |
 | ORM | **Drizzle ORM** `0.45.2` (`drizzle-orm/node-postgres`) |
-| Driver | **pg** `8.20.0` — `Pool`, `globalThis` pe cache (dev HMR safe) |
+| Driver | **pg** `8.20.0` — `Pool` **lazily** banta hai (pehli query pe), dev me `globalThis` cache (HMR safe) |
 | Migrations | **drizzle-kit** `0.31.10`, `drizzle.config.json` |
-| Env | `DATABASE_URL` **required** — na ho to module load pe throw |
+| Env | `DATABASE_URL` runtime pe required — **par build pe nahi** (lazy init, neeche dekhen) |
+
+**DB handle LAZY initialize hota hai** (`src/db/index.ts`) — ye build ke liye zaroori hai:
+`Pool`/Drizzle instance **pehli actual query** pe banta hai, import pe nahi. Pehle module top-level
+pe `DATABASE_URL` na milne par throw hota tha, aur kyunki `next build` apne *"Collecting page data"*
+phase me **har route module import** karta hai (`/api/downloads` → `@/db`), koi bhi build us
+environment me fail ho jata tha jahan ye secret set na ho (Vercel **Preview** deployments, CI, fresh
+clone):
+
+```
+Error: DATABASE_URL is required
+Build error occurred
+Error: Failed to collect page data for /api/downloads
+```
+
+Ab build environment-independent hai. Runtime behaviour same — wahi `DATABASE_URL is required`
+error, bas boot pe nahi balki pehli use pe. Saare call sites **untouched**: `db` aur `pool` ab
+**Proxy** hain jo property access pe real object resolve karte hain, isliye `db.select()/.insert()/
+.delete()/.execute()` aur `pool.query()` pehle jaise hi kaam karte hain (methods bind ho jate hain).
 
 **7 tables** (`src/db/schema.ts`) — sab denormalized, track ka pura payload `jsonb` me, koi foreign key nahi:
 
