@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { encodePseudoAlbum, toTrack, ytSearch, ytSearchTracks } from "@/lib/ytdlp";
+import { ytSearch, ytSearchTracks } from "@/lib/engine";
+import { encodePseudoAlbum } from "@/lib/parser";
 import { db } from "@/db";
 import { recentlyPlayed } from "@/db/schema";
 import { desc } from "drizzle-orm";
@@ -32,8 +33,12 @@ export async function GET(req: NextRequest) {
   }
 
   if (!cache || Date.now() - cache.at > 10 * 60_000 || cache.country !== country) {
-    const [trendingEntries, releaseResults] = await Promise.all([
-      ytSearch("trending songs 2026 official audio", 22).catch(() => []),
+    const [trendingResult, releaseResults] = await Promise.all([
+      ytSearch("trending songs 2026 official audio", "songs", 22).catch(() => ({
+        tracks: [] as Track[],
+        albums: [] as Album[],
+        artists: [] as Artist[],
+      })),
       Promise.all(
         RELEASE_QUERIES.map(async (rq) => {
           const t = await ytSearchTracks(rq.q, 1).catch(() => [] as Track[]);
@@ -42,15 +47,15 @@ export async function GET(req: NextRequest) {
       ),
     ]);
 
-    const trending = trendingEntries.map(toTrack).filter(Boolean) as Track[];
+    const trending = trendingResult.tracks;
 
+    // Unique artists behind the trending tracks (same derivation as before).
     const seen = new Set<string>();
     const topArtists: Artist[] = [];
-    for (const e of trendingEntries) {
-      if (e?.channel_id && e?.channel && !seen.has(e.channel_id)) {
-        seen.add(e.channel_id);
-        const tr = toTrack(e);
-        topArtists.push({ id: String(e.channel_id), name: String(e.channel), artwork: tr?.artwork });
+    for (const t of trending) {
+      if (t.artistId && t.artist && !seen.has(t.artistId)) {
+        seen.add(t.artistId);
+        topArtists.push({ id: t.artistId, name: t.artist, artwork: t.artwork });
       }
       if (topArtists.length >= 10) break;
     }
@@ -71,10 +76,7 @@ export async function GET(req: NextRequest) {
   const seedArtist = recent[0]?.artist;
   let recommended: Track[] = [];
   try {
-    recommended = await ytSearchTracks(
-      seedArtist ? `${seedArtist} songs` : "chill hits 2026",
-      14
-    );
+    recommended = await ytSearchTracks(seedArtist ? `${seedArtist} songs` : "chill hits 2026", 14);
     const recentIds = new Set(recent.map((t) => t.id));
     recommended = recommended.filter((t) => !recentIds.has(t.id)).slice(0, 14);
   } catch {

@@ -1,79 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
-import { encodePseudoAlbum, toTrack, ytSearch } from "@/lib/ytdlp";
-import type { Album, Artist, Track } from "@/lib/types";
+import { ytSearch, type SearchKind } from "@/lib/engine";
+import { encodePseudoAlbum } from "@/lib/parser";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const VALID_TYPES: SearchKind[] = ["all", "songs", "albums", "artists"];
+
 /** GET /api/search?q={query}&type={all|songs|albums|artists}&limit={n}
- *  YouTube-powered search (yt-dlp). Response shape unchanged: {songs, albums, artists}. */
+ *  YouTube Music powered search (youtubei.js / InnerTube).
+ *  Response shape unchanged for the existing client: {songs, albums, artists, items},
+ *  plus a flat `results` alias. */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const q = (sp.get("q") || "").trim();
-  const type = sp.get("type") || "all";
+  const requestedType = (sp.get("type") || "all") as SearchKind;
+  const type: SearchKind = VALID_TYPES.includes(requestedType) ? requestedType : "all";
   const limit = Math.min(Number(sp.get("limit")) || 20, 30);
 
-  if (!q) return NextResponse.json({ success: true, songs: [], albums: [], artists: [], items: [] });
+  const empty = { success: true, songs: [], albums: [], artists: [], items: [], results: [] };
+  if (!q) return NextResponse.json(empty);
 
   try {
-    let songs: Track[] = [];
-    let albums: Album[] = [];
-    let artists: Artist[] = [];
+    const found = await ytSearch(q, type, limit);
 
-    if (type === "all") {
-      const [videoEntries, albumEntries] = await Promise.all([
-        ytSearch(q, Math.max(8, Math.floor(limit / 2))).catch(() => []),
-        ytSearch(`${q} full album`, 6).catch(() => []),
-      ]);
-      songs = videoEntries.map(toTrack).filter(Boolean) as Track[];
-      const seenCh = new Set<string>();
-      for (const e of videoEntries) {
-        const cid = e?.channel_id;
-        const name = e?.channel;
-        if (cid && name && !seenCh.has(cid)) {
-          seenCh.add(cid);
-          const tr = toTrack(e);
-          artists.push({ id: String(cid), name: String(name), artwork: tr?.artwork });
-        }
-        if (artists.length >= 6) break;
-      }
-      albums = albumEntries
-        .map(toTrack)
-        .filter(Boolean)
-        .map((t) => ({
-          id: encodePseudoAlbum({ q: t!.title, t: t!.title, a: t!.artist }),
-          title: t!.title,
-          artist: t!.artist,
-          artistId: t!.artistId,
-          artwork: t!.artwork,
-        })) as Album[];
-    } else if (type === "songs") {
-      songs = (await ytSearch(q, limit).catch(() => [])).map(toTrack).filter(Boolean) as Track[];
-    } else if (type === "albums") {
-      const entries = await ytSearch(`${q} album`, limit).catch(() => []);
-      albums = entries
-        .map(toTrack)
-        .filter(Boolean)
-        .map((t) => ({
-          id: encodePseudoAlbum({ q: t!.title, t: t!.title, a: t!.artist }),
-          title: t!.title,
-          artist: t!.artist,
-          artistId: t!.artistId,
-          artwork: t!.artwork,
-        })) as Album[];
-    } else if (type === "artists") {
-      const entries = await ytSearch(q, Math.min(limit + 6, 30)).catch(() => []);
-      const seen = new Set<string>();
-      for (const e of entries) {
-        if (e?.channel_id && e?.channel && !seen.has(e.channel_id)) {
-          seen.add(e.channel_id);
-          const tr = toTrack(e);
-          artists.push({ id: String(e.channel_id), name: String(e.channel), artwork: tr?.artwork });
-        }
-        if (artists.length >= limit) break;
-      }
-    }
+    const songs = found.tracks;
+    // Album results coming from a song-shaped item still need a usable id.
+    const albums = found.albums.map((a) => ({
+      ...a,
+      id: a.id || encodePseudoAlbum({ q: a.title, t: a.title, a: a.artist }),
+    }));
+    const artists = found.artists.filter((a) => a.id && a.name);
 
     return NextResponse.json(
       {
@@ -89,11 +47,20 @@ export async function GET(req: NextRequest) {
           artist: t.artist,
           thumbnail: t.artwork,
         })),
+        results: songs.map((t) => ({
+          id: t.videoId,
+          videoId: t.videoId,
+          title: t.title,
+          artist: t.artist,
+          album: t.album ?? null,
+          duration: Math.round((t.durationMs || 0) / 1000),
+          thumbnail: t.artwork,
+        })),
       },
       { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600" } }
     );
   } catch (e) {
     console.error("search error", e);
-    return NextResponse.json({ success: false, songs: [], albums: [], artists: [], items: [], error: "Search failed" }, { status: 502 });
+    return NextResponse.json({ ...empty, success: false, error: "Search failed" }, { status: 502 });
   }
 }

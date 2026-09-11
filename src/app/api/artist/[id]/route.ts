@@ -1,21 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { encodePseudoAlbum, toTrack, ytChannelVideos } from "@/lib/ytdlp";
+import { ytChannelVideos } from "@/lib/engine";
+import { encodePseudoAlbum } from "@/lib/parser";
 import type { Album, Track } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-/** GET /api/artist/{channelId} — YouTube channel videos as artist profile. */
+/** GET /api/artist/{channelId} — YouTube (Music) artist / channel as an artist profile. */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   try {
     const data = await ytChannelVideos(id, 20);
-    if (!data) {
+    if (!data || !data.tracks.length) {
       return NextResponse.json({ error: "Artist not found" }, { status: 404 });
     }
 
-    const songs = data.entries.map(toTrack).filter(Boolean).slice(0, 14) as Track[];
+    const songs: Track[] = data.tracks.slice(0, 14);
     const art = songs[0]?.artwork || "";
 
     const artist = {
@@ -24,6 +25,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       artwork: art,
     };
 
+    // Same three curated shelves the artist page has always rendered.
     const albums: Album[] = [
       { q: `${data.name} best songs`, t: `${data.name} — Top Tracks` },
       { q: `${data.name} full album`, t: `${data.name} — Albums` },

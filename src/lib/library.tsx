@@ -50,7 +50,8 @@ export function useLiked() {
       if (liked) await api.unlike(track.id);
       else await api.like(track);
       push({ title: liked ? "Removed from Liked Songs" : "Added to Liked Songs", kind: "ok" });
-      if (!liked && useSettings.getState().autoDownloadLiked) void downloadTrackFlow(track);
+      // Silent: while downloads are gated we don't want a toast on every like.
+      if (!liked && useSettings.getState().autoDownloadLiked) void downloadTrackFlow(track, { silent: true });
       qc.invalidateQueries({ queryKey: ["liked"] });
     } catch {
       usePlayer.getState().set({ likedIds: { ...state.likedIds } });
@@ -62,7 +63,27 @@ export function useLiked() {
 }
 
 /* ------------------------------- downloads -------------------------------- */
-export async function downloadTrackFlow(track: Track) {
+
+/**
+ * Downloads are temporarily disabled while the streaming engine settles.
+ * Every download affordance in the app (track rows, context menu, full player,
+ * auto-download-on-like) funnels through this one function, so gating it here
+ * keeps all existing UI, icons and layouts exactly as they are.
+ */
+export const DOWNLOADS_ENABLED = false;
+
+export async function downloadTrackFlow(track: Track, opts?: { silent?: boolean }): Promise<void> {
+  if (!DOWNLOADS_ENABLED) {
+    if (!opts?.silent) {
+      useUi.getState().pushToast({
+        title: "Download feature is coming soon! 🚀",
+        desc: track?.title,
+        kind: "info",
+      });
+    }
+    return;
+  }
+
   const ui = useUi.getState();
   const p = usePlayer.getState();
   if (p.downloadedIds[track.id]) {
