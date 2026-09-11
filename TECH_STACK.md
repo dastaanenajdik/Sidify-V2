@@ -9,7 +9,9 @@
 ## 1. One-line summary
 
 Sidify ek **YouTube-powered music streaming PWA** hai. Isme Spotify/Apple/JioSaavn ka **koi official API nahi** hai —
-search, metadata, artwork aur audio **sab YouTube se** aata hai, server-side `yt-dlp` binary + `youtubei.js` se extract hota hai.
+search, metadata, artwork aur audio **sab YouTube se** aata hai, server-side **`youtubei.js` (InnerTube)** se.
+Pehle ye `yt-dlp` CLI binary (`child_process.execFile`) se hota tha — wo **hata diya gaya hai** (file-permission
+`644` aur datacenter-IP blocking ki wajah se cloud deploy pe fail hota tha).
 Frontend Next.js 16 (App Router) + React 19 + Tailwind v4 + Zustand + React Query, audio playback **Web Audio API**
 ke custom dual-deck graph se (real DSP: EQ, crossfade, pan), aur fallback ke roop mein **YouTube IFrame Player API**.
 
@@ -22,7 +24,7 @@ ke custom dual-deck graph se (real DSP: EQ, crossfade, pan), aur fallback ke roo
 | Framework | **Next.js** (App Router) | `16.2.6` | `src/app` structure, Route Handlers as API |
 | UI lib | **React / ReactDOM** | `19.2.6` | Client Components (`"use client"`) heavy |
 | Language | **TypeScript** | `5.9.3` | `strict: true`, path alias `@/* -> ./src/*` |
-| Runtime | **Node.js** | — | `export const runtime = "nodejs"` + `maxDuration = 60` har media route pe (yt-dlp spawn karne ke liye) |
+| Runtime | **Node.js** | — | `export const runtime = "nodejs"` + `maxDuration = 60` har media route pe (`node:vm` decipher ke liye — Edge pe chalega hi nahi) |
 | Package name | `nextjs-postgresql-template` | — | Starter template se banaya gaya, rename nahi hua |
 
 Scripts: `dev`, `build`, `start`, `lint`, `typecheck`. **No test framework, no CI, no Dockerfile/vercel.json** repo mein.
@@ -31,49 +33,96 @@ Scripts: `dev`, `build`, `start`, `lint`, `typecheck`. **No test framework, no C
 
 ## 3. Music Search — kaise kaam karta hai
 
-### 3.1 Source: YouTube via `yt-dlp` (server-side only)
+### 3.1 Source: YouTube via `youtubei.js` (InnerTube) — server-side only
 
-`src/lib/ytdlp.ts` — client ko kabhi expose nahi hota.
+`src/lib/engine.ts` (session + fetching) aur `src/lib/parser.ts` (pure transforms). Client ko kabhi expose nahi hota.
 
-- Repo mein **binary commit kiya gaya hai**: `bin/yt-dlp` (~5.4 MB).
-- Path resolution order: `process.env.YTDLP_PATH` → `/app/bin/yt-dlp` → `yt-dlp` on PATH.
-- Execution: `node:child_process.execFile` (shell nahi → command injection safe),
-  `timeout`, `maxBuffer: 64 MB`, `killSignal: SIGKILL`, global flags `--no-warnings --skip-download`.
+**`yt-dlp` binary aur `src/lib/ytdlp.ts` dono repo se hata diye gaye hain** — ab koi child process, koi
+on-disk binary, koi `chmod +x` requirement nahi. Sab kuch pure JS HTTP (InnerTube) hai.
 
-**Search command:**
-```bash
-yt-dlp --no-warnings --skip-download "ytsearch20:{query}" --flat-playlist --dump-json   # 30s timeout
+**Custom JavaScript evaluator (`node:vm`)** — ye sabse zaroori hissa hai:
+youtubei.js ka Node platform shim ek aisa `eval` register karta hai jo sirf **throw** karta hai
+(*"you must provide your own JavaScript evaluator"*). Uske bina har `signatureCipher` / `n`-parameter
+URL decipher nahi hota aur streaming 403 deta hai. Isliye session banane se **pehle**:
+
+```ts
+Platform.load({
+  ...Platform.shim,
+  eval: (data, env) => vm.runInNewContext(data.output, env, { timeout: 10_000 }),
+});
 ```
-`--flat-playlist` = fast (per-video page fetch nahi karta). Output NDJSON, line-by-line `JSON.parse`.
-Query sanitize: control chars stripped, 120 char cap.
 
-**Artist / channel command:**
-```bash
-yt-dlp "https://www.youtube.com/channel/{UC...}/videos" -J --flat-playlist --playlist-items 1-20   # 40s timeout
-```
-`@handle` bhi support (`https://www.youtube.com/@handle/videos`). Fail hone pe plain name-search pe fallback.
+`data.output` YouTube ke player script se nikla hua IIFE hai jo `{ sig, n }` return karta hai — `vm` ka
+completion value wahi hai jo `Player.decipher()` aage padhta hai. `timeout: 10s` runaway script se bachata hai.
+(⚠️ `node:vm` ek *stability* boundary hai, security sandbox nahi — isliye ye routes Node runtime pe hi chalte hain.)
 
-### 3.2 "Albums" aur "Artists" — actually kya hain
+**Singleton session** (`getYT()`): `globalThis` pe cache (dev HMR safe) + in-flight creation promise,
+taaki cold start pe duplicate player download na ho. Config: `cache: false`, `retrieve_player: true`,
+`generate_session_locally: false`, `fail_fast: false`, `enable_session_cache: false`.
 
-- **Albums = pseudo albums.** Real album catalog nahi hai. Search query ko JSON me pack karke
-  `base64url` encode kiya jata hai: `ytq-<base64url({q,t,a})>`. Album page khulne pe wahi query dobara
-  search hoti hai (fallback chain: full query → title → `{artist} best songs`).
-- **Artists = YouTube channels.** `id` = `channel_id`, `name` = channel name. Artist page = channel ke videos +
-  3 synthetic "albums" (`{name} best songs`, `{name} full album`, `{name} live performance`).
-- **Artwork = YouTube thumbnails:** `https://i.ytimg.com/vi/{id}/maxresdefault.jpg` (server best thumbnail pick karta hai, `.webp` skip).
-  Client pe global `error` listener fallback chain chalata hai: `maxres → sd → hq → mq → default → /icon.png`.
+**Degraded-boot resilience:** `retrieve_player: true` fail hone par (base.js fetch nahi ho paya) session
+dobara `retrieve_player: false` ke saath banta hai. Search/metadata ko player ki zaroorat hoti hi nahi —
+sirf deciphering ko. Isse catalogue chalta rehta hai aur playback gracefully IFrame engine pe gir jata hai,
+bajaye iske ki pura app 502 de. (`isEngineDegraded()` flag isi ko track karta hai.) Session bootstrap pe
+20 s hard timeout bhi hai.
 
-### 3.3 Caching (bahut important — yt-dlp slow hai)
+**Search:** `yt.music.search(query)` / `yt.music.search(query, { type: 'song' | 'album' | 'artist' })`
+→ internally `client: 'YTMUSIC'` force hota hai.
+**Plain YouTube fallback:** `yt.search(query, { type: 'video' })` — agar Music search khali/fail ho,
+taaki search screen kabhi blank na rahe.
+
+### 3.2 Nested response parsing — `flattenShelves()`
+
+YouTube Music ka response shelves me nested hota hai (`Search.contents` → `MusicShelf | MusicCardShelf |
+ItemSection` → `MusicResponsiveListItem`). Library ke apne `Search.songs` / `.albums` / `.artists` getters
+shelf ko uske **English title string** se dhundhte hain — kisi bhi doosre locale pe chupchap `undefined`
+return kar dete hain.
+
+Isliye `flattenShelves()` pura tree walk karta hai (depth-capped, cycle-safe via `WeakSet`) aur har leaf ko
+uske **id shape** se classify karta hai — locale-independent:
+
+| Id shape | Bucket |
+|---|---|
+| 11-char `[A-Za-z0-9_-]{11}` | **Track** (playable videoId) |
+| `MPR…` / `MPREb…` / `OLAK5uy…` | **Album** (real YouTube Music album) |
+| `UC…` | **Artist** (channel) |
+
+`classifyItems()` **two-pass** hai: pehle real Albums/Artists shelves (jinke paas proper square artwork aur
+canonical naam hota hai), phir tracks — aur songs se artists tabhi backfill hote hain jab real artist shelf
+na aaya ho. Iske alada `seenTrack` dedupe us common case ko handle karta hai jab ek hi recording "Songs"
+(ATV) aur "Videos" (UGC/OMV) dono shelves me aati hai.
+
+**Metadata merge:** YouTube ek hi track ko kai shelves me repeat karta hai aur har copy me *alag* amount me
+metadata hota hai (top-result `MusicCardShelf` aksar album chhod deta hai). Isliye "first wins" ki jagah
+baad wali sighting se missing fields (album, artistId, duration, thumbnail, year) **merge** kiye jate hain.
+
+### 3.2b "Albums" aur "Artists" — actually kya hain
+
+- **Albums ab REAL ho sakte hain.** YouTube Music album ids (`MPR…`, `OLAK5uy…`, `MPREb…`) `music.getAlbum()`
+  se apni asli tracklist dete hain (header se title/artist/artwork + `contents` se tracks).
+- **Pseudo albums abhi bhi support hain** (backward compatible): search query ko JSON me pack karke
+  `base64url` → `ytq-<…>`. Home shelves, artist shelves aur purane links isi pe chalte hain. Album route
+  dono handle karta hai — real id ho to `music.getAlbum()`, `ytq-` ho to grouped search
+  (fallback chain: full query → title → `{artist} best songs`).
+- **Artists = YouTube channels** (`UC…`). Artist page pehle `music.getArtist()` try karta hai (sabse rich
+  music-first data), phir `getChannel()` (videos tab), phir naam se search. `@handle` support bhi hai.
+- **Artwork:** songs ke liye jaan-boojh kar `https://i.ytimg.com/vi/{id}/maxresdefault.jpg` hi use hota hai —
+  kyunki client pe pehle se `maxres → sd → hq → mq → default → /icon.png` fallback chain aur Media Session
+  artwork list inhi URLs pe wired hai. Albums/artists ke liye YouTube Music ka square art use hota hai,
+  jiska `lh3.googleusercontent.com` size suffix `=w600-h600-l90-rj` pe normalize kiya jata hai (sharper cards).
+
+### 3.3 Caching (bahut important — har InnerTube call ek network round-trip hai)
 
 | Cache | TTL |
 |---|---|
 | Search results (in-memory `Map`) | 10 min |
 | Channel/artist | 30 min |
 | Resolved audio URL | 90 min (negative/fail = 60 sec) |
+| Album tracklist | 30 min |
 | Home page payload | 10 min (per country) |
 | HTTP header on `/api/search` | `public, s-maxage=300, stale-while-revalidate=600` |
 
-Plus **in-flight dedupe** — same query ke 10 parallel requests pe yt-dlp ek hi baar chalta hai.
+Plus **in-flight dedupe** — same query ke 10 parallel requests pe InnerTube call ek hi baar hota hai.
 
 ### 3.4 Home page (`/api/home`)
 
@@ -90,7 +139,7 @@ New Music 2026 / Bollywood Fresh / Pop Radar / Punjabi Heat / Hip-Hop Now / Lo-F
 - Tabs: All / Songs / Albums / Artists; Songs pe 30 limit, baaki 22
 - 12 **category tiles** (Top Hits, Bollywood, K-Pop, Hip-Hop, EDM, Indie, Jazz, Punjabi, Rock, 90s, Acoustic, Sad Hours) — Tailwind gradients
 - **Search history** `localStorage["sidify-search-history"]` (max 8, dedupe case-insensitive)
-- Explicit filter client-side toggle (note: yt-dlp se `explicit` flag aata hi nahi, hamesha `false`)
+- Explicit filter client-side toggle (note: InnerTube search se `explicit` flag reliably nahi milta, `toTrack()` `false` set karta hai)
 
 ---
 
@@ -102,14 +151,28 @@ Do modes hain, automatically choose hote hain:
 
 ### 4.1 Audio URL resolution chain (server)
 
-`resolveAudio(videoId)` — `src/lib/ytdlp.ts`:
+`resolveAudio(videoId)` — `src/lib/engine.ts`:
+
 ```
-yt-dlp player_client=web  →  android  →  tv_embedded  →  youtubei.js (Innertube, ANDROID client)
+getBasicInfo(client=ANDROID) → TV_SIMPLY → YTMUSIC_ANDROID → MWEB → WEB
 ```
-- yt-dlp: `--dump-single-json -f "bestaudio[ext=m4a]/bestaudio/best" --extractor-args youtube:player_client={client}` (35s timeout)
-- URL direct na mile to `formats[]` me se best audio-only (acodec ≠ none, vcodec = none) highest `abr/tbr` pick
-- `youtubei.js` **v18** = fallback library (`Innertube.create({ client_type: "ANDROID", generate_session_locally: true })`)
-- `next.config.ts` me `serverExternalPackages: ["youtubei.js"]` (bundler se exclude)
+ANDROID/TV_SIMPLY pehle, kyunki ye usually pre-signed URLs dete hain jinhe `po_token` / BotGuard chahiye
+hi nahi hota; WEB progressively strict hai.
+
+Har client pe:
+1. `playability_status.status` check (`OK` ke alawa → skip; `LOGIN_REQUIRED`/age-restricted → null)
+2. `info.chooseFormat({ type: 'audio', quality: 'best' })` — spec path. Default `format: 'mp4'` ki wajah se
+   ye **AAC/m4a** chunta hai, jo `<audio>` + Web Audio ke liye sabse compatible container hai.
+3. Agar `chooseFormat` throw kare (koi matching format nahi) → manual fallback:
+   `streaming_data.formats + adaptive_formats` me se audio-only (`has_audio && !has_video`),
+   **non-OTF pehle** (on-the-fly formats ko scrub karne ke liye explicit range juggling chahiye),
+   phir highest bitrate.
+4. `format.url` pehle se deciphered hota hai zyada-tar clients pe; na ho to
+   `await format.decipher(yt.session.player)` — **yahin custom `node:vm` evaluator kaam aata hai**.
+
+Sab clients fail ho jayein aur engine degraded mode me na ho → `resetYT()` se session rebuild karke
+fast clients dobara try (stale visitor-data / rotated player script recovery). Degraded mode me ye skip
+hota hai (player hi nahi hai, rebuild se kuch nahi hoga) — client seedha IFrame pe gir jata hai.
 
 ### 4.2 `/api/stream` — proxy (do modes ek hi endpoint pe)
 
@@ -118,9 +181,13 @@ GET /api/stream?video_id={id}          → JSON metadata {title, artist, thumbna
 GET /api/stream?video_id={id}&play=1   → actual audio BYTES (proxied)
 ```
 Proxy kyun? YouTube ke `googlevideo.com` URLs **CORS + IP-bound** hote hain. Server unhe fetch karke
-same-origin pe re-serve karta hai, **`Range` header passthrough** ke saath (seeking ke liye zaroori),
-aur `content-type/length/range/accept-ranges` copy karta hai (default `audio/mp4`, `cache-control: no-store`).
-Upstream `403/410` (URL expire) → cache skip karke re-resolve + retry.
+same-origin pe re-serve karta hai, **`Range` header passthrough** ke saath (seeking/scrubbing ke liye zaroori),
+aur `content-type/length/range/accept-ranges` copy karta hai (default format ke `mime_type`, warna `audio/mp4`,
+plus `cache-control: no-store`). Upstream `403/410` (URL expire) → `resolveAudio(id, skipCache=true)` se
+re-resolve + retry.
+
+Range absent ho to jaan-boojh kar `bytes=0-` **nahi** bheja jata: full `200` response asli `Content-Length`
+lata hai, aur browser usi se seek-bar ke liye `duration` nikalta hai.
 
 ### 4.3 Engine A — "native" mode (primary): Web Audio API
 
@@ -195,21 +262,26 @@ Probe result **5 min cache**, 24 s abort timeout. `playSeq` counter se stale asy
 
 ---
 
-## 5. Downloads / Offline
+## 5. Downloads / Offline — ⏸ temporarily disabled ("Coming Soon")
 
-`src/lib/clientApi.ts` + `src/lib/offlineDb.ts`
+Downloads abhi **gate** kar diye gaye hain. `src/lib/library.tsx` me ek single flag hai:
 
-- Client `fetch('/api/stream?...&play=1')` → `res.body.getReader()` se stream read →
-  chunks → `new Blob(chunks, {type:"audio/mp4"})` → **IndexedDB**
-- IndexedDB: database `sidify-offline`, object store `audio`, key = trackId
-- Live **progress %** (`content-length` ke against), Zustand `downloadProgress` me
-- Metadata Postgres `downloads` table me (quality, sizeBytes, timestamp)
-- Object URLs ek `Map` me cache (revoke helper ke saath)
-- Storage estimate: `navigator.storage.estimate()` (Settings → Storage used)
-- Settings: download quality (low/medium/high), Wi-Fi only, auto-download liked songs
-- ⚠️ Note: "encrypted-browser storage" UI copy hai — actually plain IndexedDB blob hai
+```ts
+export const DOWNLOADS_ENABLED = false;   // flip to true to restore
+```
 
----
+`downloadTrackFlow()` chaaron download affordances ka **single funnel** hai — `TrackRow` (track list),
+`TrackMenu` (context menu), `FullPlayer` (player controls), aur auto-download-on-like. Gate isi function me
+lagaya gaya hai, isliye **koi UI file, icon ya layout touch nahi hua** — click pe sirf toast aata hai:
+
+> **"Download feature is coming soon! 🚀"**
+
+- Auto-download-on-like `{ silent: true }` ke saath call hota hai, taaki har like pe toast spam na ho.
+- Heavy IndexedDB blob-streaming path ab execute hi nahi hota (dead-but-intact — flag flip karte hi wapas).
+- Jo tracks pehle se downloaded hain unka **offline playback abhi bhi chalta hai**: `offlineDb.ts` ke reads
+  aur `audioEngine.chooseMode()` ka `downloadedIds` → `offlineObjectUrl()` → native deck path untouched hai.
+- Downloads page pe purane rows ki delete/clear bhi kaam karta hai (`removeDownloadEverywhere`, `clearAllDownloads`).
+- `/api/downloads` GET/DELETE intact hai; POST ab client se call hi nahi hota.
 
 ## 6. Database
 
@@ -317,11 +389,11 @@ optimistic updates (like toggle turant UI me, fail pe rollback).
 
 | Endpoint | Method | Kaam |
 |---|---|---|
-| `/api/search?q&type&limit` | GET | yt-dlp search → `{songs, albums, artists, items}` |
+| `/api/search?q&type&limit` | GET | `yt.music.search` → `{songs, albums, artists, items, results}` |
 | `/api/stream?video_id[&play=1]` | GET | metadata JSON **ya** proxied audio bytes (Range support) |
-| `/api/home?country` | GET | trending / new releases / top artists / recommended / recently played |
-| `/api/artist/[id]` | GET | YouTube channel → artist profile + songs + pseudo albums |
-| `/api/album/[id]` | GET | `ytq-…` decode → search-based tracklist |
+| `/api/home?country` | GET | trending / new releases / top artists / recommended / recently played (DB down ho to bhi 200) |
+| `/api/artist/[id]` | GET | `music.getArtist` → `getChannel` → search: artist profile + songs + 3 shelves |
+| `/api/album/[id]` | GET | real `MPR…`/`OLAK5uy…` → `music.getAlbum`; `ytq-…` → search-based tracklist |
 | `/api/library/liked` | GET/POST/DELETE | liked songs |
 | `/api/library/recent` | GET/POST/DELETE | recently played |
 | `/api/library/followed` | GET/POST/DELETE | followed artists |
@@ -353,19 +425,26 @@ ESLint `9.39.4` (flat config) + `eslint-config-next/core-web-vitals` · `drizzle
 
 ## 14. Known gaps / stubs / risks
 
-1. **`bin/yt-dlp` mode `644` hai (executable bit nahi).** Deploy pe `chmod +x` ya `YTDLP_PATH` set karna padega.
-   5.4 MB binary git me committed hai — repo bloat.
-2. **YouTube extraction = ToS gray area.** `googlevideo.com` URLs expire hote hain (isliye 403 retry + 90 min TTL),
-   aur IP-bound hote hain (isliye server proxy). Extraction break hone pe app automatically iframe mode pe gir jata hai.
-3. **Koi authentication nahi** — liked/playlist/downloads sab global. Multi-user deploy pe data mix ho jayega.
-4. **Missing PWA icons** (section 9).
-5. **Region & Language settings cosmetic hain** — `/api/search` `country` param padhta hi nahi;
-   `/api/home` sirf cache key ke liye use karta hai, results same rehte hain.
-6. **"Cast to device" aur "Car mode" buttons stub hain** — sirf toast dikhate hain, koi Chromecast/AirPlay/Android Auto code nahi.
-7. **Explicit filter no-op hai** — yt-dlp flat search se explicit flag nahi aata, `toTrack()` hamesha `false` set karta hai.
-8. **Download quality setting cosmetic hai** — hamesha `bestaudio` hi download hota hai, koi bitrate selection nahi.
-9. Unused deps: `clsx`, `dotenv`. Package name abhi bhi `nextjs-postgresql-template`.
-10. README effectively empty hai (UTF-16-ish garbage, sirf "Sidify-V2").
+1. ~~`bin/yt-dlp` executable nahi tha~~ — **resolved**: yt-dlp dependency hi hata di gayi. Ab sirf
+   `youtubei.js` chahiye; koi binary, koi `chmod`, koi `YTDLP_PATH`. Repo ~5.4 MB halka ho gaya.
+2. **YouTube extraction = ToS gray area.** `googlevideo.com` URLs expire hote hain (isliye 403/410 retry +
+   90 min TTL) aur IP-bound hote hain (isliye server proxy). InnerTube client contracts YouTube kabhi bhi
+   badal sakta hai — isliye multi-client chain + degraded boot + IFrame fallback teeno layers rakhe gaye hain.
+3. **Datacenter IP blocking abhi bhi possible hai.** yt-dlp-specific block hat gaya, par InnerTube bhi
+   `po_token`/BotGuard maang sakta hai (khaas kar WEB client pe). ANDROID/TV_SIMPLY pehle try hote hain;
+   sab fail ho to app automatically IFrame mode me chala jata hai (music chalta rehta hai).
+4. **Koi authentication nahi** — liked/playlist/downloads sab global. Multi-user deploy pe data mix ho jayega.
+5. **Missing PWA icons** — manifest 5 icons reference karta hai, `public/` me sirf `manifest.json` + `sw.js` hain.
+6. **Region & Language settings cosmetic hain** — `/api/search` `country` param padhta hi nahi;
+   `/api/home` sirf cache key ke liye use karta hai. (Ab chaaho to `Innertube.create({ location })` se wire ho sakta hai.)
+7. **"Cast to device" aur "Car mode" buttons stub hain** — sirf toast, koi Chromecast/AirPlay/Android Auto code nahi.
+8. **Explicit filter no-op hai** — InnerTube search se reliable explicit flag nahi milta.
+9. **Download quality setting cosmetic hai** — downloads abhi gated hain; re-enable karne pe bhi `chooseFormat`
+   hamesha best audio leta hai, bitrate selection nahi.
+10. **`node:vm` security sandbox nahi hai.** Evaluate hone wala script YouTube ka player code hai (TLS se aata hai)
+    aur `timeout` guard hai — par ise isolation mat samajhna. Isliye ye routes Edge pe nahi, sirf Node runtime pe chalte hain.
+11. Unused deps: `clsx`, `dotenv`. Package name abhi bhi `nextjs-postgresql-template`.
+12. README effectively empty hai.
 
 ---
 
@@ -376,8 +455,10 @@ Next.js 16 (App Router) · React 19 · TypeScript 5.9 (strict) · Node.js runtim
 Tailwind CSS v4 (CSS-first) · next/font (Inter + Sora) · lucide-react · Framer Motion 13
 Zustand 5 (persist) · TanStack React Query 5
 PostgreSQL · Drizzle ORM 0.45 · pg 8.20 · drizzle-kit
-yt-dlp (bundled binary, child_process) · youtubei.js 18 (Innertube ANDROID)
+youtubei.js 18 (InnerTube) · custom node:vm decipher evaluator · Platform.load shim override
+InnerTube clients: YTMUSIC (search) · ANDROID/TV_SIMPLY/YTMUSIC_ANDROID/MWEB/WEB (streaming)
 Web Audio API (dual-deck, 5-band biquad EQ, StereoPanner, crossfade)
+IndexedDB (offline audio — reads live, writes gated) · Downloads currently disabled ("coming soon")
 YouTube IFrame Player API (hidden-harbor singleton)
 Media Session API · IndexedDB (offline audio) · Service Worker (hand-written) · Web App Manifest (PWA)
 ESLint 9 (flat) · PostCSS 8
