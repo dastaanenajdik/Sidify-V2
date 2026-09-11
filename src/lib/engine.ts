@@ -15,7 +15,6 @@
  * These routes run on the Node runtime only — never on Edge.
  */
 import vm from "node:vm";
-import { Innertube, Platform } from "youtubei.js";
 import type { Album, Artist, Track } from "./types";
 import {
   backfillFromTracks,
@@ -30,7 +29,26 @@ import {
   ytThumbs,
 } from "./parser";
 
-type YT = Awaited<ReturnType<typeof Innertube.create>>;
+/**
+ * `youtubei.js` is imported **lazily**, never statically.
+ *
+ * A top-level `import { Innertube } from "youtubei.js"` pulls the package (and its
+ * ESM-only graph: `@bufbuild/protobuf`, `meriyah`, `fflate`) into the route module
+ * graph, so `next build` evaluates it during "Collecting page data" and Vercel's
+ * output tracing has to resolve its conditional `exports` map at build time — which
+ * is exactly what failed the deployment. Deferring to `await import()` keeps the
+ * package out of build-time evaluation entirely (the same pattern the previous
+ * engine used) with no behavioural cost: the singleton is built on first request
+ * either way, and Node caches the dynamic import afterwards.
+ */
+type YTModule = typeof import("youtubei.js");
+type YT = InstanceType<YTModule["Innertube"]>;
+
+let ytModulePromise: Promise<YTModule> | null = null;
+function loadYTModule(): Promise<YTModule> {
+  if (!ytModulePromise) ytModulePromise = import("youtubei.js");
+  return ytModulePromise;
+}
 
 const VM_TIMEOUT_MS = 10_000;
 /** Hard cap on session bootstrap so a hung YouTube fetch can't eat the whole request. */
@@ -52,8 +70,9 @@ const g = globalThis as typeof globalThis & {
  * expects the completion value of the script back — an object like `{ sig, n }`.
  * `vm.runInNewContext` returns exactly that completion value.
  */
-function installVmEvaluator(): void {
+async function installVmEvaluator(): Promise<void> {
   if (g.__sidifyVmPatched) return;
+  const { Platform } = await loadYTModule();
   Platform.load({
     ...Platform.shim,
     eval: (data: { output: string }, env: Record<string, any>) =>
@@ -90,6 +109,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * engine instead of the whole app returning 502s.
  */
 async function createSession(): Promise<YT> {
+  const { Innertube } = await loadYTModule();
   const base = {
     // youtubei.js types `cache` as `ICache`, but every code path guards with
     // `if (cache)` — any falsy value genuinely disables disk caching, which is
@@ -134,9 +154,10 @@ export async function getYT(): Promise<YT> {
   if (g.__sidifyYt) return g.__sidifyYt;
   if (g.__sidifyYtPromise) return g.__sidifyYtPromise;
 
-  installVmEvaluator();
-
+  // The evaluator must be installed before the session is created, and the lock has
+  // to be claimed synchronously so concurrent cold-start callers don't double-boot.
   const pending = (async () => {
+    await installVmEvaluator();
     const yt = await createSession();
     g.__sidifyYt = yt;
     return yt;

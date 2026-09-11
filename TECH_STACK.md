@@ -56,6 +56,15 @@ Platform.load({
 completion value wahi hai jo `Player.decipher()` aage padhta hai. `timeout: 10s` runaway script se bachata hai.
 (⚠️ `node:vm` ek *stability* boundary hai, security sandbox nahi — isliye ye routes Node runtime pe hi chalte hain.)
 
+**`youtubei.js` LAZY import hota hai (`await import()`), static nahi** — ye zaroori hai:
+top-level `import { Innertube } from "youtubei.js"` package ko route module graph me kheench leta,
+jisse `next build` ke "Collecting page data" phase me wo evaluate hota hai aur Vercel ki output
+tracing ko iska conditional `exports` map build-time pe resolve karna padta hai — **isi se Vercel
+deployment fail hui thi**. Lazy import se package build-time evaluation se bahar rehta hai
+(wahi pattern jo pehle wala engine use karta tha), aur behaviour pe koi farq nahi padta:
+singleton pehli request pe hi banta hai. Verify: scratch build me `youtubei.js` ko evaluate-time
+pe throw karwane par lazy version **pass** hua, static version **"Failed to collect page data"** pe fail.
+
 **Singleton session** (`getYT()`): `globalThis` pe cache (dev HMR safe) + in-flight creation promise,
 taaki cold start pe duplicate player download na ho. Config: `cache: false`, `retrieve_player: true`,
 `generate_session_locally: false`, `fail_fast: false`, `enable_session_cache: false`.
