@@ -15,6 +15,7 @@ import {
   ListMusic,
   LogOut,
   Moon,
+  PlayCircle,
   RefreshCw,
   Shield,
   SlidersHorizontal,
@@ -538,6 +539,14 @@ function SystemSection() {
       </Row>
       <Row label="Notification bar controls" desc="Show transport controls in notifications">
         <Toggle checked={s.notifControls} onChange={(v) => s.set({ notifControls: v })} />
+      </Row>
+      <Row label="Instructions to play background" desc="Keep the music going with the screen off or the app closed">
+        <button
+          onClick={() => useUi.getState().setBgHelpOpen(true)}
+          className="glass flex items-center gap-2 rounded-xl px-4 py-2 text-[12.5px] font-bold hover:accent-text"
+        >
+          <PlayCircle size={14} /> Show guide
+        </button>
       </Row>
       <Row label="Bluetooth autoplay" desc="Resume when your headphones or car connects">
         <Toggle checked={s.bluetoothAutoplay} onChange={(v) => s.set({ bluetoothAutoplay: v })} />

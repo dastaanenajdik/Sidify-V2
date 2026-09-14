@@ -475,6 +475,60 @@ ESLint `9.39.4` (flat config) + `eslint-config-next/core-web-vitals` · `drizzle
 
 ---
 
+## 14.5 Update 1.0 (14 Sept 2026) — playback + library fixes
+
+Koi naya UI element ya backend route add nahi kiya gaya — sab fixes client layer me hain.
+
+**Playback (`src/lib/audioEngine.ts`, `src/lib/ytPlayer.ts`)**
+1. **First click never played** — do wajah:
+   - `ytController` `new YT.Player()` ke turant baad `loadVideoById()` bhej deta tha, lekin
+     YouTube IFrame API **`onReady` se pehle aaye hue har command ko discard** kar deta hai.
+     Ab ek bounded `whenReady()` gate hai (`ready` flag + pending-request queue + `reqId` cancellation).
+   - `probeNative()` (24 s timeout wala `/api/stream` lookup) await hone tak playback atka rehta tha.
+     Ab probe **2.5 s** ke baad race se haar maan kar iframe pe start ho jata hai, aur verdict
+     background me cache ho jata hai — agle track se native chalega.
+   - Bonus: pehle user gesture pe `unlockEngine()` AudioContext resume + YT player warm-up
+     **synchronously** karta hai (gesture ke andar hi), isliye browser ka autoplay-lock todta hai.
+2. **Song khatam → next auto-play nahi hota tha**
+   - `fading` kabhi `true` pe atak jata tha (`startCrossfade` ka stale-`seq` early-return) →
+     uske baad `next()`/`prev()`/autoplay hamesha `return` ho jate the. Ab har `playIndex()`
+     `fading` reset karta hai aur crossfade timer clear karta hai.
+   - Queue ke end pe `appendSimilar()` ab **manual + auto dono** next pe chalti hai (autoplay ON ho),
+     aur artist / title / album / context-label — kai seeds try karti hai.
+   - Ek 2.5 s **watchdog** player ki asli state check karta hai (hidden tab me `ended` event
+     miss ho jata hai, rAF suspend ho jata hai) → queue aage badhti rehti hai.
+   - `handleEnded()` ek `endingBusy` guard se reentrancy-safe hai (double-skip nahi hoga).
+3. Track error pe session khatam nahi hota: skip + similar songs append, limit 4 → 8.
+
+**Library (`src/lib/localLibrary.ts` + `src/lib/clientApi.ts`) — likes / playlists / history**
+`/api/library/*` aur `/api/playlists` Postgres pe jate hain. `DATABASE_URL` na ho, tables na hon,
+ya 5xx aaye to **har write chup-chaap kho jata tha** (heart, playlist create, add-to-playlist, history).
+Ab ek local-first store hai:
+- har write pehle `localStorage["sidify-local-library"]` me jaata hai, phir best-effort server pe mirror;
+- reads **server ∪ local** merge karte hain (track id pe dedupe, unlike/removal tombstones ke saath);
+- local playlists **negative ids** use karte hain, isliye server ke serial ids se kabhi collide nahi karte;
+- server ke playlist me offline kiye gaye adds `extras[playlistId]` me park hote hain aur read pe fold ho jate hain;
+- API fail hone ke baad 20 s ka cooldown hai (har interaction me dead round-trip na lage), phir apne-aap retry.
+Backend healthy ho to behaviour pehle jaisa hi hai — koi duplicate nahi, koi UI change nahi.
+
+**History live-refresh:** `recordRecent()` ab 30 s window ke baad same track dobara record karta hai
+(earlier: session me ek hi baar) aur `emitRefresh("recent")` bus pe broadcast karta hai →
+Library → History tab aur `["liked"]`/`["playlists"]`/`["playlist"]` queries live update hote hain.
+
+**Add-to-playlist modal (`src/components/Modals.tsx`):** playlist list se add, inline "New playlist"
+create + usi me add (raw fetch hack hata diya, ab React Query invalidation), already-added check
+(✓ icon), busy/disabled state aur error toasts.
+
+**Notices (`src/components/UpdatePopups.tsx`):** site khulte hi (per browser session) pehle
+**Update notice — Minor update 1.0 · 14 Sept 2026** (top-right cross se dismiss), phir
+**"Instructions to play in background or off screen"** — 5 s tak close button nahi aata,
+uske baad cross aata hai. Wahi guide Settings → System & Device Controls →
+**"Instructions to play background"** se dobara khulta hai (`useUi.bgHelpOpen`).
+
+**PWA:** `public/sw.js` cache names v1 → v2 (purana shell/chunks is release ke baad serve na hon).
+
+---
+
 ## 15. TL;DR stack list
 
 ```

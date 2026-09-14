@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock3, Download, Heart, ListMusic, Mic2, Play, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/clientApi";
+import { onRefresh } from "@/lib/refreshBus";
 import { useDownloads, useFollowed, useLiked, usePlaylists } from "@/lib/library";
 import { playContext } from "@/lib/audioEngine";
 import { useSettings } from "@/store/settings";
@@ -181,8 +182,17 @@ function ArtistsTab() {
 /* -------------------------------- history --------------------------------- */
 function HistoryTab() {
   const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ["recent"], queryFn: api.recent });
+  const { data, refetch } = useQuery({ queryKey: ["recent"], queryFn: api.recent });
   const tracks = data?.tracks ?? [];
+
+  // The engine emits "recent" right after a play is recorded, so this tab is live
+  // while you keep listening instead of only updating on a reload.
+  useEffect(() => {
+    const refresh = () => void refetch();
+    return onRefresh((k) => {
+      if (k === "recent" || k === "liked") refresh();
+    });
+  }, [refetch]);
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
