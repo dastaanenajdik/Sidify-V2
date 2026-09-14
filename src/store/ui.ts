@@ -31,6 +31,9 @@ interface UiState {
   sleepMenuOpen: boolean;
   setSleepMenuOpen: (v: boolean) => void;
 
+  bgHelpOpen: boolean;
+  setBgHelpOpen: (v: boolean) => void;
+
   downloadProgress: Record<string, number>;
   setDownloadProgress: (id: string, pct: number | null) => void;
 }
@@ -55,6 +58,9 @@ export const useUi = create<UiState>()((set, get) => ({
 
   sleepMenuOpen: false,
   setSleepMenuOpen: (v) => set({ sleepMenuOpen: v }),
+
+  bgHelpOpen: false,
+  setBgHelpOpen: (v) => set({ bgHelpOpen: v }),
 
   downloadProgress: {},
   setDownloadProgress: (id, pct) => {

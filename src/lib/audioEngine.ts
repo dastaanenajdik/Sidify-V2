@@ -6,6 +6,7 @@ import { useUi } from "@/store/ui";
 import type { Track } from "./types";
 import { offlineObjectUrl } from "./offlineDb";
 import { api } from "./clientApi";
+import { emitRefresh } from "./refreshBus";
 import { ytController } from "./ytPlayer";
 
 /* ------------------------------------------------------------------ */
@@ -35,11 +36,14 @@ let rafId = 0;
 let lastTick = 0;
 let preloadedId: string | null = null;
 let playSeq = 0;
+let crossfadeTimer: ReturnType<typeof setTimeout> | null = null;
+let ctxUnlocked = false;
+let endedAt = 0;
 let nativeCapable: boolean | null = null;
 let nativeProbeAt = 0;
 let errorSkips = 0;
 let ytWired = false;
-const recentRecorded = new Set<string>();
+const recentRecorded = new Map<string, number>();
 const playHistory: number[] = [];
 
 let sleepTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -56,6 +60,32 @@ function toast(title: string, desc?: string, kind: "ok" | "info" | "warn" = "war
 
 function isIframeMode(): boolean {
   return P().engineMode === "iframe";
+}
+
+/**
+ * Browsers only hand out an AudioContext and a YouTube player once the page has been
+ * interacted with. Both must be created **synchronously inside the click handler** —
+ * the old code reached them only after an `await`, which is how "first song stays
+ * silent, second one plays" happened.
+ */
+export function unlockEngine() {
+  if (ctxUnlocked || typeof window === "undefined") return;
+  ctxUnlocked = true;
+  ensureCtx();
+  if (actx?.state === "suspended") void actx.resume().catch(() => {});
+  ytController.warm(currentTrack(P())?.videoId);
+}
+
+/** Called from the first real user gesture anywhere on the page. */
+export function armEngineUnlock() {
+  if (typeof window === "undefined") return;
+  const go = () => {
+    unlockEngine();
+    window.removeEventListener("pointerdown", go);
+    window.removeEventListener("keydown", go);
+  };
+  window.addEventListener("pointerdown", go, { passive: true });
+  window.addEventListener("keydown", go);
 }
 
 function ensureCtx() {
@@ -124,22 +154,52 @@ function ramp(node: AudioParam, to: number, secs: number) {
 
 /* ------------------------- mode selection ----------------------------- */
 
+/**
+ * "Can this environment extract full-length audio?" is answered by probing /api/stream.
+ * The probe is *allowed* to take a while (YouTube extraction is slow), but it must not
+ * hold up the very first play: after `PROBE_WAIT_MS` we stop waiting and start the
+ * YouTube-iframe player instead, while the probe keeps running and caches its verdict for
+ * every track after this one.
+ */
+const PROBE_WAIT_MS = 2500;
+
 async function probeNative(track: Track): Promise<boolean> {
   if (nativeCapable !== null && Date.now() - nativeProbeAt < 5 * 60_000) return nativeCapable;
   if (!track.videoId) return false;
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 24_000);
-    const res = await fetch(`/api/stream?video_id=${track.videoId}`, { signal: ctrl.signal });
-    clearTimeout(t);
-    nativeCapable = res.ok;
+
+  const run = async (): Promise<boolean> => {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 24_000);
+      const res = await fetch(`/api/stream?video_id=${track.videoId}`, { signal: ctrl.signal });
+      clearTimeout(t);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const verdict = run().then((ok) => {
+    nativeCapable = ok;
     nativeProbeAt = Date.now();
-    return nativeCapable;
-  } catch {
-    nativeCapable = false;
-    nativeProbeAt = Date.now();
-    return false;
+    return ok;
+  });
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const raced = (await Promise.race([
+    verdict,
+    new Promise<"pending">((resolve) => {
+      timer = setTimeout(() => resolve("pending"), PROBE_WAIT_MS);
+    }),
+  ])) as boolean | "pending";
+
+  if (timer) clearTimeout(timer);
+  if (raced === "pending") {
+    // Unknown yet: keep the cached verdict (if any) and let the answer arrive in background.
+    verdict.catch(() => {});
+    return nativeCapable ?? false;
   }
+  return raced;
 }
 
 async function chooseMode(track: Track, seq: number): Promise<"native" | "iframe" | null> {
@@ -180,6 +240,15 @@ export async function playIndex(i: number, opts?: { resumeMs?: number }) {
   if (!track) return;
   const seq = ++playSeq;
 
+  // A crossfade that gets superseded mid-flight must not leave `fading` stuck at true:
+  // it silences next()/prev()/autoplay for the rest of the session.
+  if (crossfadeTimer) {
+    clearTimeout(crossfadeTimer);
+    crossfadeTimer = null;
+  }
+  fading = false;
+  unlockEngine();
+
   usePlayer.getState().set({
     index: i,
     isLoading: true,
@@ -210,13 +279,21 @@ async function playIframe(track: Track, seq: number, resumeMs: number) {
   try {
     await ytController.playVideo(track.videoId!, Math.floor(resumeMs / 1000));
   } catch {
-    if (seq === playSeq) {
-      usePlayer.getState().set({ isPlaying: false, isLoading: false });
-      toast("Couldn't start the YouTube player");
+    if (seq !== playSeq) return;
+    // The embed engine itself failed (blocked script, offline, extension). If direct
+    // extraction is available, use it instead of giving up on the track.
+    if (await probeNative(track)) {
+      await playNative(track, P().index, seq, resumeMs);
+      return;
     }
+    usePlayer.getState().set({ isPlaying: false, isLoading: false });
+    toast("Couldn't start the YouTube player");
     return;
   }
+  // `playVideo` waits for the player to boot, so a newer click may have taken over in
+  // the meantime - that request is already queued inside the controller.
   if (seq !== playSeq) return;
+  armIframeStartCheck(track, seq, resumeMs);
   ytController.setVolume(P().volume);
   ytController.setRate(P().speed);
   playHistory.push(P().index);
@@ -257,8 +334,21 @@ async function playNative(track: Track, i: number, seq: number, resumeMs: number
   try {
     await actx!.resume();
     await to.el.play();
-  } catch {
-    if (seq === playSeq) P().set({ isPlaying: false, isLoading: false });
+  } catch (err) {
+    if (seq !== playSeq) return;
+    // Decoding/container failures are engine-specific, not track-specific: give this
+    // track to the embed player and stop trusting native extraction for a while.
+    // (A rejected play() from the autoplay policy is NOT retried - the iframe would be
+    // blocked by exactly the same rule.)
+    const name = (err as { name?: string } | null)?.name;
+    if (!local && track.videoId && name !== "NotAllowedError" && name !== "AbortError") {
+      nativeCapable = false;
+      nativeProbeAt = Date.now();
+      P().set({ engineMode: "iframe" });
+      await playIframe(track, seq, resumeMs);
+      return;
+    }
+    P().set({ isPlaying: false, isLoading: false });
     return;
   }
   if (seq !== playSeq) return;
@@ -271,7 +361,32 @@ async function playNative(track: Track, i: number, seq: number, resumeMs: number
   preloadNextSoon();
 }
 
+/**
+ * Last-resort guard for "the click did nothing": if the embed never left the unstarted
+ * state, we either hand the track to the native deck or stop honestly, instead of
+ * pretending to play forever.
+ */
+function armIframeStartCheck(track: Track, seq: number, resumeMs: number) {
+  setTimeout(() => {
+    void (async () => {
+      const s = P();
+      if (seq !== playSeq || !s.isPlaying || !isIframeMode()) return;
+      if (ytController.getPlayerState() !== -1) return; // started or buffering - both fine
+      if (await probeNative(track)) {
+        void playNative(track, s.index, seq, resumeMs);
+        return;
+      }
+      usePlayer.getState().set({ isPlaying: false, isLoading: false });
+      toast("Playback couldn't start", "Tap play again, or try another song");
+    })();
+  }, 8000);
+}
+
 function stopDecks() {
+  if (crossfadeTimer) {
+    clearTimeout(crossfadeTimer);
+    crossfadeTimer = null;
+  }
   if (!actx) return;
   for (const d of decks) {
     d.el.pause();
@@ -296,15 +411,20 @@ function wireYt() {
 function handleTrackError() {
   const s = P();
   errorSkips++;
-  if (errorSkips > 4) {
+  if (errorSkips > 8) {
     toast("Several videos are unavailable right now", "Playback paused");
     P().set({ isPlaying: false, isLoading: false });
     return;
   }
-  const ni = nextIndex();
+  let ni = nextIndex();
   if (ni === null) {
-    toast("This video is unavailable", currentTrack(s)?.title);
-    P().set({ isPlaying: false, isLoading: false });
+    // Nothing left in the queue to skip to - pull in similar songs so a failed video
+    // doesn't end the session.
+    void appendSimilar().then((appended) => {
+      if (appended) void playIndex(P().index + 1);
+      else P().set({ isPlaying: false, isLoading: false });
+    });
+    toast("Track unavailable — finding something similar", currentTrack(s)?.title, "info");
     return;
   }
   toast("Video unavailable — skipping", currentTrack(s)?.title, "info");
@@ -312,6 +432,7 @@ function handleTrackError() {
 }
 
 export function playContext(tracks: Track[], startIndex: number, label = "") {
+  unlockEngine();
   const filtered = filterBlocked(tracks);
   if (!filtered.length) return;
   const target = Math.min(startIndex, filtered.length - 1);
@@ -321,6 +442,7 @@ export function playContext(tracks: Track[], startIndex: number, label = "") {
 }
 
 export function playTrackNow(track: Track) {
+  unlockEngine();
   const s = P();
   const existing = s.queue.findIndex((t) => t.id === track.id);
   if (existing >= 0) {
@@ -374,6 +496,7 @@ export function setQueue(next: Track[], index: number) {
 }
 
 export async function togglePlay() {
+  unlockEngine();
   const s = P();
   const track = currentTrack(s);
   if (!track) return;
@@ -416,14 +539,17 @@ export async function togglePlay() {
 export async function next(manual = true) {
   const s = P();
   if (!s.queue.length || fading) return;
-  let ni = nextIndex();
+  let ni = nextIndex(s.index);
   if (ni === null) {
-    if (!manual && S().autoplay) {
+    // End of the queue (search results, playlist, liked, artist...). Autoplay keeps
+    // the music going with similar tracks instead of dying on the last song.
+    if (S().autoplay) {
       const appended = await appendSimilar();
       if (appended) ni = P().index + 1;
     }
     if (ni === null || ni >= P().queue.length) {
-      if (manual && s.repeat === "off" && s.index === s.queue.length - 1) return;
+      // Nothing left and no similar songs could be fetched: stop cleanly at the end
+      // so the transport doesn't sit in a fake "playing" state forever.
       stopAtEnd();
       return;
     }
@@ -490,8 +616,23 @@ export async function setVideoMode(v: boolean) {
   // v=false with native unavailable: iframe keeps playing, FullPlayer hides it.
 }
 
+let endingBusy = false;
+
 async function handleEnded() {
+  // One end-of-track at a time: the watchdog and the `ended` event can both fire while a
+  // queue extension is still in flight, which used to skip two songs at once.
+  if (endingBusy) return;
+  endingBusy = true;
+  try {
+    await runEndOfTrack();
+  } finally {
+    endingBusy = false;
+  }
+}
+
+async function runEndOfTrack() {
   const s = P();
+  endedAt = Date.now();
   if (s.sleepMode === "eot") {
     clearSleepTimer();
     if (isIframeMode()) {
@@ -525,8 +666,32 @@ function stopAtEnd() {
 
 /* --------------------------- progress loop ---------------------------- */
 
+/**
+ * Safety net for the "song ends and nothing follows it" case.
+ * `requestAnimationFrame` stops while the tab is hidden and a single missed `ENDED`
+ * callback (mobile browsers do this to backgrounded tabs) used to be enough to stop the
+ * queue forever, so a slow interval also watches the real player state.
+ */
+let watchdog: ReturnType<typeof setInterval> | null = null;
+function startWatchdog() {
+  if (watchdog) return;
+  watchdog = setInterval(() => {
+    const s = P();
+    if (!s.isPlaying || s.isLoading || fading || !s.queue.length || endingBusy) return;
+    if (Date.now() - endedAt < 2000) return;
+    if (s.sleepMode === "eot") return;
+    if (isIframeMode()) {
+      if (ytController.getPlayerState() === 0) void handleEnded(); // ENDED while we still think it plays
+    } else if (actx) {
+      const deck = decks[active];
+      if (deck?.trackId && deck.el.ended) void handleEnded();
+    }
+  }, 2500);
+}
+
 export function startLoop() {
   if (rafId) return;
+  startWatchdog();
   const loop = () => {
     rafId = requestAnimationFrame(loop);
     const now = performance.now();
@@ -619,7 +784,10 @@ async function startCrossfade(secs: number) {
     active = 1 - active;
     return;
   }
-  if (seq !== playSeq) return;
+  if (seq !== playSeq) {
+    fading = false;
+    return;
+  }
 
   ramp(to.postGain.gain, 1, secs);
   ramp(from.postGain.gain, 0, secs);
@@ -628,7 +796,8 @@ async function startCrossfade(secs: number) {
   updateMediaSession(track);
   recordRecent(track);
 
-  setTimeout(() => {
+  crossfadeTimer = setTimeout(() => {
+    crossfadeTimer = null;
     from.el.pause();
     from.el.removeAttribute("src");
     from.el.load();
@@ -641,20 +810,37 @@ async function startCrossfade(secs: number) {
 
 /* --------------------------- autoplay fill ---------------------------- */
 
+/**
+ * Queue finished -> keep the radio going. Searches for tracks that sound like what just
+ * played and appends them. Several queries are tried in order because "the artist" alone
+ * sometimes returns nothing usable (covers, remixes, or a lookup that just failed).
+ */
 async function appendSimilar(): Promise<boolean> {
-  const s = P();
-  const cur = currentTrack(s);
+  const cur = currentTrack(P());
   if (!cur) return false;
-  try {
-    const res = await api.search(cur.artist, "songs", S().region, 10);
-    const existing = new Set(s.queue.map((t) => t.id));
-    const fresh = filterBlocked(res.songs).filter((t) => !existing.has(t.id)).slice(0, 8);
-    if (!fresh.length) return false;
-    usePlayer.getState().set({ queue: [...usePlayer.getState().queue, ...fresh] });
-    return true;
-  } catch {
-    return false;
+  const seed = (cur.title || "").replace(/\s*\[.*?\]|\s*\(.*?\)|\s*(official|video|audio|lyrics|full song|hd|hq)\s*/gi, " ").replace(/\s+/g, " ").trim();
+  const queries = [cur.artist, `${cur.artist} ${seed}`.trim(), seed, cur.album, P().contextLabel.replace(/^Results for\s+|[""]/g, "")]
+    .map((q) => (q || "").trim())
+    .filter((q) => q.length > 1);
+  const seenQ = new Set<string>();
+  const order = queries.filter((q) => (seenQ.has(q.toLowerCase()) ? false : (seenQ.add(q.toLowerCase()), true)));
+
+  for (const q of order) {
+    try {
+      const res = await api.search(q, "songs", S().region, 12);
+      const state = usePlayer.getState();
+      const existing = new Set(state.queue.map((t) => t.id));
+      const fresh = filterBlocked(res.songs)
+        .filter((t) => t.id !== cur.id && !existing.has(t.id))
+        .slice(0, 8);
+      if (!fresh.length) continue;
+      usePlayer.getState().set({ queue: [...usePlayer.getState().queue, ...fresh] });
+      return true;
+    } catch {
+      /* try the next seed */
+    }
   }
+  return false;
 }
 
 function filterBlocked(tracks: Track[]): Track[] {
@@ -777,10 +963,24 @@ function updateMediaSession(track: Track) {
   }
 }
 
+let recentTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Push the track into listening history and nudge every open "recent" view to refetch.
+ * Re-playing the same song inside 30 s is deduped; after that it counts again, so the
+ * History list keeps its chronological order instead of freezing on first play.
+ */
 function recordRecent(track: Track) {
-  if (recentRecorded.has(track.id)) return;
-  recentRecorded.add(track.id);
+  const now = Date.now();
+  const last = recentRecorded.get(track.id);
+  if (last && now - last < 30_000) return;
+  recentRecorded.set(track.id, now);
   void api.pushRecent(track);
+  if (recentTimer) clearTimeout(recentTimer);
+  recentTimer = setTimeout(() => {
+    recentTimer = null;
+    emitRefresh("recent");
+  }, 800);
 }
 
 /* ------------------------------ init ---------------------------------- */
@@ -789,6 +989,13 @@ export function initEngine() {
   if (initialized) return;
   initialized = true;
   startLoop();
+  armEngineUnlock();
+  // Coming back to the tab: if the OS/iframe paused us mid-track, keep the transport honest.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const s = P();
+    if (s.isPlaying && isIframeMode() && !ytController.isPlaying()) ytController.resume();
+  });
   useSettings.subscribe(applySettings);
   usePlayer.subscribe((state, prevState) => {
     if (state.volume !== prevState.volume || state.speed !== prevState.speed) applySettings();

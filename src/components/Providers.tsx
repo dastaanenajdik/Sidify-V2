@@ -11,6 +11,7 @@ import FullPlayer from "./FullPlayer";
 import TrackMenu from "./TrackMenu";
 import Toasts from "./Toasts";
 import { GlobalModals } from "./Modals";
+import UpdatePopups from "./UpdatePopups";
 import { MobileNav } from "./Sidebar";
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -159,6 +160,7 @@ export default function Providers({ children }: { children: ReactNode }) {
       <FullPlayer />
       <TrackMenu />
       <GlobalModals />
+      <UpdatePopups />
       <Toasts />
       <MobileNav />
     </QueryClientProvider>

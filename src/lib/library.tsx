@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, downloadTrack, removeDownloadEverywhere, clearAllDownloads } from "./clientApi";
+import { emitRefresh, onRefresh } from "./refreshBus";
 import { refreshBlockedFilter } from "./audioEngine";
 import { usePlayer } from "@/store/player";
 import { useUi } from "@/store/ui";
@@ -11,16 +12,8 @@ import type { Artist, Track } from "./types";
 import { formatBytes } from "./format";
 
 /* ------------------------- cross-hook refresh bus ------------------------ */
-const listeners = new Set<(key: string) => void>();
-export function emitRefresh(key: string) {
-  listeners.forEach((f) => f(key));
-}
-function onRefresh(f: (key: string) => void) {
-  listeners.add(f);
-  return () => {
-    listeners.delete(f);
-  };
-}
+export { emitRefresh };
+
 function useRefreshOn(key: string, fn: () => void) {
   useEffect(() => onRefresh((k) => k === key && fn()), [key, fn]);
 }
@@ -29,6 +22,7 @@ function useRefreshOn(key: string, fn: () => void) {
 export function useLiked() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["liked"], queryFn: api.liked, staleTime: 60_000 });
+  useRefreshOn("liked", q.refetch);
 
   useEffect(() => {
     if (q.data) {
@@ -46,17 +40,15 @@ export function useLiked() {
     else ids[track.id] = true;
     usePlayer.getState().set({ likedIds: ids });
     const push = useUi.getState().pushToast;
-    try {
-      if (liked) await api.unlike(track.id);
-      else await api.like(track);
-      push({ title: liked ? "Removed from Liked Songs" : "Added to Liked Songs", kind: "ok" });
-      // Silent: while downloads are gated we don't want a toast on every like.
-      if (!liked && useSettings.getState().autoDownloadLiked) void downloadTrackFlow(track, { silent: true });
-      qc.invalidateQueries({ queryKey: ["liked"] });
-    } catch {
-      usePlayer.getState().set({ likedIds: { ...state.likedIds } });
-      push({ title: "Couldn't update likes", kind: "warn" });
-    }
+    // api.like/unlike never reject: they write through to the local library store and
+    // mirror to the server when it answers, so the heart always sticks.
+    await (liked ? api.unlike(track.id) : api.like(track)).catch(() =>
+      usePlayer.getState().set({ likedIds: state.likedIds })
+    );
+    if (!liked && useSettings.getState().autoDownloadLiked) void downloadTrackFlow(track, { silent: true });
+    push({ title: liked ? "Removed from Liked Songs" : "Added to Liked Songs", desc: track.title, kind: "ok" });
+    qc.invalidateQueries({ queryKey: ["liked"] });
+    qc.invalidateQueries({ queryKey: ["home"] });
   };
 
   return { ...q, toggle };
@@ -202,29 +194,38 @@ export function usePlaylists() {
   const q = useQuery({ queryKey: ["playlists"], queryFn: api.playlists, staleTime: 30_000 });
   const inv = () => qc.invalidateQueries({ queryKey: ["playlists"] });
 
+  const invBoth = () => {
+    inv();
+    qc.invalidateQueries({ queryKey: ["playlist"] });
+  };
+
   return {
     ...q,
     create: async (name: string) => {
-      await api.createPlaylist(name);
-      inv();
+      const res = await api.createPlaylist(name);
+      invBoth();
+      useUi.getState().pushToast({ title: "Playlist created", desc: res.playlist.name, kind: "ok" });
+      return res.playlist;
     },
     rename: async (id: number, name: string) => {
       await api.renamePlaylist(id, name);
-      inv();
+      invBoth();
+      useUi.getState().pushToast({ title: "Playlist renamed", kind: "ok" });
     },
     remove: async (id: number) => {
       await api.deletePlaylist(id);
-      inv();
+      invBoth();
       useUi.getState().pushToast({ title: "Playlist deleted", kind: "ok" });
     },
     addTrack: async (id: number, track: Track) => {
       await api.addToPlaylist(id, track);
-      inv();
-      useUi.getState().pushToast({ title: "Added to playlist", kind: "ok" });
+      invBoth();
+      const where = q.data?.playlists.find((p) => p.id === id)?.name;
+      useUi.getState().pushToast({ title: where ? `Added to ${where}` : "Added to playlist", desc: track.title, kind: "ok" });
     },
     removeTrack: async (id: number, trackId: string) => {
       await api.removeFromPlaylist(id, trackId);
-      inv();
+      invBoth();
     },
   };
 }

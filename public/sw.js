@@ -2,8 +2,10 @@
  * Network-first for navigations, cache-first for static assets.
  * Live search/stream API responses are never cached. */
 
-const SHELL_CACHE = "sidify-shell-v1";
-const STATIC_CACHE = "sidify-static-v1";
+/* v2: bumped with the 1.0 playback/library fixes so no client keeps serving the previous
+ * app shell + chunks after this release. Old caches are deleted on activate. */
+const SHELL_CACHE = "sidify-shell-v2";
+const STATIC_CACHE = "sidify-static-v2";
 
 const APP_SHELL = [
   "./",

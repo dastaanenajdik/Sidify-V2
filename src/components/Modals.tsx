@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ListMusic, Moon, Plus, TimerOff } from "lucide-react";
+import { Check, ListMusic, Moon, Music2, Plus, TimerOff } from "lucide-react";
 import { Modal } from "./controls";
 import { useUi } from "@/store/ui";
 import { usePlayer } from "@/store/player";
@@ -22,47 +22,87 @@ export function GlobalModals() {
 function AddToPlaylistModal() {
   const track = useUi((s) => s.addToPlaylistTrack);
   const close = () => useUi.getState().setAddToPlaylistTrack(null);
-  const { data, addTrack, create } = usePlaylists();
+  const { data, addTrack, create, isLoading } = usePlaylists();
+  const pushToast = useUi((s) => s.pushToast);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const playlists = data?.playlists ?? [];
+
+  const addTo = async (playlistId: number) => {
+    if (!track || busy) return;
+    setBusy(true);
+    try {
+      await addTrack(playlistId, track);
+      close();
+    } catch {
+      pushToast({ title: "Couldn't add to playlist", desc: track.title, kind: "warn" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createAndAdd = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try {
+      const created = await create(trimmed);
+      if (track) await addTrack(created.id, track);
+      setName("");
+      setCreating(false);
+      close();
+    } catch {
+      pushToast({ title: "Couldn't create that playlist", desc: "Please try again", kind: "warn" });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Modal open={!!track} onClose={close} title="Add to playlist">
       <div className="max-h-72 space-y-1 overflow-y-auto">
-        {data?.playlists.length === 0 && !creating && (
-          <p className="text-muted py-6 text-center text-sm">No playlists yet — create your first one.</p>
+        {isLoading && !data && <p className="text-muted py-6 text-center text-sm">Loading your playlists…</p>}
+        {!isLoading && playlists.length === 0 && !creating && (
+          <p className="text-muted py-6 text-center text-sm">No playlists yet — create your first one below.</p>
         )}
-        {data?.playlists.map((p) => (
-          <button
-            key={p.id}
-            onClick={async () => {
-              if (track) await addTrack(p.id, track);
-              close();
-            }}
-            className="hover-panel flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left"
-          >
-            <span className="grid h-10 w-10 place-items-center rounded-lg bg-[var(--panel-strong)]">
-              <ListMusic size={17} className="text-muted" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[14px] font-medium">{p.name}</span>
-              <span className="text-muted-2 text-[12px]">{p.tracks.length} songs</span>
-            </span>
-          </button>
-        ))}
+        {playlists.map((p) => {
+          const already = !!track && p.tracks.some((t) => t.id === track.id);
+          return (
+            <button
+              key={p.id}
+              disabled={busy}
+              onClick={async () => {
+                if (already) {
+                  pushToast({ title: "Already in this playlist", desc: track?.title, kind: "info" });
+                  close();
+                  return;
+                }
+                await addTo(p.id);
+              }}
+              className="hover-panel flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left disabled:opacity-60"
+            >
+              <span className="grid h-10 w-10 place-items-center rounded-lg bg-[var(--panel-strong)]">
+                <ListMusic size={17} className="text-muted" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[14px] font-medium">{p.name}</span>
+                <span className="text-muted-2 text-[12px]">
+                  {p.tracks.length} {p.tracks.length === 1 ? "song" : "songs"}
+                </span>
+              </span>
+              {already && <Check size={16} className="accent-text shrink-0" />}
+            </button>
+          );
+        })}
       </div>
       {creating ? (
         <form
           className="mt-3 flex gap-2"
           onSubmit={async (e) => {
             e.preventDefault();
-            if (!name.trim()) return;
-            const trimmed = name.trim();
-            await create(trimmed);
-            const latest = await usePlaylistsRefetch();
-            const target = latest?.playlists.find((p) => p.name === trimmed);
-            if (track && target) await addTrack(target.id, track);
-            close();
+            await createAndAdd();
           }}
         >
           <input
@@ -70,10 +110,15 @@ function AddToPlaylistModal() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Playlist name"
+            maxLength={80}
             className="glass min-w-0 flex-1 rounded-xl px-3.5 py-2.5 text-sm outline-none placeholder:text-muted-2"
           />
-          <button type="submit" className="rounded-xl accent-bg px-4 text-sm font-semibold text-black">
-            Save
+          <button
+            type="submit"
+            disabled={busy || !name.trim()}
+            className="rounded-xl accent-bg px-4 text-sm font-semibold text-black disabled:opacity-60"
+          >
+            {busy ? "…" : "Save"}
           </button>
         </form>
       ) : (
@@ -87,13 +132,13 @@ function AddToPlaylistModal() {
           New playlist
         </button>
       )}
+      {track && (
+        <p className="text-muted-2 mt-3 flex items-center gap-2 text-[12px]">
+          <Music2 size={12} className="shrink-0" /> <span className="truncate">{track.title} — {track.artist}</span>
+        </p>
+      )}
     </Modal>
   );
-}
-
-async function usePlaylistsRefetch() {
-  const res = await fetch("/api/playlists");
-  return (await res.json()) as { playlists: { id: number; name: string }[] };
 }
 
 /* ------------------------------ sleep timer ------------------------------- */

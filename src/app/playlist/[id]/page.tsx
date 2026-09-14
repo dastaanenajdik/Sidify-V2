@@ -1,27 +1,25 @@
 "use client";
 
 import { use, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ListMusic, Pencil, Shuffle, Trash2, X } from "lucide-react";
+import { Check, ListMusic, Pencil, Plus, Search, Shuffle, Trash2, X } from "lucide-react";
+import { api } from "@/lib/clientApi";
 import { usePlaylists } from "@/lib/library";
 import { playContext } from "@/lib/audioEngine";
 import { totalDuration, upscaleArtwork } from "@/lib/format";
-import type { PlaylistRow } from "@/lib/types";
 import TrackRow from "@/components/TrackRow";
 import { PlayButton } from "@/components/controls";
-
-async function fetchPlaylist(id: string): Promise<PlaylistRow> {
-  const res = await fetch(`/api/playlists/${id}`);
-  if (!res.ok) throw new Error("Not found");
-  const data = (await res.json()) as { playlist: PlaylistRow };
-  return data.playlist;
-}
 
 export default function PlaylistPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
-  const { data: playlist, isLoading } = useQuery({ queryKey: ["playlist", id], queryFn: () => fetchPlaylist(id) });
+  const { data: playlist, isLoading } = useQuery({
+    queryKey: ["playlist", id],
+    queryFn: () => api.playlist(id),
+    staleTime: 10_000,
+  });
   const { rename, remove } = usePlaylists();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
@@ -143,8 +141,14 @@ export default function PlaylistPage({ params }: { params: Promise<{ id: string 
           <ListMusic size={32} className="text-muted mb-4" />
           <h3 className="font-display text-[18px] font-bold">This playlist is empty</h3>
           <p className="text-muted mt-2 text-[13.5px]">
-            Open any song&apos;s menu and choose “Add to playlist” to start building it.
+            Open any song&apos;s menu and choose “Add to playlist”, or pick songs from search.
           </p>
+          <Link
+            href="/search"
+            className="mt-5 inline-flex items-center gap-2 rounded-full accent-bg px-5 py-2.5 text-[13px] font-bold text-black"
+          >
+            <Plus size={15} /> Add songs <Search size={14} className="opacity-70" />
+          </Link>
         </div>
       ) : (
         <div>
