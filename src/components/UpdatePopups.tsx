@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Clock3, Sparkles, X } from "lucide-react";
+import { Check, Clock3, Copy, Download, Sparkles, X } from "lucide-react";
 import { useUi } from "@/store/ui";
+import { cx } from "@/lib/format";
 
 /* ------------------------------------------------------------------ */
 /*  Content. The changelog lives here so the popup is the single       */
@@ -23,7 +24,7 @@ export const UPDATE_INFO = {
     "Creating a new playlist works — type a name, hit Save, and it appears in your library.",
     "Listening history updates while you play, so the History tab is never stale.",
     "Song errors now skip ahead to a similar track instead of stopping playback.",
-    "New guide inside Settings: “Instructions to play in background”.",
+    "New guide inside Settings: “Instructions to play in background” — Brave browser first (recommended), every other browser as the backup.",
   ],
 };
 
@@ -170,6 +171,21 @@ function UpdateNotice({ onNext }: { onNext: () => void }) {
 /*  2. Background / off-screen playback guide                          */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Brave keeps audio alive when its tab goes to the background (Settings → Media →
+ * Background play), so it needs no per-session ritual. That makes it the primary
+ * instruction; the browser-agnostic flow below stays as the secondary option for
+ * anyone who does not want to install anything.
+ */
+const BRAVE_PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.brave.browser";
+
+const BRAVE_STEPS = [
+  "Install the Brave browser from the Google Play Store using the Install button below.",
+  "Copy the Sidify site link with the button below, paste it in Brave’s address bar and open it.",
+  "Search any song you like and press play. Wait until the music actually starts.",
+  "Now press back, switch apps or lock your screen — the song keeps playing in the background.",
+];
+
 const BG_STEPS = [
   "Open this site in your browser. On a phone, tap the three-dot menu at the top and press “Desktop site”.",
   "Check that Desktop site is turned ON. The page will look like the computer version.",
@@ -181,7 +197,86 @@ const BG_STEPS = [
 
 export const BG_HELP_SUMMARY = "How to keep music playing with a closed app or a locked screen";
 
+/* Small building blocks so both methods share the exact same visual language. */
+
+function MethodBadge({ tone }: { tone: "primary" | "secondary" }) {
+  return tone === "primary" ? (
+    <span className="accent-bg shrink-0 rounded-full px-2 py-[3px] text-[9.5px] font-extrabold tracking-[0.16em] text-black uppercase">
+      Recommended
+    </span>
+  ) : (
+    <span className="shrink-0 rounded-full bg-[var(--panel-strong)] px-2 py-[3px] text-[9.5px] font-extrabold tracking-[0.16em] text-muted uppercase">
+      Secondary
+    </span>
+  );
+}
+
+function StepList({ steps, tone }: { steps: string[]; tone: "primary" | "secondary" }) {
+  return (
+    <ol className="space-y-2.5">
+      {steps.map((s, i) => (
+        <li key={s} className="flex gap-3">
+          <span
+            className={cx(
+              "mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[12px] font-bold",
+              tone === "primary" ? "accent-bg text-black" : "bg-[var(--panel-strong)] accent-text"
+            )}
+          >
+            {i + 1}
+          </span>
+          <span className="min-w-0 text-[13.5px] leading-[21px]">{s}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function BackgroundHelp({ onClose }: { onClose: () => void }) {
+  const pushToast = useUi((s) => s.pushToast);
+  const [copied, setCopied] = useState(false);
+
+  // This sheet is only ever mounted from a client-side click, so `window` is always
+  // available; the server guard just keeps the render pure.
+  const siteLink =
+    typeof window === "undefined" ? "" : `${window.location.origin}${window.location.pathname}`;
+
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 2400);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  const copyLink = async () => {
+    const url = siteLink || window.location.href;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(url);
+      ok = true;
+    } catch {
+      // Non-HTTPS contexts block the async API — fall back to the legacy command.
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        ok = false;
+      }
+      ta.remove();
+    }
+    if (ok) {
+      setCopied(true);
+      pushToast({ title: "Site link copied", desc: "Paste it in Brave’s address bar", kind: "ok" });
+    } else {
+      pushToast({ title: "Tap the link, select it and copy", desc: url, kind: "warn" });
+    }
+  };
+
   return (
     <Sheet onClose={onClose} closeAfter={LOCK_SECONDS}>
       <div className="mb-4 flex items-center gap-2.5 pr-10">
@@ -197,25 +292,76 @@ function BackgroundHelp({ onClose }: { onClose: () => void }) {
       </div>
 
       <p className="text-muted mb-5 text-[13.5px] leading-6">
-        Mobile browsers stop audio when you leave a page. Six quick steps and Sidify keeps playing with the
-        screen locked. Do this once per session.
+        Mobile browsers stop audio the moment you leave a page. The fastest fix is four steps with Brave; the
+        second method works in the browser you already have. Do this once per session.
       </p>
 
-      <ol className="space-y-3">
-        {BG_STEPS.map((s, i) => (
-          <li key={s} className="flex gap-3">
-            <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--panel-strong)] text-[12px] font-bold accent-text">
-              {i + 1}
-            </span>
-            <span className="min-w-0 text-[13.5px] leading-[21px]">{s}</span>
-          </li>
-        ))}
-      </ol>
+      {/* ---- Method 1 — recommended ---- */}
+      <section
+        className="rounded-2xl border p-4 md:p-5"
+        style={{
+          borderColor: "color-mix(in srgb, var(--accent) 32%, transparent)",
+          background: "color-mix(in srgb, var(--accent) 8%, transparent)",
+        }}
+      >
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <h3 className="font-display text-[15px] leading-tight font-extrabold tracking-tight">
+            Method 1 · Play with Brave browser
+          </h3>
+          <MethodBadge tone="primary" />
+        </div>
 
-      <div className="glass mt-5 rounded-2xl px-4 py-3 text-[12.5px] leading-5 text-muted">
-        <span className="font-bold accent-text">Tip:</span> after you press play in the notification, you can
-        close the panel and lock your phone. Music keeps running. Use the same notification to pause, skip or go
-        back. Turning off “Data Saver” also helps.
+        <StepList steps={BRAVE_STEPS} tone="primary" />
+
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <a
+            href={BRAVE_PLAY_STORE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ring-focus inline-flex flex-1 items-center justify-center gap-2 rounded-2xl accent-bg px-4 py-2.5 text-[13.5px] font-bold text-black transition-transform hover:scale-[1.01] active:scale-95"
+            style={{ boxShadow: "0 12px 34px -14px var(--glow)" }}
+          >
+            <Download size={15} strokeWidth={2.4} /> Install Brave
+          </a>
+          <button
+            type="button"
+            onClick={copyLink}
+            className="ring-focus glass hover-panel accent-text inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-[13.5px] font-bold active:scale-95"
+          >
+            {copied ? <Check size={15} strokeWidth={3} /> : <Copy size={15} />}
+            {copied ? "Link copied" : "Copy site link"}
+          </button>
+        </div>
+
+        {siteLink ? (
+          <p className="text-muted-2 mt-2.5 text-center text-[11.5px] leading-4 break-all">{siteLink}</p>
+        ) : (
+          <p className="text-muted-2 mt-2.5 text-center text-[11.5px] leading-4">
+            Or copy the link from your address bar.
+          </p>
+        )}
+      </section>
+
+      {/* ---- Method 2 — secondary ---- */}
+      <section className="glass mt-4 rounded-2xl p-4 md:p-5">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <h3 className="font-display text-[15px] leading-tight font-extrabold tracking-tight">
+            Method 2 · Without installing anything
+          </h3>
+          <MethodBadge tone="secondary" />
+        </div>
+        <p className="text-muted mb-3 text-[12.5px] leading-5">
+          Chrome, Samsung Internet or any other browser. It works, but you have to press play in the
+          notification every time you leave the page.
+        </p>
+
+        <StepList steps={BG_STEPS} tone="secondary" />
+      </section>
+
+      <div className="glass mt-4 rounded-2xl px-4 py-3 text-[12.5px] leading-5 text-muted">
+        <span className="font-bold accent-text">Tip:</span> if Brave still pauses, open its three-dot menu →
+        Settings → Media and turn “Background play” ON. With Method 2, stay on the tab, and use the Sidify
+        notification to pause, skip or go back. Turning off “Data Saver” also helps.
       </div>
     </Sheet>
   );
