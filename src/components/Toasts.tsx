@@ -27,10 +27,28 @@ export default function Toasts() {
             ) : (
               <CheckCircle2 size={17} className="accent-text shrink-0" />
             )}
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] font-semibold">{t.title}</div>
               {t.desc && <div className="text-muted truncate text-[11.5px]">{t.desc}</div>}
             </div>
+            {t.pct !== undefined && (
+              <span className="relative h-6 w-6 shrink-0" aria-hidden>
+                <svg viewBox="0 0 36 36" className="h-6 w-6 -rotate-90">
+                  <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeOpacity="0.16" strokeWidth="5" />
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="15"
+                    fill="none"
+                    stroke="var(--accent)"
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    strokeDasharray={`${(Math.max(0, Math.min(100, t.pct)) / 100) * 94.2} 94.2`}
+                    style={{ transition: "stroke-dasharray 240ms linear" }}
+                  />
+                </svg>
+              </span>
+            )}
           </motion.div>
         ))}
       </AnimatePresence>

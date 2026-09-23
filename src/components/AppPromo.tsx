@@ -7,10 +7,14 @@ import { ANDROID_APP, APP_SIZE_LABEL } from "@/lib/appRelease";
 import { cx } from "@/lib/format";
 import { useUi } from "@/store/ui";
 import { LiveEq } from "./SidifyLogo";
+import { QrQuickScan } from "./AppDownloadQr";
 
 /* ------------------------------------------------------------------ */
 /*  The one download button every surface reuses.                      */
 /* ------------------------------------------------------------------ */
+
+/** How long the "download starting" toast stays up, in ms. */
+const TOAST_MS = 2600;
 
 export function ApkDownloadButton({
   variant = "solid",
@@ -43,12 +47,29 @@ export function ApkDownloadButton({
       rel="noopener noreferrer"
       onClick={() => {
         setStarted(true);
-        pushToast({
+        // The toast owns a countdown ring: it updates itself for the couple of
+        // seconds the browser needs to hand the file over, then closes on its own.
+        const toast = pushToast({
           title: "Download starting…",
           desc: `${ANDROID_APP.fileName} · ${APP_SIZE_LABEL}`,
           kind: "ok",
+          duration: TOAST_MS,
+          pct: 100,
         });
-        setTimeout(() => setStarted(false), 5000);
+        const startedAt = Date.now();
+        const tick = setInterval(() => {
+          const left = 1 - (Date.now() - startedAt) / TOAST_MS;
+          const store = useUi.getState();
+          if (left <= 0 || !store.toasts.some((t) => t.id === toast)) {
+            clearInterval(tick);
+            store.dismissToast(toast);
+            setStarted(false);
+            return;
+          }
+          useUi.setState((s) => ({
+            toasts: s.toasts.map((t) => (t.id === toast ? { ...t, pct: left * 100 } : t)),
+          }));
+        }, 200);
       }}
       className={cx(
         "ring-focus group relative inline-flex shrink-0 items-center justify-center accent-bg font-bold text-black transition-transform hover:scale-[1.02] active:scale-95",
@@ -251,7 +272,10 @@ export function AppPromoBanner() {
           </div>
         </div>
 
-        <PhoneMock className="hidden shrink-0 md:block" />
+        <div className="flex shrink-0 items-center gap-5">
+          <QrQuickScan className="hidden xl:flex" />
+          <PhoneMock className="hidden shrink-0 md:block" />
+        </div>
       </div>
     </section>
   );

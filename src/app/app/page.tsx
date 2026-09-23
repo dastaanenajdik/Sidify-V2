@@ -37,6 +37,7 @@ import { cx } from "@/lib/format";
 import { useUi } from "@/store/ui";
 import { usePlayer, currentTrack } from "@/store/player";
 import { ApkDownloadButton, PhoneMock } from "@/components/AppPromo";
+import { AppDownloadQr } from "@/components/AppDownloadQr";
 
 type IconComp = React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
 
@@ -271,6 +272,18 @@ export default function AppDownloadPage() {
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <ApkDownloadButton label="Download the APK" />
           <CopyApkLink />
+        </div>
+      </section>
+
+      {/* ------------------------------ QR / SHARE ------------------------ */}
+      <section className="mb-12">
+        <Header
+          eyebrow="Share & scan"
+          title="One code, always the newest build"
+          sub="Print it, post it, or just point a phone at it — the code never changes, the app keeps getting better."
+        />
+        <div className="glass-strong rounded-3xl p-5 md:p-7">
+          <AppDownloadQr />
         </div>
       </section>
 
