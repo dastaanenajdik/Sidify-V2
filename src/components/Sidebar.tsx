@@ -2,18 +2,30 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Compass, Download, Home, Library, Plus, Search, Settings } from "lucide-react";
+import { ArrowRight, Compass, Download, Home, Library, Plus, Search, Settings, Smartphone } from "lucide-react";
 import SidifyLogo from "./SidifyLogo";
 import { usePlaylists } from "@/lib/library";
 import { useUi } from "@/store/ui";
 import { useSettings } from "@/store/settings";
 import { cx } from "@/lib/format";
+import { ANDROID_APP } from "@/lib/appRelease";
 
-const NAV = [
+type NavItem = {
+  href: string;
+  label: string;
+  /** Shorter label for the tight mobile tab bar. */
+  short?: string;
+  icon: typeof Home;
+  badge?: string;
+  highlight?: boolean;
+};
+
+const NAV: NavItem[] = [
   { href: "/", label: "Home", icon: Home },
   { href: "/search", label: "Search", icon: Search },
   { href: "/library", label: "Library", icon: Library },
   { href: "/downloads", label: "Downloads", icon: Download },
+  { href: "/app", label: "Get the app", short: "App", icon: Smartphone, badge: "NEW", highlight: true },
 ];
 
 export default function Sidebar() {
@@ -39,16 +51,55 @@ export default function Sidebar() {
               href={n.href}
               className={cx(
                 "flex items-center gap-3.5 rounded-xl px-3.5 py-2.5 text-[14px] font-semibold transition-all",
-                active ? "bg-[var(--panel-strong)] text-[var(--text)]" : "text-muted hover:text-[var(--text)]"
+                active ? "bg-[var(--panel-strong)] text-[var(--text)]" : "text-muted hover:text-[var(--text)]",
+                n.highlight && !active && "text-[var(--text)]"
               )}
             >
-              <n.icon size={20} className={active ? "accent-text" : ""} style={active ? { filter: "drop-shadow(0 0 8px var(--glow))" } : undefined} />
+              <n.icon
+                size={20}
+                className={active || n.highlight ? "accent-text" : ""}
+                style={active || n.highlight ? { filter: "drop-shadow(0 0 8px var(--glow))" } : undefined}
+              />
               {n.label}
               {active && <span className="ml-auto h-1.5 w-1.5 rounded-full accent-bg" style={{ boxShadow: "0 0 8px var(--accent)" }} />}
+              {n.badge && (
+                <span
+                  className={cx(
+                    "rounded-full accent-bg px-1.5 py-[1px] text-[9px] font-extrabold tracking-[0.08em] text-black",
+                    !active && "ml-auto"
+                  )}
+                >
+                  {n.badge}
+                </span>
+              )}
             </Link>
           );
         })}
       </nav>
+
+      {/* Android app card — always one tap away */}
+      <div className="mt-4 px-3">
+        <Link
+          href="/app"
+          className="hover-panel group block overflow-hidden rounded-2xl border p-3.5"
+          style={{
+            borderColor: "color-mix(in srgb, var(--accent) 38%, transparent)",
+            background: "linear-gradient(135deg, color-mix(in srgb, var(--accent) 17%, transparent), transparent 72%)",
+          }}
+        >
+          <span className="flex items-center gap-2 text-[12.5px] font-extrabold">
+            <Smartphone size={14} className="accent-text" />
+            Android app {ANDROID_APP.tag}
+          </span>
+          <span className="text-muted mt-1.5 block text-[11.5px] leading-4">
+            Background playback, equalizer, 8D audio and offline downloads. Free APK.
+          </span>
+          <span className="accent-text mt-2 flex items-center gap-1 text-[11.5px] font-bold">
+            Download the app
+            <ArrowRight size={12} className="transition-transform group-hover:translate-x-0.5" />
+          </span>
+        </Link>
+      </div>
 
       <div className="mt-8 flex min-h-0 flex-1 flex-col px-3">
         <div className="mb-2 flex items-center justify-between px-3.5">
@@ -108,15 +159,29 @@ export default function Sidebar() {
 
 export function MobileNav() {
   const pathname = usePathname();
-  const items = [...NAV, { href: "/settings", label: "Settings", icon: Settings }];
+  const items: NavItem[] = [...NAV, { href: "/settings", label: "Settings", icon: Settings }];
   return (
-    <nav className="glass-strong fixed right-0 bottom-0 left-0 z-40 grid h-[64px] grid-cols-5 border-t border-[var(--border)] md:hidden">
+    <nav className="glass-strong fixed right-0 bottom-0 left-0 z-40 grid h-[64px] grid-cols-6 border-t border-[var(--border)] md:hidden">
       {items.map((n) => {
         const active = n.href === "/" ? pathname === "/" : pathname.startsWith(n.href);
         return (
-          <Link key={n.href} href={n.href} className="flex flex-col items-center justify-center gap-1">
-            <n.icon size={21} className={active ? "accent-text" : "text-muted"} style={active ? { filter: "drop-shadow(0 0 8px var(--glow))" } : undefined} />
-            <span className={cx("text-[10px] font-medium", active ? "text-[var(--text)]" : "text-muted-2")}>{n.label}</span>
+          <Link key={n.href} href={n.href} className="relative flex flex-col items-center justify-center gap-1">
+            <n.icon
+              size={20}
+              className={active ? "accent-text" : n.highlight ? "accent-text" : "text-muted"}
+              style={active || n.highlight ? { filter: "drop-shadow(0 0 8px var(--glow))" } : undefined}
+            />
+            <span
+              className={cx(
+                "max-w-full truncate px-0.5 text-[9.5px] font-medium",
+                active ? "text-[var(--text)]" : n.highlight ? "accent-text font-bold" : "text-muted-2"
+              )}
+            >
+              {n.short ?? n.label}
+            </span>
+            {n.badge && (
+              <span className="absolute top-1.5 right-[22%] h-1.5 w-1.5 animate-pulse rounded-full accent-bg" />
+            )}
           </Link>
         );
       })}

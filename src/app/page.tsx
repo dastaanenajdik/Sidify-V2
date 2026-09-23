@@ -11,6 +11,7 @@ import { playContext } from "@/lib/audioEngine";
 import Section from "@/components/Section";
 import TrackRow from "@/components/TrackRow";
 import { AlbumCard, ArtistCard, SongTile } from "@/components/cards";
+import { AppPromoBanner } from "@/components/AppPromo";
 import SidifyLogo from "@/components/SidifyLogo";
 
 const MOODS = [
@@ -50,6 +51,9 @@ export default function HomePage() {
 
   return (
     <div className="mx-auto max-w-[1280px] px-4 pt-5 md:px-7 md:pt-7">
+      {/* ANDROID APP PROMO — the unmissable one, first thing on the page */}
+      <AppPromoBanner />
+
       {/* HERO */}
       <div className="relative mb-7 overflow-hidden rounded-[28px] border border-[var(--border-soft)] p-6 md:p-9">
         <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(120deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 55%)" }} />

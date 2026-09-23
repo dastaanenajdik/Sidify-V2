@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Clock3, Copy, Download, Sparkles, X } from "lucide-react";
 import { useUi } from "@/store/ui";
 import { cx } from "@/lib/format";
+import { APP_SIZE_LABEL } from "@/lib/appRelease";
 
 /* ------------------------------------------------------------------ */
 /*  Content. The changelog lives here so the popup is the single       */
@@ -25,6 +26,7 @@ export const UPDATE_INFO = {
     "Listening history updates while you play, so the History tab is never stale.",
     "Song errors now skip ahead to a similar track instead of stopping playback.",
     "New guide inside Settings: “Instructions to play in background” — Brave browser first (recommended), every other browser as the backup.",
+    `The Android app is live — the free ${APP_SIZE_LABEL} APK is one tap away in the “Get the app” banner on Home (and in the sidebar).`,
   ],
 };
 
