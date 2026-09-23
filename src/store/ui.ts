@@ -8,6 +8,10 @@ export interface Toast {
   title: string;
   desc?: string;
   kind?: "ok" | "info" | "warn";
+  /** Autodismiss delay in ms. Defaults to 3800. */
+  duration?: number;
+  /** Countdown bar progress (0-100) for toasts that own a live timer. */
+  pct?: number;
 }
 
 interface MenuState {
@@ -18,7 +22,8 @@ interface MenuState {
 
 interface UiState {
   toasts: Toast[];
-  pushToast: (t: Omit<Toast, "id">) => void;
+  /** Returns the new toast id, so callers can update (countdown) or dismiss it. */
+  pushToast: (t: Omit<Toast, "id">) => number;
   dismissToast: (id: number) => void;
 
   menu: MenuState | null;
@@ -45,7 +50,8 @@ export const useUi = create<UiState>()((set, get) => ({
   pushToast: (t) => {
     const id = toastId++;
     set({ toasts: [...get().toasts.slice(-3), { ...t, id }] });
-    setTimeout(() => get().dismissToast(id), 3800);
+    setTimeout(() => get().dismissToast(id), t.duration ?? 3800);
+    return id;
   },
   dismissToast: (id) => set({ toasts: get().toasts.filter((x) => x.id !== id) }),
 
