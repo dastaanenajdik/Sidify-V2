@@ -5,7 +5,9 @@ import { AnimatePresence, Reorder, motion } from "framer-motion";
 import {
   ChevronDown,
   Download,
+  FileText,
   Gauge,
+  Loader2,
   GripVertical,
   Heart,
   ListMusic,
@@ -64,6 +66,7 @@ function Shell({ track }: { track: Track }) {
   const quality = useSettings((s) => s.wifiQuality);
   const { toggle } = useLiked();
   const [speedOpen, setSpeedOpen] = useState(false);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
   const slotRef = useRef<HTMLDivElement>(null);
 
   const close = () => usePlayer.getState().set({ fullPlayerOpen: false });
@@ -259,6 +262,16 @@ function Shell({ track }: { track: Track }) {
                   </ToolButton>
                 )}
                 <ToolButton
+                  label="Lyrics"
+                  active={lyricsOpen}
+                  onClick={() => {
+                    setLyricsOpen((open) => !open);
+                    usePlayer.getState().set({ eqOpen: false, queueOpen: false });
+                  }}
+                >
+                  <FileText size={17} />
+                </ToolButton>
+                <ToolButton
                   label="Equalizer"
                   active={eqOpen}
                   onClick={() => usePlayer.getState().set({ eqOpen: !eqOpen, queueOpen: false })}
@@ -281,10 +294,77 @@ function Shell({ track }: { track: Track }) {
         </div>
       </div>
 
+      <AnimatePresence>
+        {lyricsOpen && <LyricsPanel key={`lyrics-${track.id}`} track={track} onClose={() => setLyricsOpen(false)} />}
+      </AnimatePresence>
+
       {/* queue + eq overlays */}
       <AnimatePresence>{queueOpen && <QueuePanel key="q" />}</AnimatePresence>
       <AnimatePresence>{eqOpen && <EqOverlay key="eq" />}</AnimatePresence>
     </motion.div>
+  );
+}
+
+function LyricsPanel({ track, onClose }: { track: Track; onClose: () => void }) {
+  const [lyrics, setLyrics] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({ title: track.title });
+    if (track.artist) params.set("artist", track.artist);
+    fetch(`/api/lyrics?${params.toString()}`, { signal: controller.signal })
+      .then(async (response) => {
+        const data = (await response.json()) as { success?: boolean; lyrics?: string };
+        if (!response.ok || !data.success || !data.lyrics) throw new Error("not found");
+        setLyrics(data.lyrics);
+      })
+      .catch((error: unknown) => {
+        if ((error as { name?: string })?.name !== "AbortError") setLyrics("");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [track.id, track.title, track.artist]);
+
+  return (
+    <motion.aside
+      initial={{ opacity: 0, x: 40 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 40 }}
+      transition={{ type: "spring", damping: 28, stiffness: 300 }}
+      className="glass-strong absolute top-3 right-3 bottom-3 z-30 flex w-[calc(100%-1.5rem)] max-w-md flex-col overflow-hidden rounded-3xl shadow-2xl md:top-6 md:right-6 md:bottom-6"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+        <div className="min-w-0">
+          <div className="accent-text text-[10px] font-bold tracking-[0.2em] uppercase">Now playing</div>
+          <h2 className="font-display mt-1 truncate text-[18px] font-bold">Lyrics</h2>
+          <p className="text-muted truncate text-[12px]">{track.title} · {track.artist}</p>
+        </div>
+        <button aria-label="Close lyrics" onClick={onClose} className="text-muted grid h-9 w-9 shrink-0 place-items-center rounded-full hover:bg-[var(--panel)] hover:text-[var(--text)]">
+          <X size={18} />
+        </button>
+      </div>
+      <div className="lyrics-scroll min-h-0 flex-1 overflow-y-auto px-5 py-6">
+        {loading ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 text-muted" role="status" aria-live="polite">
+            <Loader2 size={28} className="animate-spin accent-text" />
+            <span className="text-[13px]">Finding lyrics…</span>
+          </div>
+        ) : lyrics ? (
+          <p className="whitespace-pre-wrap text-[15px] leading-8 tracking-[0.01em]">{lyrics}</p>
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center px-4 text-center">
+            <FileText size={30} className="text-muted-2 mb-3" />
+            <p className="font-semibold">Lyrics not available for this track</p>
+            <p className="text-muted mt-2 text-[12px]">Try another version of the song or check back later.</p>
+          </div>
+        )}
+      </div>
+    </motion.aside>
   );
 }
 
