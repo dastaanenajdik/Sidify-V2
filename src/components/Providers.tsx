@@ -8,6 +8,7 @@ import { initEngine, restoreSession, togglePlay, next, prev, applySettings } fro
 import { useLiked, useDownloads, useBlocked } from "@/lib/library";
 import MiniPlayer from "./MiniPlayer";
 import FullPlayer from "./FullPlayer";
+import BackGuard from "./BackGuard";
 import TrackMenu from "./TrackMenu";
 import Toasts from "./Toasts";
 import { GlobalModals } from "./Modals";
@@ -158,6 +159,7 @@ export default function Providers({ children }: { children: ReactNode }) {
       {children}
       <MiniPlayer />
       <FullPlayer />
+      <BackGuard />
       <TrackMenu />
       <GlobalModals />
       <UpdatePopups />

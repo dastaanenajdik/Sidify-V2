@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["youtubei.js"],
+  // Dev-only: the sandbox preview proxies dev traffic from `*.e2b.app`, and Next blocks
+  // cross-origin dev requests (HMR + client chunks) unless the host is allowed here.
+  allowedDevOrigins: ["*.e2b.app", "localhost", "127.0.0.1"],
   async headers() {
     return [
       {

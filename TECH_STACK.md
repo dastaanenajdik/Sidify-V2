@@ -496,9 +496,25 @@ optimistic updates (like toggle turant UI me, fail pe rollback).
 | Headers (`next.config.ts`) | `sw.js`: `Cache-Control: max-age=0, must-revalidate` + `Service-Worker-Allowed: /` · manifest: 1 h cache · global: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` |
 | iOS | `appleWebApp: { capable, title, statusBarStyle: black-translucent }`, apple-touch-icon |
 
-⚠️ **Bug:** manifest + layout `/icon.png`, `/icon-192.png`, `/icon-512.png`, `/icon-maskable-192.png`,
-`/icon-maskable-512.png` reference karte hain, par `public/` me sirf `manifest.json` aur `sw.js` hain —
-**saare icon files missing**. SW install pe `cache.addAll` fail hoga (`.catch(() => skipWaiting())` se silently recover karta hai).
+✅ **Icons fixed (v1.2):** manifest + layout jin 5 PNGs ko reference karte the, wo `public/` me nahi thi
+(SW ka `cache.addAll` fail hota tha aur **Chrome ka Install prompt disabled rehta tha** — "This app cannot be
+installed"). Ab sab present hain aur `tools/gen-icons.mjs` se regenerate ho jate hain:
+
+| File | Size | Purpose |
+|---|---|---|
+| `public/icon.png` | 512 | favicon / artwork fallback (layout + `Providers` thumbnail fallback) |
+| `public/icon-192.png` · `icon-512.png` | 192 · 512 | `purpose: "any"` |
+| `public/icon-maskable-192.png` · `icon-maskable-512.png` | 192 · 512 | `purpose: "maskable"` — mark 40 % safe-circle ke andar, background full-bleed |
+| `public/favicon.ico` | 32 + 16 | classic tab icon (ImageMagick se derive, script comment me command) |
+
+Generator khud brand mark banata hai (neon `S` + teen equalizer bars, accent `#00E676`, bg `#14141f → #050509`)
+— `@resvg/resvg-js` sirf generator ke liye chahiye (`npm i --no-save @resvg/resvg-js`), project dependency nahi,
+isliye normal `npm ci && next build` me rasterizer ki zaroorat nahi padti. PNGs committed hain.
+
+**Manifest (v1.2):** explicit `id`/`start_url`/`scope` = `/`, `launch_handler.client_mode: ["focus-existing","auto"]`
+(icon se dobara launch karne pe naya window nahi, wahi app focus hota hai — warna do instance do gaane), aur do
+`shortcuts` (Search, Library) jo long-press pe milte hain. SW cache names `v3` pe bump, taaki purane clients
+naya shell + asli icons refetch karein.
 
 ---
 
@@ -646,6 +662,37 @@ uske baad cross aata hai. Wahi guide Settings → System & Device Controls →
 - `tools/mock-lrclib.mjs` — offline fixture provider (3 tracks: synced, plain-only, instrumental).
 - `/dev/lyrics-sync` — simulated-clock playground; `tests/lyricsClock.test.cjs` (6 tests) + `tests/lyrics.test.cjs` me
   12 naye LRC/synced tests. Total 30 pass.
+
+## 15.7 Update 1.2 (26 Sept 2026) — installable PWA + Back button
+
+**Report:** "Chrome me Install disabled hai (This app cannot be installed), sirf Create shortcut milta hai —
+aur usme gana back dabate hi band ho jata hai (video mode ON hone par bhi)."
+
+**Diagnosis — do alag problems thi:**
+
+1. **Install disabled → icons.** Manifest ke 5 PNGs `public/` me hi nahi the (upar section 10 dekho). Chrome
+   install tab hi offer karta hai jab 192 px + 512 px icon **actually fetch** ho jayein. Icon 404 = install path
+   dead, sirf "Create shortcut" (plain bookmark) bachta hai.
+2. **Back = music band → page unload, Web Audio nahi.** Video mode me bhi band hota tha, isliye shak
+   Web Audio suspension (`createMediaElementSource` wala mobile bug) se hat gaya: full player ek **overlay**
+   hai, apna route/history entry nahi. Android Back → browser ka back → page chhoot jata hai → tab close/unload
+   → audio bhi gaya. "Create shortcut" isko aur bura karta hai: wo Chrome ka tab hai, app task nahi.
+
+**Fix — `src/components/BackGuard.tsx` (Providers me mount):**
+
+- Player khulta hai → ek history entry park hoti hai (`history.pushState({...history.state, sidifyPlayer:true})`;
+  Next.js ka apna state copy karke, warna router us entry ko foreign maanta hai).
+- **Back #1 = player band**, gaana chalta rehta hai, app me hi rehte ho. **Back #2 = normal navigation.**
+- Player UI se band kiya (swipe/close) → parked entry `history.back()` se wapas browser ko de di jati hai,
+  taaki user ka agla Back ek khaali press na bane.
+
+**Ab bhi faasla (honest limits):** mini-player pe ho, root page pe ho aur Back dabao → page phir bhi chhoot
+sakta hai. Install kiye hue **WebAPK/TWA** me tab background me zinda rehta hai isliye playback chalta rehta hai;
+Chrome ke plain tab/shortcut me tab close hone pe audio rukega. Recents se app swipe karke hatana = tab close =
+audio band — ye sirf native player (ExoPlayer + foreground service, IfallMusic) hi handle kar sakta hai.
+`/api/stream` wala native deck bhi isi wajah se background me Web Audio suspend hone ka risk rakhta hai, isliye
+"background handoff" (DSP graph → plain `<audio>`) agli release ka candidate hai — abhi ke evidence me video
+(iframe) mode bhi fail tha, to pehle page-unload fix kiya gaya.
 
 ## 16. TL;DR stack list
 
