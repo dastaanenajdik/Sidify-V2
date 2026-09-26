@@ -1,14 +1,18 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock3, Download, Heart, ListMusic, Mic2, Play, Plus, Trash2 } from "lucide-react";
+import { Clock3, Download, FileText, Heart, ListMusic, Mic2, Play, Plus, Search, SkipBack, SkipForward, Trash2 } from "lucide-react";
 import { api } from "@/lib/clientApi";
 import { onRefresh } from "@/lib/refreshBus";
 import { useDownloads, useFollowed, useLiked, usePlaylists } from "@/lib/library";
-import { playContext } from "@/lib/audioEngine";
+import { playContext, seekTo } from "@/lib/audioEngine";
+import { useLyricsLookup, useSmoothPosition } from "@/lib/lyricsClient";
+import { usePlayer } from "@/store/player";
+import LyricsView, { LyricsModeToggle, lyricsAreSynced, type LyricsMode } from "@/components/LyricsView";
+import { activeLineIndex as activeLine, type LyricLine } from "@/lib/lyrics";
 import { useSettings } from "@/store/settings";
 import { cx, upscaleArtwork } from "@/lib/format";
 import type { PlaylistRow } from "@/lib/types";
@@ -21,6 +25,7 @@ const TABS = [
   { id: "playlists", label: "Playlists", icon: ListMusic },
   { id: "artists", label: "Artists", icon: Mic2 },
   { id: "history", label: "History", icon: Clock3 },
+  { id: "lyrics", label: "Lyrics Finder", icon: FileText },
 ] as const;
 
 function LibraryInner() {
@@ -32,6 +37,8 @@ function LibraryInner() {
     if (params.get("create") === "1") {
       setTab("playlists");
       setCreateOpen(true);
+    } else if (params.get("tab") === "lyrics") {
+      setTab("lyrics");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -59,6 +66,7 @@ function LibraryInner() {
       {tab === "playlists" && <PlaylistsTab onCreate={() => setCreateOpen(true)} />}
       {tab === "artists" && <ArtistsTab />}
       {tab === "history" && <HistoryTab />}
+      {tab === "lyrics" && <LyricsFinderTab />}
 
       <CreatePlaylistModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
@@ -218,6 +226,194 @@ function HistoryTab() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ----------------------------- lyrics finder ------------------------------ */
+/**
+ * Standalone lyrics lookup: type a song (and optionally the singer), get the
+ * lyrics, copy them, or watch them light up line by line against the player.
+ * Same provider chain as the player panel — /api/lyrics → LRCLIB → lyrics.ovh.
+ */
+function LyricsFinderTab() {
+  const current = usePlayer((s) => s.queue[s.index] ?? null);
+  const { loading, started, lyrics, lines, source, instrumental, message, search, retry } = useLyricsLookup("", "", 0);
+  const [title, setTitle] = useState("");
+  const [artist, setArtist] = useState("");
+  const [mode, setMode] = useState<LyricsMode>("static");
+  const [follow, setFollow] = useState(false);
+  const positionMs = useSmoothPosition();
+  const syncedAvailable = lyricsAreSynced(lines);
+  const effectiveMode: LyricsMode = mode === "synced" && syncedAvailable ? "synced" : "static";
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!title.trim()) return;
+    setFollow(false);
+    search(title.trim(), artist.trim());
+  }
+
+  // Following the player: flip to synced as soon as timed lines arrive.
+  useEffect(() => {
+    // Guarded no-op in the common case (the async fetch result drives this).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (follow && syncedAvailable) setMode("synced");
+  }, [follow, syncedAvailable]);
+
+  /** Load lyrics for whatever is playing right now and light them up live. */
+  function followCurrentTrack() {
+    if (!current) return;
+    setTitle(current.title);
+    setArtist(current.artist);
+    setFollow(true);
+    search(current.title, current.artist);
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-3xl">
+      <div className="glass relative mb-5 overflow-hidden rounded-3xl border border-[var(--border-soft)] p-5 md:p-6">
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-violet-600/25 via-transparent to-[var(--glow)]" />
+        <div className="relative">
+          <h2 className="font-display text-[20px] font-extrabold md:text-[24px]">Lyrics Finder</h2>
+          <p className="text-muted mt-1 text-[13px]">
+            Song ka naam likho — lyrics yahin aa jayenge. Copy karo, ya{" "}
+            <span className="accent-text font-semibold">Synced</span> view me line-by-line chalte dekho.
+          </p>
+
+          <form onSubmit={submit} className="mt-4 flex flex-col gap-2 sm:flex-row">
+            <input
+              ref={inputRef}
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              required
+              maxLength={500}
+              aria-label="Song title"
+              placeholder="Song title — e.g. Tum Hi Ho"
+              className="glass min-w-0 flex-1 rounded-xl px-4 py-3 text-[14px] font-medium outline-none placeholder:text-muted-2"
+            />
+            <input
+              value={artist}
+              onChange={(event) => setArtist(event.target.value)}
+              maxLength={300}
+              aria-label="Singer (optional)"
+              placeholder="Singer (optional)"
+              className="glass rounded-xl px-4 py-3 text-[14px] font-medium outline-none placeholder:text-muted-2 sm:w-[210px]"
+            />
+            <button
+              type="submit"
+              disabled={loading || !title.trim()}
+              className="flex shrink-0 items-center justify-center gap-2 rounded-xl accent-bg px-5 py-3 text-[13.5px] font-bold text-black transition-transform hover:scale-[1.02] disabled:opacity-50"
+            >
+              <Search size={15} /> {loading ? "Finding…" : "Find"}
+            </button>
+          </form>
+
+          {current && (
+            <button
+              type="button"
+              onClick={followCurrentTrack}
+              className="text-muted hover:accent-text mt-3 flex items-center gap-1.5 text-[12px] font-semibold"
+            >
+              <Play size={12} /> Use the playing song — {current.title}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="glass flex flex-col items-center gap-3 rounded-3xl px-6 py-16 text-muted" role="status" aria-live="polite">
+          <div className="shimmer h-4 w-2/3 rounded-full" />
+          <div className="shimmer h-4 w-1/2 rounded-full" />
+          <div className="shimmer h-4 w-3/5 rounded-full" />
+          <span className="mt-2 text-[13px]">Finding lyrics…</span>
+        </div>
+      ) : started && (lyrics?.trim() || lines.length) ? (
+        <div className="glass overflow-hidden rounded-3xl">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] px-5 py-3">
+            <div className="min-w-0">
+              <h3 className="font-display truncate text-[16px] font-bold">{title || "Lyrics"}</h3>
+              {artist && <p className="text-muted truncate text-[12px]">{artist}</p>}
+            </div>
+            <LyricsModeToggle mode={effectiveMode} syncedAvailable={syncedAvailable} onChange={setMode} />
+          </div>
+
+          <LyricsView
+            lyrics={lyrics}
+            lines={lines}
+            mode={effectiveMode}
+            positionMs={positionMs}
+            source={source}
+            className="h-[58vh] min-h-[320px]"
+            listClassName="px-6"
+          />
+
+          {follow && (
+            <FinderNowBar
+              lines={lines}
+              positionMs={positionMs}
+              onSeek={(ms) => seekTo(ms)}
+            />
+          )}
+        </div>
+      ) : started && instrumental ? (
+        <EmptyState icon={<FileText size={30} />} title="Instrumental track" desc="Is gaane me koi lyrics nahi hain — sirf music hai." />
+      ) : started && message ? (
+        <div className="glass mx-auto flex max-w-md flex-col items-center rounded-3xl px-8 py-12 text-center">
+          <div className="text-muted mb-4 grid h-14 w-14 place-items-center rounded-full bg-[var(--panel-strong)]">
+            <FileText size={26} />
+          </div>
+          <h3 className="font-display text-[17px] font-bold">{message}</h3>
+          <p className="text-muted mt-2 text-[13px] leading-6">
+            Spelling check karo, ya singer ka naam bhi likh ke dobara try karo.
+          </p>
+          <div className="mt-5 flex gap-2">
+            <button onClick={retry} className="accent-text rounded-full border border-[var(--border)] px-4 py-2 text-[13px] font-semibold">
+              Retry
+            </button>
+            <button onClick={() => inputRef.current?.focus()} className="rounded-full accent-bg px-4 py-2 text-[13px] font-bold text-black">
+              Edit search
+            </button>
+          </div>
+        </div>
+      ) : (
+        <EmptyState
+          icon={<FileText size={30} />}
+          title="Find any song's lyrics"
+          desc="Naam likho aur lyrics yahin mil jayenge — copy karne ke liye, ya player ke saath sync karke padhne ke liye. Kuch bhi play kiye bina kaam karta hai."
+        />
+      )}
+    </div>
+  );
+}
+
+/** Live transport strip shown when the finder is following the playing song. */
+function FinderNowBar({ lines, positionMs, onSeek }: { lines: LyricLine[]; positionMs: number; onSeek: (ms: number) => void }) {
+  const isPlaying = usePlayer((s) => s.isPlaying);
+  const index = lines.length && positionMs >= lines[0].startMs ? activeLine(lines, positionMs) : -1;
+  return (
+    <div className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-5 py-3">
+      <div className="min-w-0">
+        <div className="text-muted-2 text-[10px] font-bold tracking-[0.18em] uppercase">
+          {isPlaying ? "Following playback" : "Paused"}
+        </div>
+        <div className="accent-text truncate text-[13px] font-semibold">
+          {index >= 0 ? lines[index].text : "Music…"}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {index > 0 && (
+          <button type="button" onClick={() => onSeek(lines[index - 1].startMs)} className="text-muted glass grid h-8 w-8 place-items-center rounded-full hover:text-[var(--text)]" aria-label="Previous line">
+            <SkipBack size={13} />
+          </button>
+        )}
+        {index >= 0 && index < lines.length - 1 && (
+          <button type="button" onClick={() => onSeek(lines[index + 1].startMs)} className="text-muted glass grid h-8 w-8 place-items-center rounded-full hover:text-[var(--text)]" aria-label="Next line">
+            <SkipForward size={13} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -27,6 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { usePlayer, currentTrack } from "@/store/player";
+import { useLyricsLookup, useSmoothPosition } from "@/lib/lyricsClient";
 import { useUi } from "@/store/ui";
 import { useSettings, EQ_PRESETS, EQ_BANDS } from "@/store/settings";
 import { next, prev, seekTo, setSpeed, togglePlay, moveInQueue, removeFromQueue, setQueue, playIndex, applySettings, setVideoMode } from "@/lib/audioEngine";
@@ -35,7 +36,7 @@ import { useLiked, downloadTrackFlow } from "@/lib/library";
 import { cx, formatTime, upscaleArtwork } from "@/lib/format";
 import type { Track } from "@/lib/types";
 import SeekBar from "./SeekBar";
-import CopyLyricsButton from "./CopyLyricsButton";
+import LyricsView, { LyricsModeToggle, lyricsAreSynced, type LyricsMode } from "./LyricsView";
 import { PlayButton, Toggle } from "./controls";
 import { LiveEq } from "./SidifyLogo";
 
@@ -307,45 +308,16 @@ function Shell({ track }: { track: Track }) {
 }
 
 function LyricsPanel({ track, onClose }: { track: Track; onClose: () => void }) {
-  const [lyrics, setLyrics] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
-  const [source, setSource] = useState("");
-  const [instrumental, setInstrumental] = useState(false);
+  const { loading, started, lyrics, lines, source, instrumental, message, search, retry } = useLyricsLookup(track.title, track.artist, track.durationMs);
   const [title, setTitle] = useState(track.title);
   const [artist, setArtist] = useState(track.artist);
-  const [lookup, setLookup] = useState({ title: track.title, artist: track.artist, attempt: 0 });
+  const [mode, setMode] = useState<LyricsMode>("static");
 
-  function searchLyrics(nextTitle: string, nextArtist: string) {
-    setLoading(true);
-    setLyrics(null);
-    setMessage("");
-    setSource("");
-    setInstrumental(false);
-    setLookup((value) => ({ title: nextTitle, artist: nextArtist, attempt: value.attempt + 1 }));
-  }
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const params = new URLSearchParams({ title: lookup.title, artist: lookup.artist });
-    if (track.durationMs > 0) params.set("duration", String(track.durationMs / 1000));
-    fetch(`/api/lyrics?${params}`, { signal: controller.signal })
-      .then(async (response) => {
-        const data = (await response.json()) as { success?: boolean; lyrics?: string; instrumental?: boolean; source?: string; message?: string };
-        if (!response.ok || !data.success) throw new Error(data.message || "Unable to load lyrics. Please retry.");
-        if (controller.signal.aborted) return;
-        setLyrics(data.lyrics || "");
-        setInstrumental(!!data.instrumental);
-        setSource(data.source || "");
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Unable to load lyrics. Please retry.");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [lookup, track.durationMs]);
+  const syncedAvailable = lyricsAreSynced(lines);
+  // The panel defaults to static; synced is opt-in and unavailable without timestamps.
+  const effectiveMode: LyricsMode = mode === "synced" && syncedAvailable ? "synced" : "static";
+  // Media-time clock (60 fps). The static view ignores it, so it is always safe to read.
+  const positionMs = useSmoothPosition();
 
   return (
     <motion.aside
@@ -356,44 +328,80 @@ function LyricsPanel({ track, onClose }: { track: Track; onClose: () => void }) 
       className="glass-strong absolute top-3 right-3 bottom-3 z-30 flex w-[calc(100%-1.5rem)] max-w-md flex-col overflow-hidden rounded-3xl shadow-2xl md:top-6 md:right-6 md:bottom-6"
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
-        <div className="min-w-0">
-          <div className="accent-text text-[10px] font-bold tracking-[0.2em] uppercase">Now playing</div>
-          <h2 className="font-display mt-1 truncate text-[18px] font-bold">Lyrics</h2>
-          <p className="text-muted truncate text-[12px]">{track.title} · {track.artist}</p>
+      <div className="border-b border-[var(--border)] px-5 pt-4 pb-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="accent-text text-[10px] font-bold tracking-[0.2em] uppercase">Now playing</div>
+            <h2 className="font-display mt-1 truncate text-[18px] font-bold">Lyrics</h2>
+            <p className="text-muted truncate text-[12px]">{track.title} · {track.artist}</p>
+          </div>
+          <button aria-label="Close lyrics" onClick={onClose} className="text-muted grid h-9 w-9 shrink-0 place-items-center rounded-full hover:bg-[var(--panel)] hover:text-[var(--text)]">
+            <X size={18} />
+          </button>
         </div>
-        <button aria-label="Close lyrics" onClick={onClose} className="text-muted grid h-9 w-9 shrink-0 place-items-center rounded-full hover:bg-[var(--panel)] hover:text-[var(--text)]">
-          <X size={18} />
-        </button>
+        {/* Static by default; Synced lights up line by line when the provider sent timestamps. */}
+        <div className="mt-3 flex items-center gap-2">
+          <LyricsModeToggle mode={effectiveMode} syncedAvailable={syncedAvailable} onChange={setMode} />
+          {syncedAvailable && (
+            <span className="text-muted-2 truncate text-[10.5px]">
+              {effectiveMode === "synced" ? `${lines.length} timed lines` : "timed lyrics available"}
+            </span>
+          )}
+        </div>
       </div>
-      {!loading && !!lyrics?.trim() && <CopyLyricsButton key={lyrics} lyrics={lyrics} />}
-      <div className="lyrics-scroll min-h-0 flex-1 overflow-y-auto px-5 py-6">
-        {loading ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 text-muted" role="status" aria-live="polite">
-            <Loader2 size={28} className="animate-spin accent-text" />
-            <span className="text-[13px]">Finding lyrics…</span>
-          </div>
-        ) : lyrics ? (
-          <div>
-            <p className="whitespace-pre-wrap text-[15px] leading-8 tracking-[0.01em]">{lyrics}</p>
-            <p className="text-muted mt-6 text-[11px]">Lyrics via {source}</p>
-          </div>
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center px-4 text-center">
-            <FileText size={30} className="text-muted-2 mb-3" />
-            <p className="font-semibold" role="status">{instrumental ? "Instrumental track — no lyrics" : message || "Lyrics not found"}</p>
-            {!instrumental && <button onClick={() => searchLyrics(lookup.title, lookup.artist)} className="accent-text mt-4 rounded-full border border-[var(--border)] px-4 py-2 text-sm">Retry</button>}
-          </div>
-        )}
-      </div>
-      <form className="shrink-0 space-y-2 border-t border-[var(--border)] p-4" onSubmit={(event) => {
-        event.preventDefault();
-        if (title.trim()) searchLyrics(title.trim(), artist.trim());
-      }}>
+
+      {loading || !started ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 text-muted" role="status" aria-live="polite">
+          <Loader2 size={28} className="animate-spin accent-text" />
+          <span className="text-[13px]">Finding lyrics…</span>
+        </div>
+      ) : lyrics?.trim() || lines.length ? (
+        <LyricsView lyrics={lyrics} lines={lines} mode={effectiveMode} positionMs={positionMs} source={source} className="min-h-0 flex-1" />
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
+          <FileText size={30} className="text-muted-2 mb-3" />
+          <p className="font-semibold" role="status">{instrumental ? "Instrumental track — no lyrics" : message || "Lyrics not found"}</p>
+          {!instrumental && (
+            <button onClick={retry} className="accent-text mt-4 rounded-full border border-[var(--border)] px-4 py-2 text-sm">
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
+      <form
+        className="shrink-0 space-y-2 border-t border-[var(--border)] p-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (title.trim()) search(title.trim(), artist.trim());
+        }}
+      >
         <p className="text-muted text-[12px]">Wrong match or missing lyrics? Search by song and singer.</p>
-        <input aria-label="Song title for lyrics" value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={500} className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm" placeholder="Song title" />
-        <input aria-label="Singer for lyrics" value={artist} onChange={(event) => setArtist(event.target.value)} maxLength={300} className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm" placeholder="Singer (optional)" />
-        <button disabled={loading || !title.trim()} className="accent-text w-full rounded-lg border border-[var(--border)] py-2 text-sm font-semibold disabled:opacity-50">Search lyrics</button>
+        <div className="flex gap-2">
+          <input
+            aria-label="Song title for lyrics"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            required
+            maxLength={500}
+            className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm"
+            placeholder="Song title"
+          />
+          <input
+            aria-label="Singer for lyrics"
+            value={artist}
+            onChange={(event) => setArtist(event.target.value)}
+            maxLength={300}
+            className="w-[38%] shrink-0 rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm"
+            placeholder="Singer"
+          />
+        </div>
+        <button
+          disabled={loading || !title.trim()}
+          className="accent-text w-full rounded-lg border border-[var(--border)] py-2 text-[13px] font-semibold disabled:opacity-50"
+        >
+          Search lyrics
+        </button>
       </form>
     </motion.aside>
   );
