@@ -13,11 +13,15 @@ import { APP_SIZE_LABEL } from "@/lib/appRelease";
 /* ------------------------------------------------------------------ */
 
 export const UPDATE_INFO = {
-  tag: "Minor update 1.0",
-  date: "14 Sept 2026",
-  headline: "Playback, likes and playlists are all fixed",
+  tag: "Minor update 1.1",
+  date: "26 Sept 2026",
+  headline: "Lyrics now light up line by line, plus a Lyrics Finder",
   items: [
-    "You can now view lyrics — open the full player and tap Lyrics to see available song lyrics.",
+    "Synced lyrics — open the full player, tap Lyrics and switch the toggle at the top from Static to Synced: the current line lights up as the song plays and the view follows it.",
+    "New Lyrics Finder in Your Library — type any song name (and the singer, if you know it) and its lyrics appear right there, ready to copy. Nothing needs to be playing.",
+    "In Synced view you can tap any line to jump the song there, and scrolling away pauses the auto-follow until you tap “Current line”.",
+    "Copy lyrics moved to the bottom of the panel as a small button, so the lyrics get the whole width.",
+    "You can still view plain lyrics — open the full player and tap Lyrics for the static text of any available song.",
     "Songs now play one after another — when a song ends, a similar song starts on its own.",
     "Playlists, Liked Songs and search results keep rolling to the next song and the one after that.",
     "The first song you tap now starts right away (earlier you had to tap a second song).",

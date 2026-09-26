@@ -292,7 +292,97 @@ lagaya gaya hai, isliye **koi UI file, icon ya layout touch nahi hua** — click
 - Downloads page pe purane rows ki delete/clear bhi kaam karta hai (`removeDownloadEverywhere`, `clearAllDownloads`).
 - `/api/downloads` GET/DELETE intact hai; POST ab client se call hi nahi hota.
 
-## 6. Database
+## 6. Lyrics — static + synced (LRC)
+
+**Flow:** UI → `GET /api/lyrics?title&artist&duration` → `src/lib/lyrics.ts` → **LRCLIB** (primary) → **lyrics.ovh** (fallback).
+Koi HTML scraping nahi, sirf bounded JSON APIs. DB touch hi nahi hota.
+
+### 6.1 Query taiyaari
+
+- `cleanTitle()` YouTube title se noise hatata hai: `(Official Video)`, `[Remaster]`, `Lyrics`, `Visualizer`, `4K/HD/HQ`,
+  trailing `-`/`|`. `queryVariants()` max **4 variants** banata hai — `{title, artist}`, dash-split ka ulta
+  (`"Arijit Singh - Tum Hi Ho"` → `{title:"Tum Hi Ho", artist:"Arijit Singh"}`), sirf pehla hissa, aur
+  `(from "…")` film-tag hata ke. `- Topic` / `VEVO` suffixes bhi strip.
+- Sabhi variants ke requests **parallel** jate hain, har ek pe `AbortSignal.timeout(4000)` — total lookup bounded rehta hai.
+
+### 6.2 Teen-tier matching
+
+1. **Exact** — `lrclib.net/api/get?track_name&artist_name[&duration]`.
+2. **Search + ranking** — `lrclib.net/api/search?track_name` (sirf title), kyunki YouTube aksar *label* ko artist batata hai
+   (`T-Series`, `Zee Music`). Har hit score hota hai: **artist match +4**, **duration ±5 s +2**. Safety lock — top score 0 ho
+   aur ek se zyada alag artist hon to `null` (galat gaane ke lyrics dikhane se behtar kuch na dikhana).
+3. **Fallback** — `api.lyrics.ovh/v1/{artist}/{title}` (sirf plain text, isliye `lines: []`).
+
+**Miss vs outage alag hain:** genuine miss → `404` + "not found"; provider 5xx/network → `LyricsUnavailableError` → `503` +
+"temporarily unavailable, retry" (`Cache-Control: no-store`). `instrumental: true` apna message deta hai, "not found" nahi.
+
+### 6.3 LRC parsing — `parseLrc()`
+
+LRCLIB `plainLyrics` **aur** `syncedLyrics` dono deta hai; synced LRC format me hota hai (`[mm:ss.xx]line`). Pehle ye
+timestamps regex se phenk diye jate the — ab parse hote hain:
+
+- `LyricLine { startMs, text }[]`, `startMs` pe sorted.
+- Ek line pe **multiple stamps** (`[00:16.10][01:02.80]Chorus`) → repeated chorus ke liye alag-alag entries.
+- Fraction precision handle: `[00:16.1]` = tenths, `.16` = hundredths, `.161` = millis; `[00:16]` = whole second.
+- `[offset:±ms]` metadata apply hota hai (clamp at 0), baaki meta tags (`[ar:]`, `[ti:]`, `[al:]`, `[by:]`, …) skip.
+- **Enhanced LRC (A2)** ke inline word markers `<00:12.43>` strip ho jate hain — ye build **line-level** sync karta hai,
+  word-level nahi.
+- `usableSync()` ko ≥2 stamps chahiye (ek > 0 pe) — warna stray `[00:00.00]` intro marker se "synced" on ho jata
+  aur poora gaana ek hi line pe atka dikhta.
+- `lyrics` (copy-friendly text) = `plainLyrics` prefer, warna timed lines se rebuild — synced-only payload pe bhi Copy kaam karta hai.
+
+### 6.4 API response
+
+`{ success, lyrics, lines: [{startMs, text}], synced, source, instrumental? }` — `lines` max 1200 entries,
+text 500 chars pe capped. Hit pe `Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400`; failure pe `no-store`.
+
+### 6.5 Client — media clock (`src/lib/lyricsClock.ts` + `lyricsClient.ts`)
+
+Engine `positionMs` sirf har **~220 ms (native) / ~240 ms (iframe)** likhta hai — line highlight ke liye bahut coarse.
+
+- `useSmoothPosition()` store updates ke beech `performance.now()` + `speed` se **60 fps** extrapolate karta hai, aur
+  snap-back karta hai jab clock engine se `RESYNC_THRESHOLD_MS = 900` ms se zyada door ho (seek / crossfade / buffering /
+  track change) ya playback paused ho.
+- `advanceMediaClock()` ek frame ka delta **500 ms pe clamp** karta hai — background tab me rAF ~1 Hz pe throttle hota hai,
+  warna tab kholte hi lyrics aage nikal jate.
+- Dono pure functions hain aur framework-free module me rehte hain → `tests/lyricsClock.test.cjs` bina DOM ke unit test karta hai.
+- Speed 0.5x–2x automatic sahi chalti hai: LRC time **media time** hai, wall time nahi.
+
+### 6.6 Rendering — `src/components/LyricsView.tsx`
+
+- `activeLineIndex()` **binary search** se current line nikalta hai; position ~**12 Hz** pe quantise hota hai
+  (`Math.round(ms / 80)`) taaki React har frame re-render na kare — visual smoothness CSS transitions se aati hai.
+- `.synced-line[data-state="past"|"active"|"next"]` (`globals.css`): past 20 % opacity, current accent + glow + `scale(1.035)`,
+  next 34 %. `prefers-reduced-motion` pe transitions/transform hat jate hain.
+- **Auto-follow** current line ko center karta hai (`scroll-behavior: smooth`; >600 px jump pe instant snap). User wheel/touch
+  se scroll kare to follow pause ho jata hai aur **"Current line"** pill aata hai; agli line change pe follow apne aap resume.
+- Kisi bhi line pe **click → `seekTo(line.startMs)`** — dono engines (native `<audio>` aur YouTube IFrame) me kaam karta hai.
+- **Static ⇄ Synced** toggle panel ke *top* pe segmented control hai (`LyricsModeToggle`). Default **static**; timestamps na
+  hone pe Synced disabled (title me reason). Neeche footer me chhota **Copy** button + source credit.
+- Library → **Lyrics Finder** tab wahi components use karta hai: bina kuch play kiye lookup, copy, aur
+  "Use the playing song" se live follow (neeche prev/next-line transport strip ke saath).
+
+### 6.7 Tests + local mock
+
+`tests/lyrics.test.cjs` (provider tiers, matching, LRC) · `tests/lyricsClock.test.cjs` (clock maths) ·
+`tests/clipboard.test.cjs`. Run: `node --test tests/*.test.cjs`.
+
+Local dev me public providers tak pahunch na ho to `node tools/mock-lrclib.mjs` (port 8099) +
+`LRCLIB_BASE=http://127.0.0.1:8099` (`.env.local`) — production me koi env zaroori nahi, defaults public endpoints hain.
+`/dev/lyrics-sync` ek **dev-only playground** hai jo player store ki clock ko timer se drive karke synced view dikhata hai
+(stream ke bina); app shell me iska koi link nahi.
+
+### 6.8 Known limits
+
+- Sync **line-level** hai. Word-by-word karaoke (Spotify ka exact behaviour) ke liye provider se `<mm:ss.xx>` word markers
+  chahiye — LRCLIB pe coverage bahut patli hai. Agla step interpolation ho sakta hai (line ke start/end ke beech syllable
+  weight se word timings estimate); drift har line pe reset hota hai kyunki anchor LRC stamp hi rehta hai.
+- Jo tracks sirf `plainLyrics` dete hain (kai Hindi/regional) unpe Synced toggle disabled rehta hai — graceful static fallback.
+- iframe mode me YouTube ka `getTime()` laggy hai; 900 ms resync window isi ko absorb karti hai.
+
+---
+
+## 7. Database
 
 | Item | Detail |
 |---|---|
@@ -337,7 +427,7 @@ error, bas boot pe nahi balki pehli use pe. Saare call sites **untouched**: `db`
 
 ---
 
-## 7. State management
+## 8. State management
 
 ### Zustand `5.0.15` — 3 stores
 
@@ -360,7 +450,7 @@ optimistic updates (like toggle turant UI me, fail pe rollback).
 
 ---
 
-## 8. UI / Design system
+## 9. UI / Design system
 
 | Area | Technology |
 |---|---|
@@ -393,7 +483,7 @@ optimistic updates (like toggle turant UI me, fail pe rollback).
 
 ---
 
-## 9. PWA
+## 10. PWA
 
 | Piece | Detail |
 |---|---|
@@ -412,7 +502,7 @@ optimistic updates (like toggle turant UI me, fail pe rollback).
 
 ---
 
-## 10. API surface (Next.js Route Handlers)
+## 11. API surface (Next.js Route Handlers)
 
 | Endpoint | Method | Kaam |
 |---|---|---|
@@ -428,29 +518,32 @@ optimistic updates (like toggle turant UI me, fail pe rollback).
 | `/api/library/restore` | POST | bulk backup restore |
 | `/api/playlists`, `/api/playlists/[id]` | GET/POST/PATCH/DELETE | playlists + tracks (reorder, rename) |
 | `/api/downloads` | GET/POST/DELETE | download metadata |
+| `/api/lyrics?title&artist[&duration]` | GET | LRCLIB → lyrics.ovh: `{lyrics, lines[], synced, source, instrumental?}` (1 h CDN cache) |
 | `/api/health` | GET | `select 1` DB ping |
 
-## 11. Pages
+## 12. Pages
 
-`/` (Home) · `/search` · `/library` · `/downloads` · `/settings` · `/album/[id]` · `/artist/[id]` · `/playlist/[id]`
+`/` (Home) · `/search` · `/library` (Liked / Playlists / Artists / History / **Lyrics Finder**, `?tab=lyrics`) · `/downloads` · `/settings` · `/album/[id]` · `/artist/[id]` · `/playlist/[id]`
 
-## 12. Components (sab hand-rolled)
+Dev-only (app shell me link nahi): `/dev/lyrics-sync` — synced-lyrics playground, simulated transport clock.
+
+## 13. Components (sab hand-rolled)
 
 `Providers` (QueryClient + ThemeApplier + EngineBootstrap + PlatformBootstrap + DataSync) · `Sidebar` (+`MobileNav`) ·
-`MiniPlayer` · `FullPlayer` (463 lines — queue Reorder, EQ panel, speed, sleep, video mode) · `SeekBar` ·
-`TrackRow` · `TrackMenu` · `cards` (AlbumCard/ArtistCard) · `controls` (PlayButton/Toggle) · `Modals`
-(AddToPlaylist + SleepTimer) · `Toasts` · `Section` · `SidifyLogo` (+`LiveEq`)
+`MiniPlayer` · `FullPlayer` (queue Reorder, EQ panel, speed, sleep, video mode, lyrics panel) · `SeekBar` ·
+`LyricsView` (+`LyricsModeToggle`) · `CopyLyricsButton` · `TrackRow` · `TrackMenu` · `cards` (AlbumCard/ArtistCard) ·
+`controls` (PlayButton/Toggle) · `Modals` (AddToPlaylist + SleepTimer) · `Toasts` · `Section` · `SidifyLogo` (+`LiveEq`)
 
 ---
 
-## 13. Tooling & dev deps
+## 14. Tooling & dev deps
 
 ESLint `9.39.4` (flat config) + `eslint-config-next/core-web-vitals` · `drizzle-kit` · `@types/*` ·
 `dotenv 17.3.1` (⚠️ dependency me hai par src me **kahin use nahi hota**).
 
 ---
 
-## 14. Known gaps / stubs / risks
+## 15. Known gaps / stubs / risks
 
 1. ~~`bin/yt-dlp` executable nahi tha~~ — **resolved**: yt-dlp dependency hi hata di gayi. Ab sirf
    `youtubei.js` chahiye; koi binary, koi `chmod`, koi `YTDLP_PATH`. Repo ~5.4 MB halka ho gaya.
@@ -475,7 +568,7 @@ ESLint `9.39.4` (flat config) + `eslint-config-next/core-web-vitals` · `drizzle
 
 ---
 
-## 14.5 Update 1.0 (14 Sept 2026) — playback + library fixes
+## 15.5 Update 1.0 (14 Sept 2026) — playback + library fixes
 
 Koi naya UI element ya backend route add nahi kiya gaya — sab fixes client layer me hain.
 
@@ -529,7 +622,32 @@ uske baad cross aata hai. Wahi guide Settings → System & Device Controls →
 
 ---
 
-## 15. TL;DR stack list
+## 15.6 Update 1.1 (26 Sept 2026) — synced lyrics + Lyrics Finder
+
+**Backend (`src/lib/lyrics.ts`, `src/app/api/lyrics/route.ts`)**
+- LRCLIB ke `syncedLyrics` ab **discard nahi hote**: `parseLrc()` unhe `LyricLine[]` banata hai (multi-stamp lines,
+  `[offset:]`, meta tags, enhanced-LRC word markers, 1/10/100/1000-ms fractions). `usableSync()` ≥2 stamps maangta hai.
+- Response me `lines` + `synced` add hua (1200 lines / 500 chars capped). `lyrics` (plain text) pehle jaisa hi hai, isliye
+  Copy behaviour unchanged. Provider roots `providerBase()` se aate hain — `LRCLIB_BASE` / `LYRICS_OVH_BASE` se override
+  (local testing), production me zero config.
+
+**Player (`FullPlayer.tsx` → `LyricsView.tsx`)**
+- Lyrics panel me upar **Static | Synced** segmented toggle; default static. Synced me current line accent + glow ke saath
+  light up hoti hai, past lines dim, auto-scroll center pe follow karta hai (user scroll kare to pause + "Current line" pill).
+- Line pe click → `seekTo()`. Copy button **top se hata ke bottom** me chhote pill me chala gaya.
+- `useSmoothPosition()` engine ke 220–240 ms ticks ko 60 fps media clock me badalta hai (speed-aware, seek/pause pe resync,
+  500 ms frame clamp) — maths `src/lib/lyricsClock.ts` me pure hai.
+
+**Library (`src/app/library/page.tsx`)**
+- Naya **Lyrics Finder** tab (`/library?tab=lyrics`): song (+ optional singer) likho → lyrics, Copy button, Static/Synced
+  toggle. "Use the playing song" se current track ke lyrics live follow hote hain (prev/next-line strip ke saath).
+
+**Dev / tests**
+- `tools/mock-lrclib.mjs` — offline fixture provider (3 tracks: synced, plain-only, instrumental).
+- `/dev/lyrics-sync` — simulated-clock playground; `tests/lyricsClock.test.cjs` (6 tests) + `tests/lyrics.test.cjs` me
+  12 naye LRC/synced tests. Total 30 pass.
+
+## 16. TL;DR stack list
 
 ```
 Next.js 16 (App Router) · React 19 · TypeScript 5.9 (strict) · Node.js runtime
@@ -541,6 +659,7 @@ InnerTube clients: YTMUSIC (search) · ANDROID/TV_SIMPLY/YTMUSIC_ANDROID/MWEB/WE
 Web Audio API (dual-deck, 5-band biquad EQ, StereoPanner, crossfade)
 IndexedDB (offline audio — reads live, writes gated) · Downloads currently disabled ("coming soon")
 YouTube IFrame Player API (hidden-harbor singleton)
+Lyrics: LRCLIB (+lyrics.ovh fallback) · hand-rolled LRC parser · rAF media clock for line-synced highlighting
 Media Session API · IndexedDB (offline audio) · Service Worker (hand-written) · Web App Manifest (PWA)
 ESLint 9 (flat) · PostCSS 8
 ```

@@ -262,3 +262,62 @@ input[type="range"].v-slider::-moz-range-track {
 .hero-blend {
   mix-blend-mode: plus-lighter;
 }
+
+/* ------------------------- SYNCED (LRC) LYRICS --------------------------- */
+/* Line-level karaoke: past lines dim out, the current line lights up and the
+   next ones wait. Colour/opacity are transitioned so a 60 fps clock is not
+   needed — only the active index changes. */
+.lyrics-scroll {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.synced-line {
+  margin: 0;
+  padding: 0.28rem 0;
+  font-size: 16px;
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+  font-weight: 600;
+  color: var(--text);
+  opacity: 0.34;
+  filter: blur(0.2px);
+  transform-origin: left center;
+  transition:
+    opacity 0.35s ease,
+    color 0.35s ease,
+    filter 0.35s ease,
+    transform 0.35s ease,
+    text-shadow 0.35s ease;
+}
+.synced-line[data-state="past"] {
+  opacity: 0.2;
+}
+.synced-line[data-state="active"] {
+  opacity: 1;
+  color: var(--accent);
+  filter: none;
+  font-weight: 800;
+  transform: scale(1.035);
+  text-shadow: 0 0 26px var(--glow);
+}
+.synced-line:hover {
+  opacity: 0.75;
+  filter: none;
+}
+.synced-line[data-state="active"]:hover {
+  opacity: 1;
+}
+@media (min-width: 768px) {
+  .synced-line {
+    font-size: 18px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .synced-line {
+    transition:
+      opacity 0.15s ease,
+      color 0.15s ease;
+    filter: none;
+    transform: none;
+  }
+}
