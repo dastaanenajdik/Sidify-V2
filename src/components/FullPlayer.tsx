@@ -35,6 +35,7 @@ import { useLiked, downloadTrackFlow } from "@/lib/library";
 import { cx, formatTime, upscaleArtwork } from "@/lib/format";
 import type { Track } from "@/lib/types";
 import SeekBar from "./SeekBar";
+import CopyLyricsButton from "./CopyLyricsButton";
 import { PlayButton, Toggle } from "./controls";
 import { LiveEq } from "./SidifyLogo";
 
@@ -365,6 +366,7 @@ function LyricsPanel({ track, onClose }: { track: Track; onClose: () => void }) 
           <X size={18} />
         </button>
       </div>
+      {!loading && !!lyrics?.trim() && <CopyLyricsButton key={lyrics} lyrics={lyrics} />}
       <div className="lyrics-scroll min-h-0 flex-1 overflow-y-auto px-5 py-6">
         {loading ? (
           <div className="flex h-full flex-col items-center justify-center gap-4 text-muted" role="status" aria-live="polite">
