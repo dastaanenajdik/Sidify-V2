@@ -694,6 +694,44 @@ audio band — ye sirf native player (ExoPlayer + foreground service, IfallMusic
 "background handoff" (DSP graph → plain `<audio>`) agli release ka candidate hai — abhi ke evidence me video
 (iframe) mode bhi fail tha, to pehle page-unload fix kiya gaya.
 
+## 15.8 Update 1.3 (26 Sept 2026) — BackGuard v2: double-Back-to-exit while playing
+
+**Report:** "Mini-player pe (ya root page pe) Back dabate hi app band ho jata hai aur gaana ruk jata hai."
+§15.7 ka guard sirf full-player overlay ko bachata tha — neeche mini-player pe Back phir bhi page
+unload kar deta tha.
+
+**Fix — `src/components/BackGuard.tsx` + naya `src/lib/backGuard.ts` (pure logic):**
+
+- Gaana loaded + playing/buffering ho to ek history **sentinel entry** park rehti hai
+  (`history.pushState({...history.state, sidifyGuard: true})` — Next ka state copy karke, v1 jaisa).
+- **Back #1 = absorb:** sentinel wapas park + toast *"Press Back again to exit / Music is playing"*.
+  **Back #2 (2.5 s ke andar) = exit allow:** guard hat jata hai, asli Back chalta hai.
+  Window nikal jaye to agla Back phir Back #1 banta hai (naya cycle).
+- **Normal in-app navigation untouched:** sentinel sirf *same-URL* pop pe absorb karta hai.
+  URL badalne wala har Back (asli navigation) hamesha allow — pre-pop URL `pushState`/
+  `replaceState` observe karke track hota hai. Buried sentinel (navigate karne ke baad neeche
+  dabi entry) pe land karna bhi navigation hai → allow.
+- **Paused / khaali-queue state untouched:** guard `hasTrack && (isPlaying || isLoading)` pe hi
+  arm hota hai. Pause karte hi top sentinel wapas le liya jata hai (`history.back()`), Back
+  bilkul normal rehta hai. Buffering (`isLoading`) me guard ON rehta hai taaki track-change
+  ke beech Back se app na chhoote.
+- **Player overlay ko priority:** player khula ho to har Back player-close hai (v1 behaviour,
+  unchanged). Sentinel park player ke band hone tak defer hota hai; band hote hi heal ho jata hai.
+- `router.replace` (search `?q=` typing) top entry ko clobber na kare, isliye `replaceState`
+  hamare flags preserve karta hai — Next ke behaviour me koi change nahi.
+- Apne programmatic `history.back()` calls pass-flags (`consumePass`/`exitPass`) se mark hote
+  hain taaki handler unhe dobara absorb na kare; player flag re-push pe scrub hota hai.
+
+**Files:** `src/lib/backGuard.ts` (pure: `isPlaybackGuardActive`, `decideBackAction`,
+`shouldParkSentinel`, `shouldConsumeSentinel`, `BACK_EXIT_WINDOW_MS = 2500`),
+`src/components/BackGuard.tsx` (wiring), `tests/backGuard.test.cjs` (18 tests).
+
+**Ab bhi faasla (honest limits):** ye guard page-unload rokta hai, tab-kill nahi — Recents se app
+swipe = tab close = audio band (sirf native player + foreground service fix kar sakta hai).
+Gehre navigation stack me (play → kai pages navigate) dusra Back guard hata deta hai par buried
+entries ki wajah se poora exit ek aur Back maang sakta hai; agla same-URL Back naya cycle shuru
+karta hai. Chrome plain tab me exit ke baad audio rukega hi (WebAPK/TWA me background chalta hai).
+
 ## 16. TL;DR stack list
 
 ```
