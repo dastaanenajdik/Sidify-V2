@@ -19,7 +19,6 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
-  SquareArrowOutUpRight,
   Timer,
   TriangleAlert,
   WifiOff,
@@ -209,14 +208,6 @@ export default function AppDownloadPage() {
                 <div className="text-muted text-[12px]">The whole app rebuilt around glass, sound and speed</div>
               </div>
             </div>
-            <a
-              href={ANDROID_APP.releaseUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="ring-focus glass hover-panel flex items-center gap-2 rounded-full px-4 py-2 text-[12.5px] font-bold"
-            >
-              Full notes on GitHub <SquareArrowOutUpRight size={13} />
-            </a>
           </div>
 
           <ul className="grid grid-cols-1 gap-x-8 gap-y-3.5 p-5 md:grid-cols-2 md:p-6">
@@ -350,9 +341,7 @@ export default function AppDownloadPage() {
           <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
             <ApkDownloadButton variant="hero" label="Download the APK" />
             <a
-              href={ANDROID_APP.releaseUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+              href="#whats-new"
               className="ring-focus glass hover-panel flex items-center gap-2 rounded-2xl px-5 py-4 text-[14px] font-bold"
             >
               <FileText size={15} /> Release notes

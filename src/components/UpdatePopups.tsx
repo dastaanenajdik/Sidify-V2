@@ -17,6 +17,7 @@ export const UPDATE_INFO = {
   date: "14 Sept 2026",
   headline: "Playback, likes and playlists are all fixed",
   items: [
+    "You can now view lyrics — open the full player and tap Lyrics to see available song lyrics.",
     "Songs now play one after another — when a song ends, a similar song starts on its own.",
     "Playlists, Liked Songs and search results keep rolling to the next song and the one after that.",
     "The first song you tap now starts right away (earlier you had to tap a second song).",
@@ -32,6 +33,9 @@ export const UPDATE_INFO = {
 
 const LOCK_SECONDS = 5;
 const SEEN_KEY = "sidify-notices-shown";
+const BG_HELP_SEEN_KEY = "sidify-background-help-shown";
+// Also remember within this page when browser storage is blocked.
+let backgroundHelpShown = false;
 
 /* ------------------------------------------------------------------ */
 /*  Shell: same glass panel language as the rest of the app.           */
@@ -234,6 +238,26 @@ function StepList({ steps, tone }: { steps: string[]; tone: "primary" | "seconda
 }
 
 function BackgroundHelp({ onClose }: { onClose: () => void }) {
+  // This guide mounts only after a client-side action. Resolve the delay once,
+  // before Sheet mounts, so returning visitors never flash a countdown.
+  const [closeAfter] = useState(() => {
+    if (backgroundHelpShown) return 0;
+    try {
+      return localStorage.getItem(BG_HELP_SEEN_KEY) ? 0 : LOCK_SECONDS;
+    } catch {
+      return LOCK_SECONDS;
+    }
+  });
+
+  useEffect(() => {
+    backgroundHelpShown = true;
+    try {
+      localStorage.setItem(BG_HELP_SEEN_KEY, "1");
+    } catch {
+      // The in-memory flag still skips the timer on subsequent opens this page.
+    }
+  }, []);
+
   const pushToast = useUi((s) => s.pushToast);
   const [copied, setCopied] = useState(false);
 
@@ -280,7 +304,7 @@ function BackgroundHelp({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Sheet onClose={onClose} closeAfter={LOCK_SECONDS}>
+    <Sheet onClose={onClose} closeAfter={closeAfter}>
       <div className="mb-4 flex items-center gap-2.5 pr-10">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[var(--panel-strong)] accent-text">
           <Clock3 size={17} />
