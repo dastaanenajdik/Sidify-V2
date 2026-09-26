@@ -308,26 +308,43 @@ function Shell({ track }: { track: Track }) {
 function LyricsPanel({ track, onClose }: { track: Track; onClose: () => void }) {
   const [lyrics, setLyrics] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [source, setSource] = useState("");
+  const [instrumental, setInstrumental] = useState(false);
+  const [title, setTitle] = useState(track.title);
+  const [artist, setArtist] = useState(track.artist);
+  const [lookup, setLookup] = useState({ title: track.title, artist: track.artist, attempt: 0 });
+
+  function searchLyrics(nextTitle: string, nextArtist: string) {
+    setLoading(true);
+    setLyrics(null);
+    setMessage("");
+    setSource("");
+    setInstrumental(false);
+    setLookup((value) => ({ title: nextTitle, artist: nextArtist, attempt: value.attempt + 1 }));
+  }
 
   useEffect(() => {
     const controller = new AbortController();
-    const params = new URLSearchParams({ title: track.title });
-    if (track.artist) params.set("artist", track.artist);
-    fetch(`/api/lyrics?${params.toString()}`, { signal: controller.signal })
+    const params = new URLSearchParams({ title: lookup.title, artist: lookup.artist });
+    if (track.durationMs > 0) params.set("duration", String(track.durationMs / 1000));
+    fetch(`/api/lyrics?${params}`, { signal: controller.signal })
       .then(async (response) => {
-        const data = (await response.json()) as { success?: boolean; lyrics?: string };
-        if (!response.ok || !data.success || !data.lyrics) throw new Error("not found");
-        setLyrics(data.lyrics);
+        const data = (await response.json()) as { success?: boolean; lyrics?: string; instrumental?: boolean; source?: string; message?: string };
+        if (!response.ok || !data.success) throw new Error(data.message || "Unable to load lyrics. Please retry.");
+        if (controller.signal.aborted) return;
+        setLyrics(data.lyrics || "");
+        setInstrumental(!!data.instrumental);
+        setSource(data.source || "");
       })
       .catch((error: unknown) => {
-        if ((error as { name?: string })?.name !== "AbortError") setLyrics("");
+        if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Unable to load lyrics. Please retry.");
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
-
     return () => controller.abort();
-  }, [track.id, track.title, track.artist]);
+  }, [lookup, track.durationMs]);
 
   return (
     <motion.aside
@@ -355,15 +372,27 @@ function LyricsPanel({ track, onClose }: { track: Track; onClose: () => void }) 
             <span className="text-[13px]">Finding lyrics…</span>
           </div>
         ) : lyrics ? (
-          <p className="whitespace-pre-wrap text-[15px] leading-8 tracking-[0.01em]">{lyrics}</p>
+          <div>
+            <p className="whitespace-pre-wrap text-[15px] leading-8 tracking-[0.01em]">{lyrics}</p>
+            <p className="text-muted mt-6 text-[11px]">Lyrics via {source}</p>
+          </div>
         ) : (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">
             <FileText size={30} className="text-muted-2 mb-3" />
-            <p className="font-semibold">Lyrics not available for this track</p>
-            <p className="text-muted mt-2 text-[12px]">Try another version of the song or check back later.</p>
+            <p className="font-semibold" role="status">{instrumental ? "Instrumental track — no lyrics" : message || "Lyrics not found"}</p>
+            {!instrumental && <button onClick={() => searchLyrics(lookup.title, lookup.artist)} className="accent-text mt-4 rounded-full border border-[var(--border)] px-4 py-2 text-sm">Retry</button>}
           </div>
         )}
       </div>
+      <form className="shrink-0 space-y-2 border-t border-[var(--border)] p-4" onSubmit={(event) => {
+        event.preventDefault();
+        if (title.trim()) searchLyrics(title.trim(), artist.trim());
+      }}>
+        <p className="text-muted text-[12px]">Wrong match or missing lyrics? Search by song and singer.</p>
+        <input aria-label="Song title for lyrics" value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={500} className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm" placeholder="Song title" />
+        <input aria-label="Singer for lyrics" value={artist} onChange={(event) => setArtist(event.target.value)} maxLength={300} className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm" placeholder="Singer (optional)" />
+        <button disabled={loading || !title.trim()} className="accent-text w-full rounded-lg border border-[var(--border)] py-2 text-sm font-semibold disabled:opacity-50">Search lyrics</button>
+      </form>
     </motion.aside>
   );
 }
