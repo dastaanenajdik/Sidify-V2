@@ -732,6 +732,47 @@ Gehre navigation stack me (play → kai pages navigate) dusra Back guard hata de
 entries ki wajah se poora exit ek aur Back maang sakta hai; agla same-URL Back naya cycle shuru
 karta hai. Chrome plain tab me exit ke baad audio rukega hi (WebAPK/TWA me background chalta hai).
 
+## 15.9 Update 1.4 (27 Sept 2026) — visibility-aware playback + plain-audio handoff
+
+**Report / diagnosis:** video mode ON me Back se full player band karne ya screen-off par
+Chrome offscreen YouTube iframe ko pause kar sakta hai. App/session zinda rehne ke bawajood
+audio rukta tha; ye §15.7–15.8 ke page-unload guard se alag transport issue hai.
+
+**Fix — `src/lib/engineMode.ts` + `src/lib/audioEngine.ts`:**
+
+- Pure `decideEngineAction()` video tabhi maangta hai jab preference ON, full player open,
+  document visible, track me video aur embed unblocked ho. Back/hidden/audio preference par
+  iframe → native; visible player reopen par native → iframe; wanted paused iframe → resume.
+  Paused/loading/uninitialized transport ko policy start nahi karti.
+- `chooseMode()` ab visibility-aware `videoWanted()` use karta hai. Reconciliation existing
+  `playIndex(index, { resumeMs })` se hoti hai; live media clock capture hota hai taaki hidden
+  tab ke stale UI ticks se position peeche na jaye. Visibility, player-open/video preference,
+  loading completion aur watchdog triggers wired hain. Normal attempts me **1200 ms throttle**,
+  forced UI/visibility triggers throttle bypass karte hain; failed/mismatched switch me
+  **30 s cooldown** (force bhi respect karta hai). Embed startup exception video ko **60 s**
+  block karti hai. Native fallback ab engine state bhi correctly update karta hai.
+- **Plain `<audio>` fallback sirf hidden + playing + native + AudioContext non-running par**.
+  Running graph ko touch nahi karte (unnecessary second request/re-buffer gap avoid).
+  Same source/position ek element me jaate hain jo `createMediaElementSource` se kabhi nahi
+  judta; decks pause, pending crossfade cancel. AudioContext state change + **3 s hidden watch**
+  delayed suspension detect karte hain. Hidden native startup suspended `resume()` ka wait
+  nahi karta. Visible return par context resume + live position restore karke deck wapas.
+- Toggle/seek/previous, progress, watchdog, repeat/end/sleep, volume/speed/normalization aur
+  deck cleanup plain element ko respect karte hain. EQ/pan/crossfade plain path me unavailable;
+  foreground deck par DSP wapas. Stale iframe events / async handoffs newer track ko nahi rok sakte.
+- `setVideoMode()` sirf preference set + reconciliation karta hai; separate manual restart removed.
+
+**Tests:** `tests/engineMode.test.cjs` pure policy ki har branch + plain predicate ke saare
+combinations; `tests/audioEngine.test.cjs` actual transpiled transport with deterministic DOM,
+media/context, timers and store doubles (Back/screen-off, controls, restore, stale async work,
+failed engine cooldown, throttle, autoplay/end/sleep). Existing node:test + TypeScript pattern.
+
+**Limits / device smoke check:** real Android Chrome me video play → Back → screen-off → unlock
+→ player reopen test karna ab bhi zaroori hai; mocks OS suspension/autoplay policy prove nahi
+karte. Native playback ke liye working `/api/stream` extraction ya downloaded audio chahiye;
+extraction unavailable ho to existing iframe fallback background guarantee nahi de sakta.
+Browser/OS tab kill aur heavily throttled background timers ko web app prevent nahi kar sakti.
+
 ## 16. TL;DR stack list
 
 ```
