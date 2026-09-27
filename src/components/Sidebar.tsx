@@ -92,7 +92,7 @@ export default function Sidebar() {
             Android app {ANDROID_APP.tag}
           </span>
           <span className="text-muted mt-1.5 block text-[11.5px] leading-4">
-            Background playback, equalizer, 8D audio and offline downloads. Free APK.
+            Background playback, equalizer, synced lyrics and offline downloads. Free APK.
           </span>
           <span className="accent-text mt-2 flex items-center gap-1 text-[11.5px] font-bold">
             Download the app

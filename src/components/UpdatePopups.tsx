@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Clock3, Copy, Download, Sparkles, X } from "lucide-react";
 import { useUi } from "@/store/ui";
 import { cx } from "@/lib/format";
-import { APP_SIZE_LABEL } from "@/lib/appRelease";
+import { ANDROID_APP, APP_SIZE_LABEL } from "@/lib/appRelease";
 
 /* ------------------------------------------------------------------ */
 /*  Content. The changelog lives here so the popup is the single       */
@@ -31,7 +31,9 @@ export const UPDATE_INFO = {
     "Listening history updates while you play, so the History tab is never stale.",
     "Song errors now skip ahead to a similar track instead of stopping playback.",
     "New guide inside Settings: “Instructions to play in background” — Brave browser first (recommended), every other browser as the backup.",
-    `The Android app is live — the free ${APP_SIZE_LABEL} APK is one tap away in the “Get the app” banner on Home (and in the sidebar).`,
+    `${ANDROID_APP.name} ${ANDROID_APP.version} is out — compact lyrics with room for wrapped text, synced lyrics that follow the current line and seek when you tap one, and download progress with a percentage next to the Like button in the player.`,
+    `Save your own equalizer presets now; your selected settings stay put when the track changes, and the equalizer opens straight from the player. Settings also got a shortcut to this website and the latest app download link.`,
+    `The Android app is live — the free ${APP_SIZE_LABEL} APK (${ANDROID_APP.tag}) is one tap away in the “Get the app” banner on Home (and in the sidebar). 8D audio is not in this build yet — it is coming soon.`,
   ],
 };
 
