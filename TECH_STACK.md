@@ -306,10 +306,40 @@ hai, wo save ho sakta hai. `src/lib/library.tsx` me single flag `DOWNLOADS_ENABL
   Pehle se offline track ho to IndexedDB se seedha save hota hai, dobara download nahi.
 
 **Chunked fetch (`fetchTrackAudio`, `src/lib/clientApi.ts`):** file **2 MB Range chunks** me sequential
-requests se aati hai (`Range: bytes=a-b` → 206 + `Content-Range`), 5xx pe retry (3 attempts). Wajah: proxy ek
-serverless function hai jiska `maxDuration = 60` har plan pe valid hai (300 Hobby pe build fail karta hai) —
-ek giant request slow link pe aadhe me kat sakti thi; chhote chunks CDN ke long-connection cutoffs se bhi bachte hain.
-Server 200 (no Range) de to whole-file bhi accept hota hai. Tests: `tests/download.test.cjs`.
+requests se aati hai (`Range: bytes=a-b` → 206 + `Content-Range`). Wajah: proxy ek serverless function hai jiska
+`maxDuration = 60` har plan pe valid hai (300 Hobby pe build fail karta hai) — ek giant request slow link pe
+aadhe me kat sakti thi; chhote chunks CDN ke long-connection cutoffs se bhi bachte hain.
+Server 200 (no Range) de to whole-file bhi accept hota hai.
+
+Update 1.6 se ye downloader **resume karne wala** hai, restart karne wala nahi:
+- **Body streaming:** har response `getReader()` se slice-by-slice padha jata hai (`arrayBuffer()` se nahi).
+  Isse do cheezein milti hain — live percentage (har ~64 kB pe) aur aadhe toote transfer ke bytes bach jaate hain.
+- **Per-chunk retry (4 attempts):** har attempt `offset()` **dobara padhta hai**, yaani retry us byte se shuru hota
+  hai jahan tak data aaya tha. Pehle `arrayBuffer()` ka throw poora download maar deta tha — mobile pe
+  "Downloading… → Download failed" ka asli reason yahi tha. Backoff: progress mila ho to 250 ms, warna 800/1600/2500 ms.
+- **Inactivity watchdog (20 s):** jo request chup ho gayi (black-hole connection) wo abort hoti hai aur wahin se
+  resume hoti hai; saare attempts chup rahein to honest "Download stalled". Iske bina progress toast hamesha ke liye
+  ghoomta rehta.
+- **Integrity guards:** `Content-Range` ka start pichhle offset se match karna chahiye (warna hole), aur total
+  mid-download badle (re-resolve ne doosra format pakad liya) to do files splice hone ke bajaye download restart.
+  Truncated file cache nahi hoti — `Download incomplete (NN%)`.
+- **Size probe (parallel, non-blocking):** JSON mode se `content_length` milta hai, jisse percentage pehle hi byte se
+  honest hai; saath hi server-side resolver warm ho jata hai.
+- **Ek aur poori koshish:** `downloadWithRetry()` — chunk-level retries khatam hone ke baad ek second pass
+  ("Connection lost — retrying…"), kyunki 503 burst / Wi-Fi→mobile handover aksar doosri baar me nikal jata hai.
+
+**Progress UI:** `src/components/DownloadButton.tsx` — ek hi component teeno jagah (TrackRow ⬇, FullPlayer ⬇,
+Downloads page "Save to device"). Download ke dauraan icon ki jagah **ring + live percentage** dikhta hai, aur
+saath me ek sticky toast (`duration: 0`) wahi % dikhata rehta hai (`useUi.updateToast`). Pehle sirf TrackRow pe
+number tha — FullPlayer/menu se download karne pe "Downloading…" ke baad kuch nahi dikhta tha.
+
+**Local mirror (`localLibrary.ts` → `downloads`):** save ka metadata device pe bhi rakha jata hai aur
+`/api/downloads` se merge hota hai; `downloadedIds` ab IndexedDB keys se bhi banta hai. Matlab DB ke bina (ya offline)
+bhi Downloads page aur ✓ sahi rehte hain — pehle save ho jaata tha aur app me kahin dikhta hi nahi tha.
+Metadata POST fail ho to bhi download cancel nahi hota.
+
+Tests: `tests/download.test.cjs` (16) + `tests/localDownloads.test.cjs` (7) + `tests/streamProxy.test.cjs` (5 —
+**asli** `/api/stream` route handler + **asli** downloader, real HTTP pe, mock googlevideo ke against).
 
 **Server side:** `/api/stream?video_id=…&play=1&download=1[&title=&artist=]` wahi bytes
 `Content-Disposition: attachment; filename="…"; filename*=UTF-8''…` ke saath deta hai (direct link / curl ke liye);
@@ -574,7 +604,8 @@ Dev-only (app shell me link nahi): `/dev/lyrics-sync` — synced-lyrics playgrou
 `Providers` (QueryClient + ThemeApplier + EngineBootstrap + PlatformBootstrap + DataSync) · `Sidebar` (+`MobileNav`) ·
 `MiniPlayer` · `FullPlayer` (queue Reorder, EQ panel, speed, sleep, video mode, lyrics panel) · `SeekBar` ·
 `LyricsView` (+`LyricsModeToggle`) · `CopyLyricsButton` · `TrackRow` · `TrackMenu` · `cards` (AlbumCard/ArtistCard) ·
-`controls` (PlayButton/Toggle) · `Modals` (AddToPlaylist + SleepTimer) · `Toasts` · `Section` · `SidifyLogo` (+`LiveEq`)
+`controls` (PlayButton/Toggle) · `DownloadButton` (progress ring + live %) · `Modals` (AddToPlaylist + SleepTimer) ·
+`Toasts` · `Section` · `SidifyLogo` (+`LiveEq`)
 
 ---
 
@@ -601,8 +632,9 @@ ESLint `9.39.4` (flat config) + `eslint-config-next/core-web-vitals` · `drizzle
    `/api/home` sirf cache key ke liye use karta hai. (Ab chaaho to `Innertube.create({ location })` se wire ho sakta hai.)
 7. **"Cast to device" aur "Car mode" buttons stub hain** — sirf toast, koi Chromecast/AirPlay/Android Auto code nahi.
 8. **Explicit filter no-op hai** — InnerTube search se reliable explicit flag nahi milta.
-9. **Download quality setting cosmetic hai** — downloads abhi gated hain; re-enable karne pe bhi `chooseFormat`
-   hamesha best audio leta hai, bitrate selection nahi.
+9. **Download quality setting cosmetic hai** — `pickAudioFormat()` hamesha best audio leta hai (aam taur pe
+   128 kbps AAC), bitrate selection nahi; setting sirf download ko *tag* karti hai.
+   **"Download on Wi-Fi only" toggle bhi abhi no-op hai** — koi network-type gate wire nahi kiya gaya.
 10. **`node:vm` security sandbox nahi hai.** Evaluate hone wala script YouTube ka player code hai (TLS se aata hai)
     aur `timeout` guard hai — par ise isolation mat samajhna. Isliye ye routes Edge pe nahi, sirf Node runtime pe chalte hain.
 11. Unused deps: `clsx`, `dotenv`. Package name abhi bhi `nextjs-postgresql-template`.
@@ -851,6 +883,48 @@ native extraction server IP pe blocked hai to playback iframe pe rahega aur Chro
 us case ke liye Settings row amber dikhata hai aur Brave/native app recommend karta hai (asli fix server-side
 extraction hai). Real Android phone pe: play → screen off → engine row “plain element” check → “Copy report”.
 
+## 15.11 Update 1.6 (27 Sept 2026) — gaana jaldi shuru + download jo poora hota hai (live %)
+
+Do shikayat thi: **(a)** play dabane pe gaana aane me time lagta tha, **(b)** download "Downloading…" dikhata tha,
+phir kuch nahi, phir "Download failed".
+
+### Playback — pehla byte jaldi
+
+1. **`src/instrumentation.ts` (naya):** `register()` instance startup pe `warmEngine()` chalata hai — InnerTube
+   session + `base.js` (jo `n` throttle token decipher karta hai) **request se pehle** boot ho jata hai. Yehi 2-5 s
+   pehle user ke pehle click ke andar jaate the, aur cold instance pe har 2 MB download chunk ke andar bhi.
+   Fire-and-forget hai (`getYT()` ka in-flight promise share hota hai), `NEXT_RUNTIME`/`NEXT_PHASE` guarded,
+   kabhi throw nahi karta. Dev log me ye dikhta hai: server "Ready" ke turant baad `[sidify] full InnerTube session…`.
+2. **Resolver prefetch (`prefetchTrack`, `audioEngine.ts`):** TrackRow pe `onPointerEnter` (desktop hover) aur
+   `onPointerDown` (phone — click se pehle) par `/api/stream?video_id=…` (JSON mode) chal jata hai. Isse click tak
+   resolver cache warm ho jata hai **aur** native/iframe ka faisla pehle ho jata hai, yaani `probeNative()` ka
+   2.5 s wait pehle gaane pe nahi lagta. Video-id pe dedupe (hover+touch+click = 1 request), max 2 in-flight,
+   downloaded tracks skip. `warmStart()` session-restore wale track ke liye yahi idle-time pe karta hai.
+3. **Gapless preload ab waste nahi hota:** pehle `preloadNextSoon()` idle deck me next track buffer karta tha, phir
+   `playNative()` hamesha *active* deck pe naya `src` set karke wo buffer phek deta tha (sirf crossfade use karta tha).
+   Ab deck pe `srcUrl`/`preloadId` bookkeeping hai: agar idle deck pe wahi track buffered hai to `active` swap ho jata
+   hai aur **koi nayi request nahi jaati** (`preload-hit` diag). Same-src re-assignment bhi skip hota hai
+   (element errored ho tab hi reload).
+4. **Preload jaldi shuru:** `readyToPreload()` — track poora buffered ho, ya <25 s bache ho **aur** 20 s buffer me ho.
+   Pehle 9 s tha, jo resolve khatam hone ke liye kaafi nahi tha. Bandwidth contest wala purana rule barkarar:
+   jab current track ke paas headroom nahi, tab preload nahi (`tests/audioEngine.test.cjs` #22 wahi pin karta hai).
+
+### Downloads — poora hone wala, dikhta hua
+
+Section 5 me detail hai. Short me: body streaming + per-chunk resume + 4 attempts + 20 s inactivity watchdog +
+range/length integrity guards + truncated-file rejection; UI me `DownloadButton` ka **ring + live percentage**
+(teeno jagah) aur sticky toast jo wahi % dikhata hai; metadata ka local mirror taaki DB ke bina bhi save dikhe.
+
+**Jo actually fix hua:** `fetchWithRetry()` sirf `fetch()` call ko retry karta tha — `res.arrayBuffer()` body ke
+dauraan tootne pe (mobile pe normal) exception seedha `downloadTrackFlow` ke catch me jaata tha aur poora download
+"Download failed" ban jaata tha. Ab bytes stream hote hain aur retry wahin se continue karta hai.
+
+**Verify:** `npm test` → 128 pass (naye: download 16, localDownloads 7, streamProxy 5, audioEngine +4).
+`tests/streamProxy.test.cjs` **asli** route handler ko real HTTP pe chalata hai (mock googlevideo ke against) —
+Range passthrough, 403→re-resolve, 503 error text, `.m4a` attachment. `npx tsc --noEmit` clean; `eslint` baseline
+se unchanged. YouTube/Google Fonts is sandbox se blocked hain, isliye real-YT end-to-end yahan nahi chal sakta —
+`next build` sirf font fetch pe ruka (dev server fallback fonts ke saath chalta hai).
+
 ## 16. TL;DR stack list
 
 ```
@@ -861,7 +935,9 @@ PostgreSQL · Drizzle ORM 0.45 · pg 8.20 · drizzle-kit
 youtubei.js 18 (InnerTube) · custom node:vm decipher evaluator · Platform.load shim override
 InnerTube clients: YTMUSIC (search) · ANDROID/TV_SIMPLY/YTMUSIC_ANDROID/MWEB/WEB (streaming)
 Web Audio API (dual-deck, 5-band biquad EQ, StereoPanner, crossfade)
-IndexedDB (offline audio) · Downloads enabled: offline cache + "Save to device" (chunked Range fetch, honest .m4a/.webm)
+IndexedDB (offline audio) · Downloads enabled: offline cache + "Save to device"
+  (resumable chunked Range fetch · live % ring · inactivity watchdog · local metadata mirror · honest .m4a/.webm)
+instrumentation.ts engine warm-up · resolver prefetch (hover/touchstart) · gapless preload deck reuse
 YouTube IFrame Player API (hidden-harbor singleton)
 Lyrics: LRCLIB (+lyrics.ovh fallback) · hand-rolled LRC parser · rAF media clock for line-synced highlighting
 Media Session API (playbackState + position state) · playback diagnostics (ring buffer + copyable report)

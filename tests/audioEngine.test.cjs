@@ -18,7 +18,7 @@ vm.runInNewContext(compile('engineMode'), { exports: policyExports });
 const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 function harness({ video = false, native = true, failVideo = false, ua = '' } = {}) {
-  const audios = [], intervals = new Map(), timeouts = new Map();
+  const audios = [], intervals = new Map(), timeouts = new Map(), fetches = [];
   let now = 100_000, timerId = 0, frame;
   function events(target = {}) {
     const listeners = new Map();
@@ -36,6 +36,8 @@ function harness({ video = false, native = true, failVideo = false, ua = '' } = 
       Object.assign(this, {
         src: '', currentTime: 0, duration: 240, paused: true, ended: false,
         readyState: 4, seekable: { length: 1 }, volume: 1, playbackRate: 1,
+        // Empty until a test says otherwise: "fully buffered" must stay a real event.
+        buffered: { length: 0, start: () => 0, end: () => 0 },
       });
       audios.push(this);
     }
@@ -109,7 +111,7 @@ function harness({ video = false, native = true, failVideo = false, ua = '' } = 
   vm.runInNewContext(engineCode, {
     exports, require: name => { assert.ok(modules[name], name); return modules[name]; },
     Audio, window, document, navigator: { userAgent: ua, maxTouchPoints: 0 }, AbortController, queueMicrotask,
-    fetch: async () => ({ ok: native }),
+    fetch: async (url) => { fetches.push(String(url)); return { ok: native }; },
     Date: class extends Date { static now() { return now; } },
     performance: { now: () => now },
     requestAnimationFrame: fn => { frame = fn; return 1; },
@@ -120,7 +122,7 @@ function harness({ video = false, native = true, failVideo = false, ua = '' } = 
   });
   exports.initEngine();
   return {
-    engine: exports, audios, yt, settings, intervals,
+    engine: exports, audios, yt, settings, intervals, fetches,
     get ctx() { return ctx; }, get state() { return state; },
     set: patch => state.set(patch),
     async visibility(visible) {
@@ -512,4 +514,89 @@ test('the next track is not preloaded the moment playback starts (no bandwidth c
   await h.engine.playIndex(0);
   assert.match(h.audios[0].src, /video-one/);
   assert.equal(h.audios[1].src, '', 'idle deck stays empty until the current track is buffered');
+});
+
+/* --------------------- speed: prefetch + gapless reuse --------------------- */
+
+/** Counts assignments to `el.src` — one per network request the element starts. */
+function watchSrc(el) {
+  let value = el.src;
+  let assigns = 0;
+  Object.defineProperty(el, 'src', {
+    get: () => value,
+    set: (v) => { assigns++; value = v; },
+    configurable: true,
+  });
+  return { get assigns() { return assigns; } };
+}
+
+test('prefetchTrack resolves ahead of the click, once per video, and never for saved tracks', async () => {
+  const h = harness();
+  h.engine.prefetchTrack(h.state.queue[0]);
+  await flush();
+  assert.deepEqual(h.fetches, ['/api/stream?video_id=video-one']);
+
+  h.engine.prefetchTrack(h.state.queue[0]); // hover + touchstart + click = one request
+  h.engine.prefetchTrack(h.state.queue[0]);
+  await flush();
+  assert.equal(h.fetches.length, 1, 'the resolver is only warmed once per video');
+
+  h.set({ downloadedIds: { two: true } });
+  h.engine.prefetchTrack(h.state.queue[1]);
+  await flush();
+  assert.equal(h.fetches.length, 1, 'a downloaded track plays from IndexedDB — nothing to resolve');
+
+  h.engine.prefetchTrack(null);
+  h.engine.prefetchTrack({ id: 'x' });
+  await flush();
+  assert.equal(h.fetches.length, 1, 'tracks without a videoId are ignored');
+});
+
+test('a warmed resolver settles the engine question, so the first press does not wait on a probe', async () => {
+  const h = harness();
+  h.engine.prefetchTrack(h.state.queue[0]);
+  await flush();
+  const before = h.fetches.length;
+  await h.engine.playIndex(0);
+  assert.equal(h.state.engineMode, 'native');
+  assert.equal(h.fetches.length, before, 'no extra /api/stream round trip before playback');
+});
+
+test('the next track starts buffering while the current one still has headroom', async () => {
+  const h = harness();
+  h.settings.gapless = true;
+  await h.engine.playIndex(0);
+  const el = h.audios[0];
+
+  // 24 s from the end but only 14 s actually buffered: still fighting for bandwidth.
+  el.currentTime = 216;
+  el.buffered = { length: 1, start: () => 0, end: () => 230 };
+  h.frame();
+  await flush();
+  assert.equal(h.audios[1].src, '', 'no preload while the current track is still filling');
+
+  // Same distance from the end, 22 s in the buffer: safe to start the next resolve.
+  el.buffered = { length: 1, start: () => 0, end: () => 238 };
+  h.frame();
+  await flush();
+  assert.match(h.audios[1].src, /video-two/, 'preloaded well before the last 9 seconds');
+});
+
+test('a preloaded next track plays from the deck that buffered it — no second request', async () => {
+  const h = harness();
+  h.settings.gapless = true;
+  await h.engine.playIndex(0);
+  const el = h.audios[0];
+  el.buffered = { length: 1, start: () => 0, end: () => 240 };
+  h.frame();
+  await flush();
+  assert.match(h.audios[1].src, /video-two/);
+
+  const idle = watchSrc(h.audios[1]);
+  await h.engine.next(false);
+  assert.equal(h.state.index, 1);
+  assert.equal(h.state.engineMode, 'native');
+  assert.equal(h.audios[1].paused, false, 'the preloaded deck is the one playing');
+  assert.equal(idle.assigns, 0, 'its buffer was reused instead of thrown away');
+  assert.equal(h.audios[0].paused, true, 'the finished deck is silent');
 });

@@ -218,6 +218,25 @@ export function resetYT(): void {
   audioCache.clear();
 }
 
+/**
+ * Boots the session before anyone asks for a song (see src/instrumentation.ts).
+ *
+ * This is the difference between a cold instance answering `/api/stream` in the time it
+ * takes to fetch the media, and answering it after also fetching and parsing YouTube's
+ * player script. Returns true when the full engine (decipher included) came up; false
+ * means playback will fall back to the embed, and the first request pays for the boot
+ * exactly like it did before.
+ */
+export async function warmEngine(): Promise<boolean> {
+  try {
+    await getYT();
+    return !isEngineDegraded();
+  } catch (err) {
+    console.warn("[sidify] engine warm-up failed:", (err as Error)?.message);
+    return false;
+  }
+}
+
 /* ------------------------------ caching ------------------------------ */
 
 interface CacheEntry<T> {
