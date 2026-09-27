@@ -773,6 +773,58 @@ karte. Native playback ke liye working `/api/stream` extraction ya downloaded au
 extraction unavailable ho to existing iframe fallback background guarantee nahi de sakta.
 Browser/OS tab kill aur heavily throttled background timers ko web app prevent nahi kar sakti.
 
+## 15.10 Update 1.5 (27 Sept 2026) — background playback on phones (plain-audio handoff + recovery + engine report)
+
+**Report:** "Back karne ke baad ya screen-off ke baad gaana pause ho jata hai; sirf Brave browser me chalta hai —
+kahi WebView se to nahi chal raha? TWA ya Flutter me browser-like app bana loon?"
+
+**Diagnosis (browser rule, app wrapper nahi):** Chromium mobile me `<audio>` background me chalta rehta hai,
+lekin `<video>` (aur YouTube **iframe embed**, jo andar video banata hai) hidden hote hi pause hota hai. Brave apni
+*Settings → Media → Background play* setting se ye override karta hai — isliye "sirf Brave" pattern bana. Sidify
+ka iframe fallback (jab `/api/stream` extraction server IP pe block ho) wahi case hai jo Chrome me rukta hai; aur
+`createMediaElementSource` wala element background me "audible" nahi rehta, isliye Web Audio graph bhi silent ho
+sakta hai — phones pe ye **bina koi AudioContext state event** hota hai, to purana "suspend hone ka wait karo"
+handoff miss ho jata tha.
+
+**Fix — `src/lib/engineMode.ts` + `src/lib/audioEngine.ts` + naya `src/lib/playbackDiag.ts`:**
+
+- `needsPlainElement({ hidden, playing, engine, ctxRunning, mobile })` — mobile par **hamesha** handoff
+  (`mobile || !ctxRunning`); desktop par graph chalta rehta hai (EQ + re-buffer gap bacha ke). Mobile detect:
+  Android/iPhone/iPad/iPod/Mobile/SamsungBrowser UA, plus iPadOS (Macintosh + `maxTouchPoints > 1`).
+- Handoff **pehle** hota hai jab tab freeze na hua ho — frozen background tab recovery chala hi nahi sakti.
+  `handoffToPlainAudio()` same URL + live position copy karta hai, decks pause + gains reset, aur plain element
+  `createMediaElementSource` se kabhi nahi judta.
+- **Hidden-pause recovery:** deck/plain/iframe ke `pause` events → `noteHiddenPause` (visible ya khud ka pause ho to
+  ignore; "plain" bina element, "deck" jab plain active — dono skip). Pure decision
+  `decideHiddenPauseRecovery({ hidden, wantedPlaying, engine, plainActive, plainPaused, attempts })` →
+  `plain-handoff | plain-resume | iframe-resume | none`, per hidden window **max 2 attempts**, user pause se koi
+  fight nahi. Attempts `playIndex` aur har `visibilitychange` pe reset.
+- **Media Session sync:** `updateMediaSessionState()` — `playbackState` (playing/paused, try/catch) + 1 Hz
+  `setPositionState({ duration, position (clamped), playbackRate })`; visibility, `isPlaying` store change aur
+  dono progress loops (native + iframe) se call. Media-key handlers ab `diagLog("mediakey", …)` bhi karte hain —
+  notification se pause ka evidence milta hai.
+- **Diagnostics (`src/lib/playbackDiag.ts`):** 90-event ring buffer (`diagLog`/`diagClear`/`diagEvents`),
+  `formatEvents`, `buildReport({ fields, list, now })`. Engine events: `visibility`, `mode`, `plain-handoff`,
+  `plain-handoff-failed`, `deck-restore`, `PAUSE-WHILE-HIDDEN`, `recover`, `recover-failed`, `mediakey`.
+  `getEngineDiag()` live status deta hai (`idle | native-plain | native-graph | embed` + `backgroundSafe`),
+  `playbackReport()` clipboard-ready report banata hai.
+- **UI:** Settings → System me naya **“Playback engine”** row (`src/components/PlaybackStatusRow.tsx`) — live
+  status + Background-safe / Pauses off-screen pill, “Copy report” button, embed case me “Fix” (background guide).
+  Guide (`UpdatePopups`) me honest note: PWA/TWA/WebView install browser rules nahi badalte; changelog
+  `Minor update 1.5`.
+
+**Tests:** `tests/engineMode.test.cjs` 13 (mobile-aware `needsPlainElement` ke saare combinations + recovery
+policy ke dono cases), `tests/audioEngine.test.cjs` 18 (4 naye: mobile screen-off par graph chalta hote hue bhi
+handoff; plain element ka OS pause do baar resume; notification pause se fight nahi; hidden iframe pause ka
+resume jab native unavailable), naya `tests/playbackDiag.test.cjs` 5 (stamp, order/clear, 90-event cap, report
+format, empty buffer). Harness me `./playbackDiag` stub aur `ua` option add hua.
+
+**Limits / device smoke check:** TWA/WebAPK wahi Chromium engine hai — screen-off rule nahi badalta; WebView
+wrapper mein to media app invisible hote hi pause hota hai (native foreground service ke bina). Agar kisi track ka
+native extraction server IP pe blocked hai to playback iframe pe rahega aur Chrome usse screen-off pe rokega —
+us case ke liye Settings row amber dikhata hai aur Brave/native app recommend karta hai (asli fix server-side
+extraction hai). Real Android phone pe: play → screen off → engine row “plain element” check → “Copy report”.
+
 ## 16. TL;DR stack list
 
 ```
@@ -786,6 +838,7 @@ Web Audio API (dual-deck, 5-band biquad EQ, StereoPanner, crossfade)
 IndexedDB (offline audio — reads live, writes gated) · Downloads currently disabled ("coming soon")
 YouTube IFrame Player API (hidden-harbor singleton)
 Lyrics: LRCLIB (+lyrics.ovh fallback) · hand-rolled LRC parser · rAF media clock for line-synced highlighting
-Media Session API · IndexedDB (offline audio) · Service Worker (hand-written) · Web App Manifest (PWA)
+Media Session API (playbackState + position state) · playback diagnostics (ring buffer + copyable report)
+IndexedDB (offline audio) · Service Worker (hand-written) · Web App Manifest (PWA)
 ESLint 9 (flat) · PostCSS 8
 ```

@@ -17,7 +17,7 @@ const policyExports = {};
 vm.runInNewContext(compile('engineMode'), { exports: policyExports });
 const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
-function harness({ video = false, native = true, failVideo = false } = {}) {
+function harness({ video = false, native = true, failVideo = false, ua = '' } = {}) {
   const audios = [], intervals = new Map(), timeouts = new Map();
   let now = 100_000, timerId = 0, frame;
   function events(target = {}) {
@@ -103,11 +103,12 @@ function harness({ video = false, native = true, failVideo = false } = {}) {
     './clientApi': { api: { pushRecent() {}, search: async () => ({ songs: [] }) } },
     './refreshBus': { emitRefresh() {} },
     './ytPlayer': { ytController: yt }, './engineMode': policyExports,
+    './playbackDiag': { diagLog() {}, buildReport: () => '' },
   };
   const exports = {};
   vm.runInNewContext(engineCode, {
     exports, require: name => { assert.ok(modules[name], name); return modules[name]; },
-    Audio, window, document, navigator: {}, AbortController, queueMicrotask,
+    Audio, window, document, navigator: { userAgent: ua, maxTouchPoints: 0 }, AbortController, queueMicrotask,
     fetch: async () => ({ ok: native }),
     Date: class extends Date { static now() { return now; } },
     performance: { now: () => now },
@@ -378,4 +379,74 @@ test('pending foreground restore cannot revive an old track after another play r
   assert.equal(plain.src, '');
   assert.equal(replacement.paused, false);
   assert.equal(h.audios[0].paused, true);
+});
+
+/* ---------- mobile background: proactive plain handoff + recovery ---------- */
+
+const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36';
+
+test('mobile screen-off hands off to the plain element even while the graph still reports running', async () => {
+  const h = harness({ ua: ANDROID_UA });
+  await h.engine.playIndex(0, { resumeMs: 30000 });
+  await h.visibility(false);
+  // Desktop would keep the Web Audio graph here ("Running graph: no needless third
+  // element"); a phone must not, because Android stops rendering graph-routed media.
+  const plain = h.audios[2];
+  assert.ok(plain);
+  assert.equal(h.ctx.sources.includes(plain), false);
+  assert.equal(plain.src, h.audios[0].src);
+  assert.equal(plain.currentTime, 30);
+  assert.equal(plain.paused, false);
+  assert.equal(h.audios[0].paused, true);
+  plain.currentTime = 34;
+  await h.visibility(true);
+  assert.equal(plain.paused, true);
+  assert.equal(h.audios[0].currentTime, 34);
+  assert.equal(h.audios[0].paused, false);
+});
+
+test('mobile: a browser-initiated pause of the plain element is resumed, twice per hidden window', async () => {
+  const h = harness({ ua: ANDROID_UA });
+  await h.engine.playIndex(0);
+  await h.visibility(false);
+  const plain = h.audios[2];
+  assert.equal(plain.paused, false);
+
+  const osPause = async () => { plain.pause(); plain.emit('pause'); await flush(); };
+  await osPause();
+  assert.equal(plain.paused, false); // recovered
+  await osPause();
+  assert.equal(plain.paused, false); // second attempt
+  await osPause();
+  assert.equal(plain.paused, true); // third: give up instead of spinning
+  assert.equal(h.state.isPlaying, true); // play intent is preserved for the next unlock
+  await h.visibility(true);
+  const attemptsReset = h.audios[3];
+  assert.equal(attemptsReset, undefined); // restore reuses the deck, no extra element
+});
+
+test('mobile: a user pause in the notification is never fought by the recovery', async () => {
+  const h = harness({ ua: ANDROID_UA });
+  await h.engine.playIndex(0);
+  await h.visibility(false);
+  const plain = h.audios[2];
+  await h.engine.togglePlay(); // lock-screen pause arrives through the media session
+  assert.equal(h.state.isPlaying, false);
+  plain.emit('pause');
+  await flush();
+  assert.equal(plain.paused, true);
+});
+
+test('hidden iframe pause is resumed when native extraction is unavailable', async () => {
+  const h = harness({ video: true, native: false });
+  await h.engine.playIndex(0);
+  h.set({ fullPlayerOpen: false });
+  await flush();
+  assert.equal(h.state.engineMode, 'iframe');
+  await h.visibility(false);
+  const before = h.yt.resumes;
+  h.iframePause();
+  await flush();
+  assert.ok(h.yt.resumes > before);
+  assert.equal(h.state.isPlaying, true); // keep the intent: Brave/Chrome may resume later
 });

@@ -8,7 +8,8 @@ import { offlineObjectUrl } from "./offlineDb";
 import { api } from "./clientApi";
 import { emitRefresh } from "./refreshBus";
 import { ytController } from "./ytPlayer";
-import { decideEngineAction, needsPlainElement } from "./engineMode";
+import { decideEngineAction, decideHiddenPauseRecovery, needsPlainElement } from "./engineMode";
+import { buildReport, diagLog } from "./playbackDiag";
 
 /* ------------------------------------------------------------------ */
 /* Sidify transport engine.                                             */
@@ -71,6 +72,20 @@ function toast(title: string, desc?: string, kind: "ok" | "info" | "warn" = "war
 
 function isIframeMode(): boolean {
   return P().engineMode === "iframe";
+}
+
+/**
+ * Phones are where the background rules bite: Android Chrome / iOS Safari stop rendering
+ * a media element that is routed through Web Audio once the page is hidden or the screen
+ * is locked, and they do it silently (no AudioContext state event), so the engine has to
+ * switch element *before* the tab is frozen. Desktop keeps the DSP graph.
+ */
+function isMobileLike(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (/Android|iPhone|iPad|iPod|Mobile|SamsungBrowser/i.test(ua)) return true;
+  // iPadOS 13+ reports itself as a Mac, but has a touch screen.
+  return /Macintosh/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1;
 }
 
 /**
@@ -137,6 +152,11 @@ function createDeck(i: number): Deck {
   el.addEventListener("error", () => {
     if (i === active && !plainAudio && !isIframeMode()) handleTrackError();
   });
+  el.addEventListener("pause", () => {
+    // Deferred on purpose: `pause()` fires synchronously, so an intentional pause
+    // (toggle, handoff) must finish updating the store first.
+    if (i === active) queueMicrotask(() => noteHiddenPause(`deck${i}`));
+  });
 
   return { el, filters, postGain, trackId: null };
 }
@@ -192,7 +212,46 @@ function shouldUsePlainAudio() {
     playing: P().isPlaying,
     engine: P().engineMode,
     ctxRunning: actx?.state === "running",
+    mobile: isMobileLike(),
   });
+}
+
+/**
+ * A pause while the tab is off-screen is the browser's decision, not the user's: log it
+ * (Settings → System → “Copy report” hands that log to the user) and try to get the audio
+ * back.
+ */
+function noteHiddenPause(source: string) {
+  if (typeof document === "undefined" || document.visibilityState !== "hidden") return;
+  if (!P().isPlaying || P().isLoading) return; // We asked for this pause (or a track is loading).
+  if (source === "plain" && !plainAudio) return; // Element already replaced by a handoff/restore.
+  if (source.startsWith("deck") && plainAudio) return; // Decks idle on purpose while plain audio plays.
+  diagLog("PAUSE-WHILE-HIDDEN", `${source} · engine=${P().engineMode ?? "?"} ctx=${actx?.state ?? "none"} plain=${plainAudio ? "yes" : "no"}`);
+  recoverFromHiddenPause(source);
+}
+
+function recoverFromHiddenPause(source: string) {
+  const s = P();
+  const decision = decideHiddenPauseRecovery({
+    hidden: document.visibilityState === "hidden",
+    wantedPlaying: s.isPlaying && !s.isLoading,
+    engine: isIframeMode() ? "iframe" : "native",
+    plainActive: !!plainAudio,
+    plainPaused: !!plainAudio?.paused,
+    attempts: hiddenPauseAttempts,
+  });
+  if (decision === "none") return;
+  hiddenPauseAttempts++;
+  diagLog("recover", `${source} → ${decision}`);
+  if (decision === "iframe-resume") {
+    ytController.resume();
+    return;
+  }
+  if (decision === "plain-resume") {
+    void plainAudio?.play().catch((err) => diagLog("recover-failed", `plain-resume · ${(err as Error)?.name}`));
+    return;
+  }
+  void handoffToPlainAudio();
 }
 
 async function handoffToPlainAudio() {
@@ -203,6 +262,7 @@ async function handoffToPlainAudio() {
   el.src = deck.el.src;
   el.currentTime = deck.el.currentTime;
   plainAudio = el;
+  diagLog("plain-handoff", `pos=${Math.round(deck.el.currentTime)}s`);
   if (crossfadeTimer) clearTimeout(crossfadeTimer);
   crossfadeTimer = null;
   fading = false;
@@ -217,11 +277,13 @@ async function handoffToPlainAudio() {
   el.addEventListener("error", () => {
     if (plainAudio === el && !isIframeMode()) handleTrackError();
   });
+  el.addEventListener("pause", () => queueMicrotask(() => noteHiddenPause("plain")));
   try {
     await el.play();
-  } catch {
+  } catch (err) {
     // A track change/stop can abort this play promise. Never stop its replacement.
     if (plainAudio !== el) return;
+    diagLog("plain-handoff-failed", `${(err as Error)?.name}`);
     P().set({ isPlaying: false, isLoading: false });
   }
 }
@@ -240,6 +302,7 @@ async function restoreNativeDeck() {
     el.pause();
     deck.el.currentTime = position;
     stopPlainAudio();
+    diagLog("deck-restore", `pos=${Math.round(position)}s`);
     P().set({ positionMs: position * 1000 });
     if (P().isPlaying) {
       try {
@@ -425,6 +488,7 @@ export async function playIndex(i: number, opts?: { resumeMs?: number }) {
     crossfadeTimer = null;
   }
   fading = false;
+  hiddenPauseAttempts = 0;
   stopPlainAudio();
   unlockEngine();
 
@@ -438,6 +502,7 @@ export async function playIndex(i: number, opts?: { resumeMs?: number }) {
 
   const mode = await chooseMode(track, seq);
   if (seq !== playSeq) return;
+  if (mode) diagLog("mode", `${mode} · ${track.videoId ?? "no-video"}`);
   if (!mode) {
     usePlayer.getState().set({ isPlaying: false, isLoading: false });
     toast("Track unavailable", track.title);
@@ -606,6 +671,7 @@ function wireYt() {
       // Offscreen iframe pauses are browser policy, not a user pause. Preserve
       // playback intent so the visibility/player-close handoff can still run.
       if (!playing && P().isPlaying && !videoWanted()) {
+        noteHiddenPause("iframe");
         void reconcileEngineMode(true);
         return;
       }
@@ -893,6 +959,8 @@ function stopAtEnd() {
  * queue forever, so a slow interval also watches the real player state.
  */
 let watchdog: ReturnType<typeof setInterval> | null = null;
+let lastSessionTick = 0;
+let hiddenPauseAttempts = 0;
 function startWatchdog() {
   if (watchdog) return;
   watchdog = setInterval(() => {
@@ -928,6 +996,10 @@ export function startLoop() {
           ...(dur ? { durationMs: dur * 1000 } : {}),
         });
       }
+      if (now - lastSessionTick > 1000) {
+        lastSessionTick = now;
+        updateMediaSessionState();
+      }
       return;
     }
 
@@ -940,6 +1012,10 @@ export function startLoop() {
     if (now - lastTick > 220) {
       lastTick = now;
       P().set({ positionMs: t * 1000, durationMs: dur ? dur * 1000 : P().durationMs });
+    }
+    if (now - lastSessionTick > 1000) {
+      lastSessionTick = now;
+      updateMediaSessionState();
     }
     if (plainAudio) return; // DSP/crossfade is unavailable on the plain element.
     const { crossfadeSecs, gapless } = S();
@@ -1160,28 +1236,161 @@ function artworkList(track: Track): MediaImage[] {
   return out;
 }
 
+function mediaSession(): (MediaSession & { setPositionState?: (state?: MediaPositionState) => void }) | null {
+  if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return null;
+  return navigator.mediaSession as MediaSession & { setPositionState?: (state?: MediaPositionState) => void };
+}
+
+/**
+ * Keep the OS session honest. Android uses `playbackState` + the position state to decide
+ * whether the notification is a *live* media session — a session that still claims
+ * "playing" while the transport is paused keeps the underlying tab awake (and the reverse
+ * makes the lock-screen controls fight the app). Called on every state change and once a
+ * second from the progress loop.
+ */
+export function updateMediaSessionState() {
+  const ms = mediaSession();
+  if (!ms) return;
+  const s = P();
+  try {
+    ms.playbackState = s.isPlaying ? "playing" : "paused";
+  } catch {
+    /* older engines expose a read-only playbackState */
+  }
+  if (typeof ms.setPositionState !== "function" || !(s.durationMs > 0) || !Number.isFinite(s.durationMs)) return;
+  const duration = s.durationMs / 1000;
+  try {
+    ms.setPositionState({
+      duration,
+      position: Math.max(0, Math.min(s.positionMs / 1000, duration)),
+      playbackRate: s.speed,
+    });
+  } catch {
+    /* a bad duration/position throws instead of clamping */
+  }
+}
+
 function updateMediaSession(track: Track) {
   if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
   if (!S().mediaControls) return;
+  const ms = mediaSession()!;
   try {
-    navigator.mediaSession.metadata = new MediaMetadata({
+    ms.metadata = new MediaMetadata({
       title: track.title,
       artist: track.artist,
       album: "Sidify",
       artwork: artworkList(track),
     });
-    navigator.mediaSession.setActionHandler("play", () => void togglePlay());
-    navigator.mediaSession.setActionHandler("pause", () => void togglePlay());
-    navigator.mediaSession.setActionHandler("nexttrack", () => void next(true));
-    navigator.mediaSession.setActionHandler("previoustrack", () => void prev());
-    navigator.mediaSession.setActionHandler("seekbackward", () => seekTo(Math.max(0, P().positionMs - 10_000)));
-    navigator.mediaSession.setActionHandler("seekforward", () => seekTo(P().positionMs + 10_000));
-    navigator.mediaSession.setActionHandler("seekto", (d) => {
+    const key = (name: string) => () => diagLog("mediakey", name);
+    ms.setActionHandler("play", () => {
+      key("play")();
+      void togglePlay();
+    });
+    ms.setActionHandler("pause", () => {
+      key("pause")();
+      void togglePlay();
+    });
+    ms.setActionHandler("nexttrack", () => {
+      key("next")();
+      void next(true);
+    });
+    ms.setActionHandler("previoustrack", () => {
+      key("prev")();
+      void prev();
+    });
+    ms.setActionHandler("seekbackward", () => seekTo(Math.max(0, P().positionMs - 10_000)));
+    ms.setActionHandler("seekforward", () => seekTo(P().positionMs + 10_000));
+    ms.setActionHandler("seekto", (d) => {
       if (d.seekTime != null) seekTo(d.seekTime * 1000);
     });
+    updateMediaSessionState();
   } catch {
     /* noop */
   }
+}
+
+/* ----------------------- diagnostics for the report ------------------- */
+
+export type EngineStatus = "idle" | "native-plain" | "native-graph" | "embed";
+
+export interface EngineDiag {
+  status: EngineStatus;
+  /** Human label for Settings. */
+  label: string;
+  /** True when screen-off playback is expected to survive in this browser. */
+  backgroundSafe: boolean;
+  engine: "native" | "iframe" | null;
+  hidden: boolean;
+  mobile: boolean;
+  ctxState: string;
+  plainActive: boolean;
+  ytState: number;
+  mediaSessionPlaying: string | null;
+}
+
+/** Live engine snapshot — used by the Settings status row and the copied report. */
+export function getEngineDiag(): EngineDiag {
+  const s = P();
+  const mobile = isMobileLike();
+  const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+  const plainActive = !!plainAudio;
+  const status: EngineStatus =
+    !s.engineMode ? "idle" : s.engineMode === "iframe" ? "embed" : plainActive ? "native-plain" : "native-graph";
+  const label =
+    status === "native-plain"
+      ? "Native audio · plain element (background-safe)"
+      : status === "native-graph"
+        ? mobile
+          ? "Native audio · Web Audio graph (hands off to plain audio when the screen goes off)"
+          : "Native audio · Web Audio graph (EQ active)"
+        : status === "embed"
+          ? "YouTube embed — Chrome pauses embeds on screen-off; Brave keeps them playing"
+          : "Idle";
+  let sessionPlaying: string | null = null;
+  try {
+    sessionPlaying = mediaSession()?.playbackState ?? null;
+  } catch {
+    sessionPlaying = null;
+  }
+  return {
+    status,
+    label,
+    backgroundSafe: status === "native-plain" || (status === "native-graph" && !mobile),
+    engine: s.engineMode,
+    hidden,
+    mobile,
+    ctxState: actx?.state ?? "none",
+    plainActive,
+    ytState: ytController.getPlayerState?.() ?? -1,
+    mediaSessionPlaying: sessionPlaying,
+  };
+}
+
+/** Clipboard-ready evidence for "it still pauses on my phone". */
+export function playbackReport(): string {
+  const s = P();
+  const d = getEngineDiag();
+  const track = currentTrack(s);
+  const nav = typeof navigator === "undefined" ? null : navigator;
+  const standalone =
+    typeof window !== "undefined" && window.matchMedia?.("(display-mode: standalone)").matches ? "yes" : "no";
+  return buildReport({
+    fields: [
+      ["engine", `${d.engine ?? "none"} (${d.status})`],
+      ["playing / loading", `${s.isPlaying} / ${s.isLoading}`],
+      ["screen", d.hidden ? "hidden (screen off / other app)" : "visible"],
+      ["audio-context", d.ctxState],
+      ["plain-element", d.plainActive ? "active" : "no"],
+      ["iframe-state", String(d.ytState)],
+      ["media-session", d.mediaSessionPlaying ?? "unsupported"],
+      ["position", `${Math.round(s.positionMs / 1000)}s of ${Math.round(s.durationMs / 1000)}s`],
+      ["video-preference", String(s.videoMode)],
+      ["track", track ? `${track.title} — ${track.artist}` : "none"],
+      ["installed (PWA)", standalone],
+      ["mobile-like UA", String(d.mobile)],
+      ["user-agent", nav?.userAgent ?? "unknown"],
+    ],
+  });
 }
 
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1212,11 +1421,15 @@ export function initEngine() {
   startLoop();
   armEngineUnlock();
   document.addEventListener("visibilitychange", () => {
+    diagLog("visibility", document.visibilityState);
+    updateMediaSessionState();
     void reconcileEngineMode(true);
     if (document.visibilityState === "hidden") {
+      hiddenPauseAttempts = 0;
       startHiddenWatch();
       saveSession();
     } else {
+      hiddenPauseAttempts = 0;
       if (hiddenWatch) clearInterval(hiddenWatch);
       hiddenWatch = null;
       if (plainAudio) void restoreNativeDeck();
@@ -1227,6 +1440,7 @@ export function initEngine() {
   useSettings.subscribe(applySettings);
   usePlayer.subscribe((state, prevState) => {
     if (state.volume !== prevState.volume || state.speed !== prevState.speed) applySettings();
+    if (state.isPlaying !== prevState.isPlaying) updateMediaSessionState();
     if (state.fullPlayerOpen !== prevState.fullPlayerOpen || state.videoMode !== prevState.videoMode) {
       void reconcileEngineMode(true);
     }
