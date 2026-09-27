@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Download, HardDrive, Trash2, X } from "lucide-react";
-import { useDownloads } from "@/lib/library";
+import { Check, Download, FileDown, HardDrive, Trash2, X } from "lucide-react";
+import { downloadTrackFlow, useDownloads } from "@/lib/library";
 import { playContext } from "@/lib/audioEngine";
 import { usePlayer } from "@/store/player";
 import { useSettings } from "@/store/settings";
@@ -40,8 +40,9 @@ export default function DownloadsPage() {
         <div>
           <h1 className="font-display text-[30px] font-extrabold tracking-tight md:text-[36px]">Downloads</h1>
           <p className="text-muted mt-1 text-[13.5px]">
-            Real offline audio stored in this browser · default quality{" "}
-            <span className="font-semibold text-[var(--text)]">{QUALITY_META[downloadQuality]?.label}</span> (change in Settings)
+            Real offline audio stored in this browser · tagged{" "}
+            <span className="font-semibold text-[var(--text)]">{QUALITY_META[downloadQuality]?.label}</span> (change in Settings) ·
+            use ⋮ → “Save to device” on any track for a file
           </p>
         </div>
         {rows.length > 0 && (
@@ -121,6 +122,17 @@ export default function DownloadsPage() {
                     </span>
                     <div className="text-muted-2 mt-1 text-[11px] tabular-nums">{formatBytes(r.sizeBytes)}</div>
                   </div>
+                  <button
+                    aria-label="Save to device"
+                    title="Save to device"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void downloadTrackFlow(t, { toDevice: true });
+                    }}
+                    className="text-muted grid h-9 w-9 place-items-center rounded-full transition-opacity hover:text-[var(--text)] md:opacity-0 md:group-hover:opacity-100"
+                  >
+                    <FileDown size={16} />
+                  </button>
                   <button
                     aria-label="Remove download"
                     onClick={(e) => {

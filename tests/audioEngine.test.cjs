@@ -450,3 +450,66 @@ test('hidden iframe pause is resumed when native extraction is unavailable', asy
   assert.ok(h.yt.resumes > before);
   assert.equal(h.state.isPlaying, true); // keep the intent: Brave/Chrome may resume later
 });
+
+test('a media error mid-track re-opens the same URL at the current position instead of skipping', async () => {
+  const h = harness();
+  await h.engine.playIndex(0);
+  const deck = h.audios[0];
+  const src = deck.src;
+  assert.match(src, /video-one/);
+  deck.currentTime = 97; deck.paused = false;
+  let loads = 0; deck.load = () => { loads++; };
+  deck.emit('error'); await flush();
+  assert.equal(h.state.index, 0, 'still the same track');
+  assert.equal(h.state.isPlaying, true);
+  assert.equal(loads, 1, 'source reloaded once');
+  assert.equal(deck.src, src);
+  assert.equal(deck.currentTime, 97, 'resumes where it stalled');
+  assert.equal(deck.paused, false);
+});
+
+test('an error before playback ever progressed still skips; recoveries are capped per track', async () => {
+  const h = harness();
+  await h.engine.playIndex(0);
+  const deck = h.audios[0];
+  deck.currentTime = 0;
+  deck.emit('error'); await flush();
+  assert.equal(h.state.index, 1, 'a track that never started is unavailable → next');
+
+  // Fresh track (same deck — decks only swap on crossfade): three mid-track
+  // recoveries, then the fourth error skips.
+  const deck2 = h.audios[0];
+  assert.match(deck2.src, /video-two/);
+  h.set({ queue: [...h.state.queue, { ...h.state.queue[0], id: 'three', videoId: 'video-three' }] });
+  for (let i = 1; i <= 3; i++) {
+    deck2.currentTime = 30 * i; deck2.paused = false;
+    deck2.emit('error'); await flush();
+    assert.equal(h.state.index, 1, `recovery #${i} keeps the track`);
+  }
+  deck2.currentTime = 120;
+  deck2.emit('error'); await flush();
+  assert.equal(h.state.index, 2, 'gives up after the cap');
+});
+
+test('the stall watchdog reloads a starved element only after it stopped moving for 12s', async () => {
+  const h = harness();
+  await h.engine.playIndex(0);
+  const deck = h.audios[0];
+  let loads = 0; deck.load = () => { loads++; };
+  deck.currentTime = 40; deck.paused = false; deck.readyState = 2; // HAVE_CURRENT_DATA: starving
+  await h.tick(2500); // records the position
+  for (let t = 0; t < 12_500; t += 2500) await h.tick(2500);
+  assert.equal(loads, 1, 'one recovery after the stall window');
+  assert.equal(deck.currentTime, 40);
+  // A healthy element (readyState 4) that simply moves is never touched.
+  deck.readyState = 4;
+  for (let t = 0; t < 20_000; t += 2500) { deck.currentTime += 2.5; await h.tick(2500); }
+  assert.equal(loads, 1);
+});
+
+test('the next track is not preloaded the moment playback starts (no bandwidth contest)', async () => {
+  const h = harness();
+  await h.engine.playIndex(0);
+  assert.match(h.audios[0].src, /video-one/);
+  assert.equal(h.audios[1].src, '', 'idle deck stays empty until the current track is buffered');
+});
