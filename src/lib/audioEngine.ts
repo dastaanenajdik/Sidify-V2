@@ -25,6 +25,11 @@ interface Deck {
   filters: BiquadFilterNode[];
   postGain: GainNode;
   trackId: string | null;
+  /** The url currently assigned to `el` — kept here so we can tell "already buffered"
+   *  from "needs a request" without depending on DOM attribute reflection. */
+  srcUrl: string | null;
+  /** Track whose audio this idle deck is buffering ahead of time (gapless preload). */
+  preloadId: string | null;
 }
 
 let actx: AudioContext | null = null;
@@ -179,7 +184,7 @@ function createDeck(i: number): Deck {
     if (i === active) queueMicrotask(() => noteHiddenPause(`deck${i}`));
   });
 
-  return { el, filters, postGain, trackId: null };
+  return { el, filters, postGain, trackId: null, srcUrl: null, preloadId: null };
 }
 
 export function applySettings() {
@@ -491,6 +496,65 @@ async function reconcileEngineMode(force = false) {
   }
 }
 
+/* ------------------------- resolver prefetch ---------------------------- */
+
+/**
+ * Warms the server-side YouTube resolver for a track the user is *about* to play.
+ *
+ * The click itself needs `/api/stream?…&play=1` to resolve a deciphered URL, and on a
+ * cold serverless instance that resolve (InnerTube session + player script) is what
+ * makes the first seconds of a song feel like forever. Asking for the JSON mode of the
+ * same route a beat earlier — on hover, on touch-start, or right after the app opens
+ * with a remembered queue — usually lands on the same warm instance, so the byte
+ * request that follows is a cache hit. It also settles the native/iframe question, so
+ * `probeNative()` no longer has to hold the first play for 2.5 s.
+ */
+const prefetched = new Set<string>();
+let prefetchInFlight = 0;
+const MAX_PREFETCH_INFLIGHT = 2;
+
+export function prefetchTrack(track: Track | null | undefined): void {
+  if (!track?.videoId || typeof window === "undefined") return;
+  if (prefetched.has(track.videoId) || prefetchInFlight >= MAX_PREFETCH_INFLIGHT) return;
+  // A downloaded track plays from IndexedDB — there is nothing to resolve.
+  if (P().downloadedIds[track.id]) return;
+  if (prefetched.size > 200) prefetched.clear();
+  prefetched.add(track.videoId);
+  prefetchInFlight++;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12_000);
+  fetch(`/api/stream?video_id=${encodeURIComponent(track.videoId)}`, { cache: "no-store", signal: ctrl.signal })
+    .then((res) => {
+      // A 200 here is exactly what probeNative() checks for: extraction works.
+      if (res.ok) {
+        nativeCapable = true;
+        nativeProbeAt = Date.now();
+      }
+    })
+    .catch(() => {
+      /* a failed prefetch proves nothing — leave the verdict to the real probe */
+    })
+    .finally(() => {
+      clearTimeout(timer);
+      prefetchInFlight--;
+    });
+}
+
+/**
+ * Warms the resolver for the track a returning user is most likely to press first (the
+ * one their session was left on). Runs when the browser is idle so it never competes
+ * with the page's own first paint.
+ */
+export function warmStart(): void {
+  if (typeof window === "undefined") return;
+  const track = currentTrack(P());
+  if (!track) return;
+  const go = () => prefetchTrack(track);
+  if (typeof requestIdleCallback === "function") requestIdleCallback(go, { timeout: 5000 });
+  else setTimeout(go, 1500);
+}
+
 /**
  * "Can this environment extract full-length audio?" is answered by probing /api/stream.
  * The probe is *allowed* to take a while (YouTube extraction is slow), but it must not
@@ -653,17 +717,31 @@ async function playNative(track: Track, i: number, seq: number, resumeMs: number
   ensureCtx();
   P().set({ engineMode: "native" });
   ytController.pause();
+
+  const url = track.videoId ? `/api/stream?video_id=${encodeURIComponent(track.videoId)}&play=1` : "";
+  // The gapless preload buffers the upcoming song on the *idle* deck. Playing it from
+  // there instead of re-setting `src` on the deck that just finished is the difference
+  // between the next track starting instantly and starting after a fresh resolve.
+  const idle = decks[1 - active];
+  if (url && idle.preloadId === track.id && idle.srcUrl === url) {
+    active = 1 - active;
+    preloadedId = null;
+    diagLog("preload-hit", track.id);
+  }
+
   const to = decks[active];
   const from = decks[1 - active];
+  to.preloadId = null;
+  from.preloadId = null;
   from.el.pause();
   from.postGain.gain.value = 0;
   from.trackId = null;
   fading = false;
 
-  let url: string;
+  let src: string;
   const local = await offlineObjectUrl(track.id);
-  if (local) url = local;
-  else if (track.videoId) url = `/api/stream?video_id=${track.videoId}&play=1`;
+  if (local) src = local;
+  else if (url) src = url;
   else {
     if (seq === playSeq) {
       usePlayer.getState().set({ isPlaying: false, isLoading: false });
@@ -675,7 +753,12 @@ async function playNative(track: Track, i: number, seq: number, resumeMs: number
   if (seq !== playSeq) return;
   stopPlainAudio();
   to.el.pause();
-  to.el.src = url;
+  // Re-assigning an identical src throws the buffer away and starts a cold request —
+  // but an element that already errored has to be reloaded to leave that state.
+  if (to.srcUrl !== src || to.el.error) {
+    to.el.src = src;
+    to.srcUrl = src;
+  }
   to.el.playbackRate = P().speed;
   to.trackId = track.id;
   to.postGain.gain.value = 1;
@@ -755,6 +838,7 @@ function stopDecks() {
     d.el.pause();
     d.postGain.gain.value = 0;
     d.trackId = null;
+    d.preloadId = null;
   }
   fading = false;
 }
@@ -1131,11 +1215,28 @@ export function startLoop() {
       deck.el.playbackRate > 0
     ) {
       void startCrossfade(Math.min(crossfadeSecs, Math.max(1.2, remaining)));
-    } else if ((gapless || crossfadeSecs > 0) && !preloadedId && (remaining < 9 || fullyBuffered(el))) {
+    } else if ((gapless || crossfadeSecs > 0) && !preloadedId && readyToPreload(el, remaining)) {
       void preloadNextSoon();
     }
   };
   rafId = requestAnimationFrame(loop);
+}
+
+/**
+ * Buffering the next song competes with the one that is playing, so it only starts once
+ * the current track has real headroom: fully buffered, or far enough from the end with
+ * plenty already in the buffer. (9 s of warning was too tight — the next resolve had to
+ * finish inside the gap, which is where the between-songs pause came from.)
+ */
+function readyToPreload(el: HTMLMediaElement, remaining: number): boolean {
+  if (fullyBuffered(el)) return true;
+  if (!(remaining < 25) || !Number.isFinite(remaining)) return false;
+  const b = el.buffered;
+  if (!b || !b.length) return false;
+  for (let i = 0; i < b.length; i++) {
+    if (b.start(i) <= el.currentTime && b.end(i) - el.currentTime >= 20) return true;
+  }
+  return false;
 }
 
 async function preloadNextSoon() {
@@ -1150,7 +1251,9 @@ async function preloadNextSoon() {
   try {
     const idle = decks[1 - active];
     if (idle && !idle.trackId) {
-      idle.el.src = `/api/stream?video_id=${track.videoId}&play=1`;
+      idle.srcUrl = `/api/stream?video_id=${encodeURIComponent(track.videoId)}&play=1`;
+      idle.el.src = idle.srcUrl;
+      idle.preloadId = track.id;
       idle.el.load();
     }
   } catch {
@@ -1173,9 +1276,14 @@ async function startCrossfade(secs: number) {
   usePlayer.getState().set({ index: ni, positionMs: 0, durationMs: track.durationMs, isPlaying: true });
 
   try {
-    if (to.trackId !== track.id || !to.el.src) {
-      to.el.src = `/api/stream?video_id=${track.videoId}&play=1`;
+    // The idle deck usually already buffered this exact song (gapless preload) — keep
+    // those bytes instead of starting a fresh request in the middle of the fade.
+    const url = `/api/stream?video_id=${encodeURIComponent(track.videoId)}&play=1`;
+    if (to.srcUrl !== url || to.el.error) {
+      to.el.src = url;
+      to.srcUrl = url;
     }
+    to.preloadId = null;
     to.el.playbackRate = P().speed;
     to.trackId = track.id;
     await actx!.resume();
@@ -1202,6 +1310,7 @@ async function startCrossfade(secs: number) {
     from.el.pause();
     from.el.removeAttribute("src");
     from.el.load();
+    from.srcUrl = null;
     from.trackId = null;
     from.postGain.gain.value = 0;
     fading = false;

@@ -1,12 +1,14 @@
 "use client";
 
-import { Check, Download, Heart, Loader2, ListMusic, MoreHorizontal } from "lucide-react";
+import { Download, Heart, ListMusic, MoreHorizontal } from "lucide-react";
 import type { Track } from "@/lib/types";
 import { cx, formatTime, upscaleArtwork } from "@/lib/format";
+import { useRef } from "react";
 import { usePlayer, currentTrack } from "@/store/player";
 import { useUi } from "@/store/ui";
-import { playContext } from "@/lib/audioEngine";
-import { useLiked, downloadTrackFlow } from "@/lib/library";
+import { playContext, prefetchTrack } from "@/lib/audioEngine";
+import { useLiked } from "@/lib/library";
+import DownloadButton from "./DownloadButton";
 import { LiveEq } from "./SidifyLogo";
 
 export default function TrackRow({
@@ -29,8 +31,9 @@ export default function TrackRow({
   const isPlaying = usePlayer((s) => s.isPlaying);
   const liked = usePlayer((s) => !!s.likedIds[track.id]);
   const downloaded = usePlayer((s) => !!s.downloadedIds[track.id]);
-  const progress = useUi((s) => s.downloadProgress[track.id]);
   const { toggle } = useLiked();
+  /** Hover prefetch is delayed, so sweeping the mouse down a list resolves nothing. */
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   if (!track) return null;
 
@@ -44,6 +47,18 @@ export default function TrackRow({
     <div
       onClick={() => playContext(tracks, index, contextLabel)}
       onContextMenu={openMenu}
+      // A beat before the click: start the server-side resolve so playback doesn't wait
+      // for it. Hover only counts after the pointer has settled on the row; a press
+      // (mouse or touch) prefetches straight away.
+      onPointerEnter={(e) => {
+        if (e.pointerType !== "mouse") return;
+        hoverTimer.current = setTimeout(() => prefetchTrack(track), 220);
+      }}
+      onPointerLeave={() => {
+        if (hoverTimer.current) clearTimeout(hoverTimer.current);
+        hoverTimer.current = null;
+      }}
+      onPointerDown={() => prefetchTrack(track)}
       className={cx(
         "hover-panel group grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xl px-3 py-2",
         isCurrent && "bg-[var(--panel-strong)]"
@@ -106,32 +121,11 @@ export default function TrackRow({
         >
           <Heart size={16} fill={liked ? "currentColor" : "none"} />
         </button>
-        <button
-          aria-label="Download"
-          onClick={(e) => {
-            e.stopPropagation();
-            void downloadTrackFlow(track);
-          }}
-          className={cx(
-            "relative grid h-8 w-8 place-items-center rounded-full transition-all",
-            downloaded
-              ? "accent-text"
-              : "text-muted hover:text-[var(--text)] md:opacity-0 md:group-hover:opacity-100",
-            progress != null && "opacity-100"
-          )}
-        >
-          {progress != null ? (
-            progress > 97 ? (
-              <Loader2 size={15} className="animate-spin" />
-            ) : (
-              <span className="text-[9px] font-bold tabular-nums">{progress}</span>
-            )
-          ) : downloaded ? (
-            <Check size={15} />
-          ) : (
-            <Download size={15} />
-          )}
-        </button>
+        <DownloadButton
+          track={track}
+          size={15}
+          className="h-8 w-8 md:opacity-0 md:group-hover:opacity-100"
+        />
         <span className="text-muted-2 hidden w-10 text-right text-[12.5px] tabular-nums sm:inline">
           {formatTime(track.durationMs)}
         </span>

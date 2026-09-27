@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, Reorder, motion } from "framer-motion";
 import {
   ChevronDown,
-  Download,
   FileText,
   Gauge,
   Loader2,
@@ -32,9 +31,10 @@ import { useUi } from "@/store/ui";
 import { useSettings, EQ_PRESETS, EQ_BANDS } from "@/store/settings";
 import { next, prev, seekTo, setSpeed, togglePlay, moveInQueue, removeFromQueue, setQueue, playIndex, applySettings, setVideoMode } from "@/lib/audioEngine";
 import { ytController } from "@/lib/ytPlayer";
-import { useLiked, downloadTrackFlow } from "@/lib/library";
+import { useLiked } from "@/lib/library";
 import { cx, formatTime, upscaleArtwork } from "@/lib/format";
 import type { Track } from "@/lib/types";
+import DownloadButton from "./DownloadButton";
 import SeekBar from "./SeekBar";
 import LyricsView, { LyricsModeToggle, lyricsAreSynced, type LyricsMode } from "./LyricsView";
 import { PlayButton, Toggle } from "./controls";
@@ -176,13 +176,7 @@ function Shell({ track }: { track: Track }) {
                 >
                   <Heart size={21} fill={liked ? "currentColor" : "none"} />
                 </button>
-                <button
-                  aria-label="Download"
-                  onClick={() => void downloadTrackFlow(track)}
-                  className={cx("grid h-10 w-10 place-items-center rounded-full", downloaded ? "accent-text" : "text-muted hover:text-[var(--text)]")}
-                >
-                  <Download size={19} />
-                </button>
+                <DownloadButton track={track} size={19} className="h-10 w-10" />
               </div>
             </div>
 

@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Download, FileDown, HardDrive, Trash2, X } from "lucide-react";
-import { downloadTrackFlow, useDownloads } from "@/lib/library";
+import { Check, Download, HardDrive, Trash2, X } from "lucide-react";
+import { useDownloads } from "@/lib/library";
 import { playContext } from "@/lib/audioEngine";
 import { usePlayer } from "@/store/player";
 import { useSettings } from "@/store/settings";
 import { cx, formatBytes, formatTime, upscaleArtwork } from "@/lib/format";
+import DownloadButton from "@/components/DownloadButton";
 import { LiveEq } from "@/components/SidifyLogo";
 import { currentTrack } from "@/store/player";
 
@@ -122,17 +123,12 @@ export default function DownloadsPage() {
                     </span>
                     <div className="text-muted-2 mt-1 text-[11px] tabular-nums">{formatBytes(r.sizeBytes)}</div>
                   </div>
-                  <button
-                    aria-label="Save to device"
-                    title="Save to device"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void downloadTrackFlow(t, { toDevice: true });
-                    }}
-                    className="text-muted grid h-9 w-9 place-items-center rounded-full transition-opacity hover:text-[var(--text)] md:opacity-0 md:group-hover:opacity-100"
-                  >
-                    <FileDown size={16} />
-                  </button>
+                  <DownloadButton
+                    track={t}
+                    size={16}
+                    toDevice
+                    className="h-9 w-9 md:opacity-0 md:group-hover:opacity-100"
+                  />
                   <button
                     aria-label="Remove download"
                     onClick={(e) => {

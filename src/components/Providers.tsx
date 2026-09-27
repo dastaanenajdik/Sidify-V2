@@ -4,7 +4,7 @@ import { ReactNode, useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
-import { initEngine, restoreSession, togglePlay, next, prev, applySettings } from "@/lib/audioEngine";
+import { initEngine, restoreSession, togglePlay, next, prev, applySettings, warmStart } from "@/lib/audioEngine";
 import { useLiked, useDownloads, useBlocked } from "@/lib/library";
 import MiniPlayer from "./MiniPlayer";
 import FullPlayer from "./FullPlayer";
@@ -111,6 +111,8 @@ function EngineBootstrap() {
     initEngine();
     restoreSession();
     applySettings();
+    // Resolve the remembered track ahead of time so the first press starts at once.
+    warmStart();
 
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
