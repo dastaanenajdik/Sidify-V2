@@ -48,12 +48,22 @@ URL decipher nahi hota aur streaming 403 deta hai. Isliye session banane se **pe
 ```ts
 Platform.load({
   ...Platform.shim,
-  eval: (data, env) => vm.runInNewContext(data.output, env, { timeout: 10_000 }),
+  eval: (data, env) => evaluatePlayerScript(data.output, env),   // src/lib/engine.ts
 });
+// evaluatePlayerScript = vm.runInNewContext(`(function () {\n${output}\n})()`, sandbox, { timeout: 10_000 })
 ```
 
-`data.output` YouTube ke player script se nikla hua IIFE hai jo `{ sig, n }` return karta hai — `vm` ka
-completion value wahi hai jo `Player.decipher()` aage padhta hai. `timeout: 10s` runaway script se bachata hai.
+**Kyun IIFE wrapper zaroori hai (stutter bug ka asli root cause tha):** youtubei.js v14+ ka `data.output`
+ek **function body** hai — uska aakhri statement `return process(n, sp, sig)` hota hai, aur official docs ka
+evaluator literally `new Function(data.output)()` hai. Pehle hum `vm.runInNewContext(data.output)` chala rahe the,
+jo code ko *Script* ki tarah compile karta hai → top-level `return` = `SyntaxError: Illegal return statement`
+→ **har decipher fail**. Upar se `resolveViaClient` `format.url` milte hi decipher skip kar deta tha, to
+googlevideo URL ka `n` throttle-token kabhi transform hi nahi hota tha — aisi URL ko CDN trickle speed pe
+serve karta hai, aur gaana kuch second baad buffer khatam hone pe kat-kat ke chalta tha. Ab **har format**
+`format.decipher(player)` se guzarta hai (raw URL sirf degraded/no-player session me). Sandbox me `URL`,
+`TextEncoder`, `atob` jaise web globals bhi diye gaye hain (extractor inhe host-provided maanta hai).
+Regression test: `tests/engine.test.cjs` real youtubei.js extractor + `Player.decipher` chala kar check karta hai
+ki `n` transform hota hai. `timeout: 10s` runaway script se bachata hai.
 (⚠️ `node:vm` ek *stability* boundary hai, security sandbox nahi — isliye ye routes Node runtime pe hi chalte hain.)
 
 **`youtubei.js` LAZY import hota hai (`await import()`), static nahi** — ye zaroori hai:
@@ -170,14 +180,12 @@ hi nahi hota; WEB progressively strict hai.
 
 Har client pe:
 1. `playability_status.status` check (`OK` ke alawa → skip; `LOGIN_REQUIRED`/age-restricted → null)
-2. `info.chooseFormat({ type: 'audio', quality: 'best' })` — spec path. Default `format: 'mp4'` ki wajah se
-   ye **AAC/m4a** chunta hai, jo `<audio>` + Web Audio ke liye sabse compatible container hai.
-3. Agar `chooseFormat` throw kare (koi matching format nahi) → manual fallback:
-   `streaming_data.formats + adaptive_formats` me se audio-only (`has_audio && !has_video`),
-   **non-OTF pehle** (on-the-fly formats ko scrub karne ke liye explicit range juggling chahiye),
-   phir highest bitrate.
-4. `format.url` pehle se deciphered hota hai zyada-tar clients pe; na ho to
-   `await format.decipher(yt.session.player)` — **yahin custom `node:vm` evaluator kaam aata hai**.
+2. `pickAudioFormat()` → `rankAudioFormat()` se ranking: **audio-only** (kabhi muxed video file nahi) >
+   **non-OTF** > original language (dub/DRC variant nahi) > **AAC/mp4** (Safari-compatible) > bitrate.
+   `chooseFormat()` sirf fallback hai (unexpected streaming-data shape ke liye).
+3. `formatToUrl()` — **har format** `await format.decipher(yt.session.player)` se guzarta hai (pre-signed
+   ANDROID/TV URLs bhi), kyunki `n` throttle-token transform, signature cipher aur `cver`/`pot` yahin lagte hain.
+   Raw `format.url` sirf tab jab player hi na ho (degraded session) ya decipher throw kare.
 
 Sab clients fail ho jayein aur engine degraded mode me na ho → `resetYT()` se session rebuild karke
 fast clients dobara try (stale visitor-data / rotated player script recovery). Degraded mode me ye skip
@@ -186,14 +194,18 @@ hota hai (player hi nahi hai, rebuild se kuch nahi hoga) — client seedha IFram
 ### 4.2 `/api/stream` — proxy (do modes ek hi endpoint pe)
 
 ```
-GET /api/stream?video_id={id}          → JSON metadata {title, artist, thumbnail, duration, audio_url}
-GET /api/stream?video_id={id}&play=1   → actual audio BYTES (proxied)
+GET /api/stream?video_id={id}                      → JSON metadata {title, artist, thumbnail, duration, mime_type, content_length, audio_url, download_url}
+GET /api/stream?video_id={id}&play=1               → actual audio BYTES (proxied)
+GET /api/stream?video_id={id}&play=1&download=1    → wahi bytes, `Content-Disposition: attachment` + asli file name
 ```
 Proxy kyun? YouTube ke `googlevideo.com` URLs **CORS + IP-bound** hote hain. Server unhe fetch karke
 same-origin pe re-serve karta hai, **`Range` header passthrough** ke saath (seeking/scrubbing ke liye zaroori),
 aur `content-type/length/range/accept-ranges` copy karta hai (default format ke `mime_type`, warna `audio/mp4`,
-plus `cache-control: no-store`). Upstream `403/410` (URL expire) → `resolveAudio(id, skipCache=true)` se
-re-resolve + retry.
+plus `cache-control: no-store`). Upstream fetch `accept-encoding: identity` bhejta hai (media bytes as-is) aur
+`signal: req.signal` — browser connection chhode (track change/seek) to upstream transfer bhi cancel.
+Upstream `403/410` (URL expire / doosri instance ki IP) **ya network failure** → `resolveAudio(id, skipCache=true)`
+se re-resolve + retry. Fallback `content-length` (resolver ka size) sirf **200** response pe lagta hai — 206 pe
+galat length browser ko stream drop karwa deti hai.
 
 Range absent ho to jaan-boojh kar `bytes=0-` **nahi** bheja jata: full `200` response asli `Content-Length`
 lata hai, aur browser usi se seek-bar ke liye `duration` nikalta hai.
@@ -224,7 +236,14 @@ HTMLAudioElement (Deck 1) ─┘        │
 
 Features:
 - **Dual-deck crossfade** (0–12 s) — `linearRampToValueAtTime` se dono decks ke gains opposite ramp
-- **Gapless playback** — remaining < 9 s pe next track idle deck me preload (`el.load()`)
+- **Gapless playback** — next track idle deck me preload (`el.load()`) **sirf** jab current track pura buffer ho
+  chuka ho (`buffered.end ≥ duration−1`) ya remaining < 9 s ho — track start pe eager preload hata diya, kyunki
+  doosra download bajte gaane se hi bandwidth chheenta tha (slow mobile link pe shuru ke 30–40 s underrun)
+- **Stream recovery (mid-track)** — `recoverStream()`: deck/plain element pe `error` **ya** 12 s tak position frozen +
+  `readyState < HAVE_FUTURE_DATA` (stall watchdog, 2.5 s interval) → wahi URL dobara set, `currentTime` restore,
+  `play()` — yaani nayi Range request usi jagah se. Max 3 per track; `currentTime ≤ 0.5` (track kabhi chala hi nahi)
+  ya cap ke baad hi `handleTrackError()` → skip. Pehle har mid-track media error pe seedha agla gaana lag jata tha.
+  `AudioContext({ latencyHint: "playback" })` — bada output buffer, phone pe scheduling hiccups se dropouts nahi.
 - **5-band EQ** presets: Flat / Bass Boost / Rock / Treble / Vocal / Custom — `setTargetAtTime` se smooth
 - **Volume normalization**, **balance/pan**, **playback speed 0.5×–2×** (`el.playbackRate`)
 - Progress loop: `requestAnimationFrame` + ~220 ms throttle → Zustand (`positionMs`, `durationMs`)
@@ -271,26 +290,33 @@ Probe result **5 min cache**, 24 s abort timeout. `playSeq` counter se stale asy
 
 ---
 
-## 5. Downloads / Offline — ⏸ temporarily disabled ("Coming Soon")
+## 5. Downloads / Offline — ✅ enabled (same resolver as playback)
 
-Downloads abhi **gate** kar diye gaye hain. `src/lib/library.tsx` me ek single flag hai:
+Downloads usi `resolveAudio()` + `/api/stream?play=1` proxy se chalte hain jisse gaana bajta hai — jo bajta
+hai, wo save ho sakta hai. `src/lib/library.tsx` me single flag `DOWNLOADS_ENABLED = true`, aur
+`downloadTrackFlow(track, { silent?, toDevice? })` chaaron affordances ka **single funnel** hai.
 
-```ts
-export const DOWNLOADS_ENABLED = false;   // flip to true to restore
-```
+**Do destinations, ek fetch:**
+- **Download offline** (TrackRow ⬇ button, FullPlayer ⬇, ⋮ menu, auto-download-on-like) → `downloadTrack()` →
+  IndexedDB `sidify-offline/audio` + `POST /api/downloads` (metadata). Track phir `offlineObjectUrl()` se native deck
+  pe network ke bina bajta hai.
+- **Save to device** (⋮ menu → "Save to device", Downloads page ka FileDown button) → wahi blob
+  `saveBlobToDevice()` se browser ke download manager ko — file name `Title - Artist.m4a`
+  (`src/lib/downloadName.ts`; extension asli container se: AAC/mp4 → `.m4a`, opus → `.webm`, kabhi fake `.mp3` nahi).
+  Pehle se offline track ho to IndexedDB se seedha save hota hai, dobara download nahi.
 
-`downloadTrackFlow()` chaaron download affordances ka **single funnel** hai — `TrackRow` (track list),
-`TrackMenu` (context menu), `FullPlayer` (player controls), aur auto-download-on-like. Gate isi function me
-lagaya gaya hai, isliye **koi UI file, icon ya layout touch nahi hua** — click pe sirf toast aata hai:
+**Chunked fetch (`fetchTrackAudio`, `src/lib/clientApi.ts`):** file **2 MB Range chunks** me sequential
+requests se aati hai (`Range: bytes=a-b` → 206 + `Content-Range`), 5xx pe retry (3 attempts). Wajah: proxy ek
+serverless function hai jiska `maxDuration = 60` har plan pe valid hai (300 Hobby pe build fail karta hai) —
+ek giant request slow link pe aadhe me kat sakti thi; chhote chunks CDN ke long-connection cutoffs se bhi bachte hain.
+Server 200 (no Range) de to whole-file bhi accept hota hai. Tests: `tests/download.test.cjs`.
 
-> **"Download feature is coming soon! 🚀"**
+**Server side:** `/api/stream?video_id=…&play=1&download=1[&title=&artist=]` wahi bytes
+`Content-Disposition: attachment; filename="…"; filename*=UTF-8''…` ke saath deta hai (direct link / curl ke liye);
+JSON mode ab `mime_type`, `content_length`, `download_url` bhi lautata hai.
 
-- Auto-download-on-like `{ silent: true }` ke saath call hota hai, taaki har like pe toast spam na ho.
-- Heavy IndexedDB blob-streaming path ab execute hi nahi hota (dead-but-intact — flag flip karte hi wapas).
-- Jo tracks pehle se downloaded hain unka **offline playback abhi bhi chalta hai**: `offlineDb.ts` ke reads
-  aur `audioEngine.chooseMode()` ka `downloadedIds` → `offlineObjectUrl()` → native deck path untouched hai.
-- Downloads page pe purane rows ki delete/clear bhi kaam karta hai (`removeDownloadEverywhere`, `clearAllDownloads`).
-- `/api/downloads` GET/DELETE intact hai; POST ab client se call hi nahi hota.
+**Quality label:** Settings ka "Download quality" sirf **tag** hai — file exactly waisi save hoti hai jaisi stream
+hoti hai (best AAC, aam taur pe 128 kbps). Koi transcode nahi.
 
 ## 6. Lyrics — static + synced (LRC)
 
@@ -835,7 +861,7 @@ PostgreSQL · Drizzle ORM 0.45 · pg 8.20 · drizzle-kit
 youtubei.js 18 (InnerTube) · custom node:vm decipher evaluator · Platform.load shim override
 InnerTube clients: YTMUSIC (search) · ANDROID/TV_SIMPLY/YTMUSIC_ANDROID/MWEB/WEB (streaming)
 Web Audio API (dual-deck, 5-band biquad EQ, StereoPanner, crossfade)
-IndexedDB (offline audio — reads live, writes gated) · Downloads currently disabled ("coming soon")
+IndexedDB (offline audio) · Downloads enabled: offline cache + "Save to device" (chunked Range fetch, honest .m4a/.webm)
 YouTube IFrame Player API (hidden-harbor singleton)
 Lyrics: LRCLIB (+lyrics.ovh fallback) · hand-rolled LRC parser · rAF media clock for line-synced highlighting
 Media Session API (playbackState + position state) · playback diagnostics (ring buffer + copyable report)

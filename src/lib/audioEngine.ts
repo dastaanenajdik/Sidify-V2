@@ -54,6 +54,13 @@ let modeRecheck = false;
 // silences even an otherwise-playing media element connected to it.
 let plainAudio: HTMLAudioElement | null = null;
 let restoringPlain: HTMLAudioElement | null = null;
+/** Mid-track stream recoveries for the current track (reset on every new play request). */
+let streamRecoveries = 0;
+let streamRecovering = false;
+let stallPos = -1;
+let stallSince = 0;
+const MAX_STREAM_RECOVERIES = 3;
+const STALL_MS = 12_000;
 let hiddenWatch: ReturnType<typeof setInterval> | null = null;
 const recentRecorded = new Map<string, number>();
 const playHistory: number[] = [];
@@ -116,7 +123,11 @@ export function armEngineUnlock() {
 
 function ensureCtx() {
   if (actx || typeof window === "undefined") return;
-  actx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  // "playback" asks for a larger output buffer: music does not need interactive
+  // latency, and the bigger buffer rides out scheduling hiccups on phones without
+  // audible drop-outs.
+  actx = new Ctx({ latencyHint: "playback" });
   master = actx.createGain();
   panner = actx.createStereoPanner();
   master.connect(panner);
@@ -150,7 +161,17 @@ function createDeck(i: number): Deck {
     if (i === active && !plainAudio && !fading && !isIframeMode()) void handleEnded();
   });
   el.addEventListener("error", () => {
-    if (i === active && !plainAudio && !isIframeMode()) handleTrackError();
+    if (i !== active || plainAudio || isIframeMode()) return;
+    void recoverStream(el, `deck-error:${el.error?.code ?? "?"}`).then((ok) => {
+      if (!ok) handleTrackError();
+    });
+  });
+  el.addEventListener("stalled", () => {
+    // Only worth a log line when the element is actually starving (readyState below
+    // HAVE_FUTURE_DATA); browsers also fire `stalled` when they simply stop reading ahead.
+    if (i === active && !plainAudio && !isIframeMode() && P().isPlaying && el.readyState < 3) {
+      diagLog("stalled", `deck${i} pos=${Math.round(el.currentTime)}s ready=${el.readyState}`);
+    }
   });
   el.addEventListener("pause", () => {
     // Deferred on purpose: `pause()` fires synchronously, so an intentional pause
@@ -190,6 +211,77 @@ function ramp(node: AudioParam, to: number, secs: number) {
   node.linearRampToValueAtTime(to, now + Math.max(0.05, secs));
 }
 
+/* ------------------------- stream recovery ---------------------------- */
+
+/** True when the element has already buffered right up to the end of the file. */
+function fullyBuffered(el: HTMLMediaElement): boolean {
+  const b = el.buffered;
+  const dur = el.duration;
+  if (!b || !b.length || !dur || !isFinite(dur)) return false;
+  return b.end(b.length - 1) >= dur - 1;
+}
+
+/**
+ * A media error or a long stall in the *middle* of a track is almost never the track's
+ * fault: the CDN closed a long-lived connection, the proxy instance was recycled, or the
+ * network blipped. Skipping to the next song for that (what used to happen) is what
+ * made playback feel like it "keeps cutting out". Instead, re-open the same URL at the
+ * current position — a fresh Range request — up to a few times per track. Only a track
+ * that never got going, or keeps dying, is treated as unavailable.
+ */
+async function recoverStream(el: HTMLAudioElement, reason: string): Promise<boolean> {
+  const s = P();
+  if (!s.isPlaying || s.isLoading || streamRecovering) return false;
+  if (!(el.currentTime > 0.5) || !el.src) return false;
+  if (streamRecoveries >= MAX_STREAM_RECOVERIES) return false;
+  streamRecoveries++;
+  streamRecovering = true;
+  const seq = playSeq;
+  const position = el.currentTime;
+  const src = el.src;
+  diagLog("stream-recover", `${reason} · #${streamRecoveries} · pos=${Math.round(position)}s`);
+  try {
+    el.pause();
+    el.src = src; // same URL, new request — the browser resumes with a Range from `position`
+    el.load();
+    el.currentTime = position;
+    if (seq !== playSeq) return true; // a newer play request took over; nothing to skip
+    await el.play();
+    stallPos = -1;
+    return true;
+  } catch (err) {
+    if (seq !== playSeq) return true;
+    // A background handoff may have taken the track over while play() was pending.
+    if (plainAudio && plainAudio !== el && !plainAudio.paused) return true;
+    diagLog("stream-recover-failed", `${(err as Error)?.name ?? err}`);
+    return false;
+  } finally {
+    streamRecovering = false;
+  }
+}
+
+/** Called from the slow watchdog: playing, no future data, position frozen for a while. */
+function checkStall() {
+  if (isIframeMode() || !actx) return;
+  const el = nativeElement();
+  const deck = decks[active];
+  if (!el || !deck?.trackId || el.paused || el.ended) {
+    stallPos = -1;
+    return;
+  }
+  const now = Date.now();
+  if (el.currentTime !== stallPos) {
+    stallPos = el.currentTime;
+    stallSince = now;
+    return;
+  }
+  // readyState < HAVE_FUTURE_DATA: the element itself says it is starved.
+  if (el.readyState < 3 && now - stallSince > STALL_MS) {
+    stallSince = now;
+    void recoverStream(el, `stall ready=${el.readyState}`);
+  }
+}
+
 /* ---------------------- background native audio ----------------------- */
 
 function nativeElement(): HTMLAudioElement | undefined {
@@ -224,6 +316,7 @@ function shouldUsePlainAudio() {
 function noteHiddenPause(source: string) {
   if (typeof document === "undefined" || document.visibilityState !== "hidden") return;
   if (!P().isPlaying || P().isLoading) return; // We asked for this pause (or a track is loading).
+  if (streamRecovering) return; // A stream recovery pauses/reloads the element on purpose.
   if (source === "plain" && !plainAudio) return; // Element already replaced by a handoff/restore.
   if (source.startsWith("deck") && plainAudio) return; // Decks idle on purpose while plain audio plays.
   diagLog("PAUSE-WHILE-HIDDEN", `${source} · engine=${P().engineMode ?? "?"} ctx=${actx?.state ?? "none"} plain=${plainAudio ? "yes" : "no"}`);
@@ -275,7 +368,10 @@ async function handoffToPlainAudio() {
     if (plainAudio === el && !isIframeMode()) void handleEnded();
   });
   el.addEventListener("error", () => {
-    if (plainAudio === el && !isIframeMode()) handleTrackError();
+    if (plainAudio !== el || isIframeMode()) return;
+    void recoverStream(el, `plain-error:${el.error?.code ?? "?"}`).then((ok) => {
+      if (!ok && plainAudio === el) handleTrackError();
+    });
   });
   el.addEventListener("pause", () => queueMicrotask(() => noteHiddenPause("plain")));
   try {
@@ -489,6 +585,8 @@ export async function playIndex(i: number, opts?: { resumeMs?: number }) {
   }
   fading = false;
   hiddenPauseAttempts = 0;
+  streamRecoveries = 0;
+  stallPos = -1;
   stopPlainAudio();
   unlockEngine();
 
@@ -618,7 +716,9 @@ async function playNative(track: Track, i: number, seq: number, resumeMs: number
   P().set({ isLoading: false });
   updateMediaSession(track);
   recordRecent(track);
-  preloadNextSoon();
+  // The next track is preloaded from the progress loop once this one is fully buffered
+  // (or in its last seconds) — never right away, where the second download would
+  // compete with the song that is playing for the same bandwidth.
 }
 
 /**
@@ -968,6 +1068,7 @@ function startWatchdog() {
     const s = P();
     if (!s.isPlaying || s.isLoading || fading || !s.queue.length || endingBusy) return;
     if (Date.now() - endedAt < 2000) return;
+    checkStall();
     if (s.sleepMode === "eot") return;
     if (isIframeMode()) {
       if (ytController.getPlayerState() === 0) void handleEnded(); // ENDED while we still think it plays
@@ -1030,8 +1131,8 @@ export function startLoop() {
       deck.el.playbackRate > 0
     ) {
       void startCrossfade(Math.min(crossfadeSecs, Math.max(1.2, remaining)));
-    } else if (gapless && remaining < 9 && !preloadedId) {
-      preloadNextSoon();
+    } else if ((gapless || crossfadeSecs > 0) && !preloadedId && (remaining < 9 || fullyBuffered(el))) {
+      void preloadNextSoon();
     }
   };
   rafId = requestAnimationFrame(loop);
@@ -1104,7 +1205,6 @@ async function startCrossfade(secs: number) {
     from.trackId = null;
     from.postGain.gain.value = 0;
     fading = false;
-    preloadNextSoon();
   }, secs * 1000 + 120);
 }
 

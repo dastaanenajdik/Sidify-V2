@@ -463,7 +463,7 @@ function DownloadsSection() {
 
   return (
     <SectionCard id="downloads" title="Downloads & Storage" desc="Offline audio lives in encrypted-browser storage on this device">
-      <Row label="Download quality" desc="Low ≈96kbps · Medium ≈160kbps · High ≈320kbps">
+      <Row label="Download quality" desc="Files are saved exactly as streamed — the best AAC (.m4a) track YouTube serves, usually 128 kbps. This choice only tags your downloads.">
         <QualitySelect value={s.downloadQuality} onChange={(v) => s.set({ downloadQuality: v })} />
       </Row>
       <Row label="Download on Wi-Fi only" desc="Pause downloads while on mobile data">

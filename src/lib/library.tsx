@@ -2,7 +2,9 @@
 
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, downloadTrack, removeDownloadEverywhere, clearAllDownloads } from "./clientApi";
+import { api, downloadTrack, removeDownloadEverywhere, clearAllDownloads, saveBlobToDevice } from "./clientApi";
+import { idbGet } from "./offlineDb";
+import { downloadFileName } from "./downloadName";
 import { emitRefresh, onRefresh } from "./refreshBus";
 import { refreshBlockedFilter } from "./audioEngine";
 import { usePlayer } from "@/store/player";
@@ -57,14 +59,17 @@ export function useLiked() {
 /* ------------------------------- downloads -------------------------------- */
 
 /**
- * Downloads are temporarily disabled while the streaming engine settles.
- * Every download affordance in the app (track rows, context menu, full player,
- * auto-download-on-like) funnels through this one function, so gating it here
- * keeps all existing UI, icons and layouts exactly as they are.
+ * Downloads run through the same resolver + `/api/stream` proxy that playback uses, so
+ * whatever plays can be saved. Two destinations share one fetch:
+ *  - offline cache (IndexedDB) — the track then plays instantly, even with no network
+ *  - "Save to device" — the same bytes handed to the browser's download manager as a
+ *    real audio file (`Title - Artist.m4a`)
+ * Every download affordance in the app funnels through `downloadTrackFlow`, so this
+ * single switch still gates all of them.
  */
-export const DOWNLOADS_ENABLED = false;
+export const DOWNLOADS_ENABLED = true;
 
-export async function downloadTrackFlow(track: Track, opts?: { silent?: boolean }): Promise<void> {
+export async function downloadTrackFlow(track: Track, opts?: { silent?: boolean; toDevice?: boolean }): Promise<void> {
   if (!DOWNLOADS_ENABLED) {
     if (!opts?.silent) {
       useUi.getState().pushToast({
@@ -75,15 +80,31 @@ export async function downloadTrackFlow(track: Track, opts?: { silent?: boolean 
     }
     return;
   }
+  if (!track?.videoId) {
+    if (!opts?.silent) useUi.getState().pushToast({ title: "This track can't be downloaded", desc: track?.title, kind: "warn" });
+    return;
+  }
 
   const ui = useUi.getState();
   const p = usePlayer.getState();
+
   if (p.downloadedIds[track.id]) {
-    ui.pushToast({ title: "Already downloaded", desc: track.title, kind: "info" });
-    return;
+    if (opts?.toDevice) {
+      // Already cached offline: hand the stored bytes over without another download.
+      const cached = await idbGet(track.id).catch(() => null);
+      if (cached) {
+        saveBlobToDevice(cached, downloadFileName(track.title, track.artist, cached.type));
+        ui.pushToast({ title: "Saving to device", desc: track.title, kind: "ok" });
+        return;
+      }
+    } else {
+      ui.pushToast({ title: "Already downloaded", desc: track.title, kind: "info" });
+      return;
+    }
   }
   if (ui.downloadProgress[track.id] != null) return;
-  ui.pushToast({ title: "Downloading…", desc: track.title, kind: "info" });
+
+  if (!opts?.silent) ui.pushToast({ title: opts?.toDevice ? "Preparing file…" : "Downloading…", desc: track.title, kind: "info" });
   try {
     ui.setDownloadProgress(track.id, 1);
     const size = await downloadTrack(track, useSettings.getState().downloadQuality, (pct) =>
@@ -92,14 +113,28 @@ export async function downloadTrackFlow(track: Track, opts?: { silent?: boolean 
     usePlayer.getState().set({
       downloadedIds: { ...usePlayer.getState().downloadedIds, [track.id]: true },
     });
-    useUi.getState().pushToast({
-      title: "Available offline",
-      desc: `${track.title} · ${formatBytes(size)}`,
-      kind: "ok",
-    });
+    if (opts?.toDevice) {
+      const blob = await idbGet(track.id).catch(() => null);
+      if (blob) saveBlobToDevice(blob, downloadFileName(track.title, track.artist, blob.type));
+      useUi.getState().pushToast({
+        title: blob ? "Saved to device" : "Available offline",
+        desc: `${track.title} · ${formatBytes(size)}`,
+        kind: "ok",
+      });
+    } else {
+      useUi.getState().pushToast({
+        title: "Available offline",
+        desc: `${track.title} · ${formatBytes(size)}`,
+        kind: "ok",
+      });
+    }
     emitRefresh("downloads");
-  } catch {
-    useUi.getState().pushToast({ title: "Download failed", desc: track.title, kind: "warn" });
+  } catch (err) {
+    useUi.getState().pushToast({
+      title: "Download failed",
+      desc: (err as Error)?.message ? `${track.title} · ${(err as Error).message}` : track.title,
+      kind: "warn",
+    });
   } finally {
     useUi.getState().setDownloadProgress(track.id, null);
   }

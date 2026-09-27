@@ -205,27 +205,102 @@ export const api = {
   },
 };
 
+/* ------------------------------- downloads -------------------------------- */
+
+/** Size of one Range request when saving a track. Small enough that every request
+ *  finishes in a few seconds even on a slow mobile link — the stream proxy runs as a
+ *  serverless function with a hard 60 s cap, so one giant request could be cut off
+ *  half-way; short chunks also survive the CDN closing long-lived connections. */
+const DOWNLOAD_CHUNK = 2 * 1024 * 1024;
+const DOWNLOAD_RETRIES = 3;
+
+export interface FetchedAudio {
+  blob: Blob;
+  mime: string;
+  size: number;
+}
+
+function parseContentRange(header: string | null): { end: number; total: number } | null {
+  const m = /bytes\s+(\d+)-(\d+)\/(\d+|\*)/i.exec(header || "");
+  if (!m) return null;
+  return { end: Number(m[2]), total: m[3] === "*" ? 0 : Number(m[3]) };
+}
+
+async function fetchWithRetry(url: string, init: RequestInit, tries = DOWNLOAD_RETRIES): Promise<Response> {
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      // 503 = resolver hiccup, 5xx = upstream wobble: both are worth one more go.
+      if (res.status >= 500 && attempt < tries - 1) {
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if ((err as { name?: string })?.name === "AbortError") throw err;
+      await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Download failed");
+}
+
+/**
+ * Pulls a track's full audio through the same `/api/stream` proxy that playback uses,
+ * in sequential Range chunks, and returns it as a Blob with its real MIME type.
+ */
+export async function fetchTrackAudio(
+  track: Track,
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal
+): Promise<FetchedAudio> {
+  if (!track.videoId) throw new Error("Track not downloadable");
+  const url = `/api/stream?video_id=${encodeURIComponent(track.videoId)}&play=1`;
+  const chunks: BlobPart[] = [];
+  let mime = "";
+  let loaded = 0;
+  let total = 0;
+
+  for (;;) {
+    const res = await fetchWithRetry(url, {
+      headers: { range: `bytes=${loaded}-${loaded + DOWNLOAD_CHUNK - 1}` },
+      cache: "no-store",
+      signal,
+    });
+    // Asked past the end of a file whose size we never learned: we already have it all.
+    if (res.status === 416 && loaded > 0) break;
+    if (!res.ok) throw new Error(`Download failed (${res.status})`);
+    mime = mime || (res.headers.get("content-type") || "").split(";")[0].trim();
+
+    const buf = new Uint8Array(await res.arrayBuffer());
+    chunks.push(buf);
+    loaded += buf.byteLength;
+
+    if (res.status !== 206) {
+      // The proxy answered with the whole file (no Range support upstream): one and done.
+      total = loaded;
+      break;
+    }
+    const cr = parseContentRange(res.headers.get("content-range"));
+    if (cr?.total) total = cr.total;
+    if (total && onProgress) onProgress(Math.min(99, Math.round((loaded / total) * 100)));
+    if (total ? loaded >= total : buf.byteLength < DOWNLOAD_CHUNK) break;
+    if (buf.byteLength === 0) throw new Error("Download stalled");
+  }
+
+  const blob = new Blob(chunks, { type: mime || "audio/mp4" });
+  onProgress?.(99);
+  return { blob, mime: blob.type, size: blob.size };
+}
+
 /** Downloads a track's audio through the proxy into IndexedDB, then registers it. */
 export async function downloadTrack(
   track: Track,
   quality: string,
   onProgress?: (pct: number) => void
 ): Promise<number> {
-  if (!track.videoId) throw new Error("Track not downloadable");
-  const res = await fetch(`/api/stream?video_id=${track.videoId}&play=1`);
-  if (!res.ok || !res.body) throw new Error("Download failed");
-  const total = Number(res.headers.get("content-length")) || 0;
-  const reader = res.body.getReader();
-  const chunks: BlobPart[] = [];
-  let loaded = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.length;
-    if (total && onProgress) onProgress(Math.min(99, Math.round((loaded / total) * 100)));
-  }
-  const blob = new Blob(chunks, { type: "audio/mp4" });
+  const { blob } = await fetchTrackAudio(track, onProgress);
   await idbPut(track.id, blob);
   await fetch("/api/downloads", {
     method: "POST",
@@ -233,6 +308,23 @@ export async function downloadTrack(
   });
   onProgress?.(100);
   return blob.size;
+}
+
+/** Hands a Blob to the browser's download manager under the given file name. */
+export function saveBlobToDevice(blob: Blob, filename: string): void {
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  // Give the download manager a moment to grab the URL before revoking it.
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(href);
+  }, 60_000);
 }
 
 export async function removeDownloadEverywhere(trackId: string) {
