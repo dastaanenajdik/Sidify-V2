@@ -10,7 +10,7 @@ const compiled = new Module(filename, module);
 compiled._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, filename);
-const { decideEngineAction, needsPlainElement } = compiled.exports;
+const { decideEngineAction, needsPlainElement, decideHiddenPauseRecovery } = compiled.exports;
 
 const video = {
   playing: true, loading: false, engine: 'native', videoMode: true,
@@ -51,16 +51,35 @@ for (const [name, override] of [
   });
 }
 
-test('plain element only for hidden, playing, native audio with a non-running graph (all combinations)', () => {
+test('plain element for hidden native audio: always on mobile, only when the graph stalls on desktop', () => {
   for (const hidden of [false, true]) {
     for (const playing of [false, true]) {
       for (const engine of [null, 'iframe', 'native']) {
         for (const ctxRunning of [false, true]) {
-          const state = { hidden, playing, engine, ctxRunning };
-          assert.equal(needsPlainElement(state),
-            hidden && playing && engine === 'native' && !ctxRunning, JSON.stringify(state));
+          for (const mobile of [false, true]) {
+            const state = { hidden, playing, engine, ctxRunning, mobile };
+            const wanted = hidden && playing && engine === 'native' && (mobile || !ctxRunning);
+            assert.equal(needsPlainElement(state), wanted, JSON.stringify(state));
+          }
         }
       }
     }
   }
+});
+
+test('hidden-pause recovery: only off-screen playback intent is rescued, twice per hidden window', () => {
+  const base = { hidden: true, wantedPlaying: true, engine: 'native', plainActive: false, plainPaused: false, attempts: 0 };
+  assert.equal(decideHiddenPauseRecovery(base), 'plain-handoff');
+  assert.equal(decideHiddenPauseRecovery({ ...base, plainActive: true, plainPaused: true }), 'plain-resume');
+  assert.equal(decideHiddenPauseRecovery({ ...base, plainActive: true, plainPaused: false }), 'none');
+  assert.equal(decideHiddenPauseRecovery({ ...base, engine: 'iframe' }), 'iframe-resume');
+  assert.equal(decideHiddenPauseRecovery({ ...base, attempts: 2 }), 'none');
+  assert.equal(decideHiddenPauseRecovery({ ...base, attempts: 1, maxAttempts: 1 }), 'none');
+});
+
+test('hidden-pause recovery never fights the user or the foreground', () => {
+  const base = { hidden: true, wantedPlaying: true, engine: 'native', plainActive: false, plainPaused: false, attempts: 0 };
+  assert.equal(decideHiddenPauseRecovery({ ...base, hidden: false }), 'none');
+  assert.equal(decideHiddenPauseRecovery({ ...base, wantedPlaying: false }), 'none');
+  assert.equal(decideHiddenPauseRecovery({ ...base, engine: null }), 'plain-handoff');
 });

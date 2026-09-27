@@ -35,6 +35,7 @@ import { useBlocked, useDownloads } from "@/lib/library";
 import { Slider, Toggle, Modal } from "@/components/controls";
 import { cx, formatBytes } from "@/lib/format";
 import { ANDROID_APP } from "@/lib/appRelease";
+import PlaybackStatusRow from "@/components/PlaybackStatusRow";
 
 const APP_VERSION = "1.0.0";
 const CONTACT_EMAIL = "dastaanenajdik@gmail.com";
@@ -542,6 +543,7 @@ function SystemSection() {
       <Row label="Notification bar controls" desc="Show transport controls in notifications">
         <Toggle checked={s.notifControls} onChange={(v) => s.set({ notifControls: v })} />
       </Row>
+      <PlaybackStatusRow />
       <Row label="Instructions to play background" desc="Keep the music going with the screen off or the app closed">
         <button
           onClick={() => useUi.getState().setBgHelpOpen(true)}
