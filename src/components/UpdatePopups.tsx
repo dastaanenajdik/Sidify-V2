@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Clock3, Copy, Download, Sparkles, X } from "lucide-react";
 import { useUi } from "@/store/ui";
 import { cx } from "@/lib/format";
-import { ANDROID_APP } from "@/lib/appRelease";
+import { APP_SIZE_LABEL } from "@/lib/appRelease";
 
 /* ------------------------------------------------------------------ */
 /*  Content. The changelog lives here so the popup is the single       */
@@ -13,17 +13,25 @@ import { ANDROID_APP } from "@/lib/appRelease";
 /* ------------------------------------------------------------------ */
 
 export const UPDATE_INFO = {
-  tag: "Minor update 1.5",
-  date: "27 Sept 2026",
-  headline: "Background playback: the song keeps going when the screen goes off",
+  tag: "Minor update 1.1",
+  date: "26 Sept 2026",
+  headline: "Lyrics now light up line by line, plus a Lyrics Finder",
   items: [
-    "On phones the engine now hands the song to a plain audio element the moment you leave the app or lock the screen — that is the one thing mobile browsers never silence, so the music stops pausing.",
-    "If a browser still pauses playback (it happens when a song can only play through the YouTube embed), Sidify notices within a second and resumes it — up to two attempts per screen-off, so it never fights your own pause.",
-    "New Settings → System row “Playback engine” — shows live whether the current song is Background-safe (plain audio) or Pauses off-screen (YouTube embed), with a one-tap Fix button.",
-    "“Copy report” in the same row copies the engine, audio-context, screen and event log — paste it when reporting “it still pauses on my phone” so the real cause can be found.",
-    "Lock-screen controls now report the true play/pause state and position, so the notification can’t drift from what you hear.",
-    "The background guide now explains the honest limits: installing the site as an app (homescreen or TWA) does NOT change these browser rules — Brave’s background-play setting or the native Android app do.",
-    `Want zero browser rules? The ${ANDROID_APP.name} app in Settings → About plays with the screen off, always.`,
+    "Synced lyrics — open the full player, tap Lyrics and switch the toggle at the top from Static to Synced: the current line lights up as the song plays and the view follows it.",
+    "New Lyrics Finder in Your Library — type any song name (and the singer, if you know it) and its lyrics appear right there, ready to copy. Nothing needs to be playing.",
+    "In Synced view you can tap any line to jump the song there, and scrolling away pauses the auto-follow until you tap “Current line”.",
+    "Copy lyrics moved to the bottom of the panel as a small button, so the lyrics get the whole width.",
+    "You can still view plain lyrics — open the full player and tap Lyrics for the static text of any available song.",
+    "Songs now play one after another — when a song ends, a similar song starts on its own.",
+    "Playlists, Liked Songs and search results keep rolling to the next song and the one after that.",
+    "The first song you tap now starts right away (earlier you had to tap a second song).",
+    "Like ❤ works again — liked songs are saved and show up in Your Library.",
+    "“Add to playlist” works — tap a playlist in the list and the song goes straight into it.",
+    "Creating a new playlist works — type a name, hit Save, and it appears in your library.",
+    "Listening history updates while you play, so the History tab is never stale.",
+    "Song errors now skip ahead to a similar track instead of stopping playback.",
+    "New guide inside Settings: “Instructions to play in background” — Brave browser first (recommended), every other browser as the backup.",
+    `The Android app is live — the free ${APP_SIZE_LABEL} APK is one tap away in the “Get the app” banner on Home (and in the sidebar).`,
   ],
 };
 
@@ -313,19 +321,10 @@ function BackgroundHelp({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      <p className="text-muted mb-4 text-[13.5px] leading-6">
+      <p className="text-muted mb-5 text-[13.5px] leading-6">
         Mobile browsers stop audio the moment you leave a page. The fastest fix is four steps with Brave; the
         second method works in the browser you already have. Do this once per session.
       </p>
-
-      <div className="glass mb-5 rounded-2xl px-4 py-3 text-[12.5px] leading-5 text-muted">
-        <span className="font-bold accent-text">Why this happens:</span> Sidify plays through either a plain
-        audio engine (keeps playing in the background) or the YouTube embed (Chrome pauses it when the screen
-        goes off — Brave keeps it running). Newer builds hand audio over to the plain engine the moment the app
-        goes off-screen. Settings → System shows which engine is live right now, with a “Copy report” button if
-        it still stops. Installing the site as an app (homescreen / TWA) does <span className="font-semibold">not</span>
-        change these browser rules — only Brave’s own background-play setting or the native app does.
-      </div>
 
       {/* ---- Method 1 — recommended ---- */}
       <section
@@ -392,8 +391,7 @@ function BackgroundHelp({ onClose }: { onClose: () => void }) {
       <div className="glass mt-4 rounded-2xl px-4 py-3 text-[12.5px] leading-5 text-muted">
         <span className="font-bold accent-text">Tip:</span> if Brave still pauses, open its three-dot menu →
         Settings → Media and turn “Background play” ON. With Method 2, stay on the tab, and use the Sidify
-        notification to pause, skip or go back. Turning off “Data Saver” also helps. Want it guaranteed? Install
-        the {ANDROID_APP.name} app from Settings → About — it plays with the screen off, always.
+        notification to pause, skip or go back. Turning off “Data Saver” also helps.
       </div>
     </Sheet>
   );

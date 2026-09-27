@@ -35,7 +35,6 @@ import { useBlocked, useDownloads } from "@/lib/library";
 import { Slider, Toggle, Modal } from "@/components/controls";
 import { cx, formatBytes } from "@/lib/format";
 import { ANDROID_APP } from "@/lib/appRelease";
-import PlaybackStatusRow from "@/components/PlaybackStatusRow";
 
 const APP_VERSION = "1.0.0";
 const CONTACT_EMAIL = "dastaanenajdik@gmail.com";
@@ -463,7 +462,7 @@ function DownloadsSection() {
 
   return (
     <SectionCard id="downloads" title="Downloads & Storage" desc="Offline audio lives in encrypted-browser storage on this device">
-      <Row label="Download quality" desc="Files are saved exactly as streamed — the best AAC (.m4a) track YouTube serves, usually 128 kbps. This choice only tags your downloads.">
+      <Row label="Download quality" desc="Low ≈96kbps · Medium ≈160kbps · High ≈320kbps">
         <QualitySelect value={s.downloadQuality} onChange={(v) => s.set({ downloadQuality: v })} />
       </Row>
       <Row label="Download on Wi-Fi only" desc="Pause downloads while on mobile data">
@@ -543,7 +542,6 @@ function SystemSection() {
       <Row label="Notification bar controls" desc="Show transport controls in notifications">
         <Toggle checked={s.notifControls} onChange={(v) => s.set({ notifControls: v })} />
       </Row>
-      <PlaybackStatusRow />
       <Row label="Instructions to play background" desc="Keep the music going with the screen off or the app closed">
         <button
           onClick={() => useUi.getState().setBgHelpOpen(true)}

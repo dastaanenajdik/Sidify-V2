@@ -66,50 +66,17 @@ const g = globalThis as typeof globalThis & {
 /* ------------------------------ vm evaluator ------------------------------ */
 
 /**
- * Globals the extracted player snippet may touch besides the ECMAScript builtins a bare
- * `vm` context already has. The extractor treats these names as "provided by the host",
- * so they must exist or the n-transform dies with a ReferenceError mid-way.
+ * youtubei.js hands us `{ output, exported }` plus an env of `{ n?, sp?, sig? }` and
+ * expects the completion value of the script back — an object like `{ sig, n }`.
+ * `vm.runInNewContext` returns exactly that completion value.
  */
-function playerSandbox(env: Record<string, any>): Record<string, any> {
-  const mute = () => {};
-  return {
-    ...env,
-    URL,
-    URLSearchParams,
-    TextEncoder,
-    TextDecoder,
-    atob,
-    btoa,
-    console: { log: mute, info: mute, warn: mute, error: mute, debug: mute },
-  };
-}
-
-/**
- * youtubei.js hands us `{ output, exported }` and expects `{ sig, n }` back.
- *
- * Since v14 the script it builds is a *function body*: it ends in
- * `return process(n, sp, sig)` and the evaluator in the official docs is literally
- * `new Function(data.output)()`. Run as a plain script (which is what
- * `vm.runInNewContext(data.output)` did before) that top-level `return` is a
- * `SyntaxError: Illegal return statement`, so every decipher failed and the raw
- * `n`-parameter URL was streamed untransformed — googlevideo throttles those to a
- * trickle, which is exactly the "plays, then stutters and cuts out" symptom.
- * Wrapping the body in an IIFE keeps the `node:vm` timeout guard and makes it work.
- */
-export function evaluatePlayerScript(output: string, env: Record<string, any> = {}): any {
-  const opts = { timeout: VM_TIMEOUT_MS };
-  const result = vm.runInNewContext(`(function () {\n${output}\n})()`, playerSandbox(env), opts);
-  if (result !== undefined) return result;
-  // Legacy shape (pre-v14): a plain script whose completion value is the result.
-  return vm.runInNewContext(output, playerSandbox(env), opts);
-}
-
 async function installVmEvaluator(): Promise<void> {
   if (g.__sidifyVmPatched) return;
   const { Platform } = await loadYTModule();
   Platform.load({
     ...Platform.shim,
-    eval: (data: { output: string }, env: Record<string, any>) => evaluatePlayerScript(data.output, env),
+    eval: (data: { output: string }, env: Record<string, any>) =>
+      vm.runInNewContext(data.output, env, { timeout: VM_TIMEOUT_MS }),
   });
   g.__sidifyVmPatched = true;
 }
@@ -216,25 +183,6 @@ export function resetYT(): void {
   g.__sidifyYtPromise = null;
   g.__sidifyDegraded = false;
   audioCache.clear();
-}
-
-/**
- * Boots the session before anyone asks for a song (see src/instrumentation.ts).
- *
- * This is the difference between a cold instance answering `/api/stream` in the time it
- * takes to fetch the media, and answering it after also fetching and parsing YouTube's
- * player script. Returns true when the full engine (decipher included) came up; false
- * means playback will fall back to the embed, and the first request pays for the boot
- * exactly like it did before.
- */
-export async function warmEngine(): Promise<boolean> {
-  try {
-    await getYT();
-    return !isEngineDegraded();
-  } catch (err) {
-    console.warn("[sidify] engine warm-up failed:", (err as Error)?.message);
-    return false;
-  }
 }
 
 /* ------------------------------ caching ------------------------------ */
@@ -603,69 +551,26 @@ export interface ResolvedAudio {
  */
 const STREAM_CLIENTS = ["ANDROID", "TV_SIMPLY", "YTMUSIC_ANDROID", "MWEB", "WEB"] as const;
 
-/** Formats that can actually be turned into a URL (pre-signed or decipherable). */
-function isFetchable(f: any): boolean {
-  return !!(f?.url || f?.signature_cipher || f?.cipher);
-}
-
-/**
- * Ranks audio candidates for a plain `<audio>` element behind a Range proxy:
- *  1. audio-only (never a muxed video file just to get its sound track)
- *  2. not OTF (on-the-fly formats need segment juggling to seek)
- *  3. original language track, not a dub / DRC variant
- *  4. AAC in mp4 (plays everywhere, incl. Safari), then higher bitrate
- */
-export function rankAudioFormat(f: any): number {
-  let score = 0;
-  if (f?.has_audio && !f?.has_video) score += 10_000;
-  if (!f?.is_type_otf) score += 5_000;
-  if (f?.is_original !== false && !f?.is_dubbed && !f?.is_auto_dubbed) score += 1_000;
-  if (!f?.is_drc) score += 500;
-  if (String(f?.mime_type || "").includes("mp4")) score += 250;
-  score += Math.min(249, Math.round((Number(f?.bitrate) || 0) / 2_000));
-  return score;
-}
-
 function pickAudioFormat(info: any): any {
+  // Spec path first: the library's own chooser (`type: 'audio'`, `quality: 'best'`,
+  // which defaults to mp4/AAC — the most browser-compatible container).
+  try {
+    const chosen = info.chooseFormat({ type: "audio", quality: "best" });
+    if (chosen && !chosen.is_type_otf) return chosen;
+    if (chosen) return chosen;
+  } catch {
+    /* fall through to manual selection */
+  }
+
   const formats: any[] = [
     ...(info?.streaming_data?.formats || []),
     ...(info?.streaming_data?.adaptive_formats || []),
   ];
-  const ranked = formats
-    .filter((f) => f?.has_audio && isFetchable(f))
-    .sort((a, b) => rankAudioFormat(b) - rankAudioFormat(a));
-  if (ranked.length) return ranked[0];
-
-  // Spec path as a fallback for unexpected streaming-data shapes.
-  try {
-    const chosen = info.chooseFormat({ type: "audio", quality: "best" });
-    return chosen && isFetchable(chosen) ? chosen : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Turns a format into the URL we will actually stream.
- *
- * Every googlevideo URL — pre-signed ones from ANDROID/TV clients included — carries an
- * `n` throttle token that has to be run through the player's transform; a URL streamed
- * with the raw token is served at a crawl and stalls a few seconds in. youtubei.js's own
- * `download()` therefore always calls `format.decipher()`, which transforms `n`, applies
- * the signature cipher when there is one and stamps `cver`/`pot`. We do the same and only
- * fall back to the raw URL when there is no player at all (degraded session).
- */
-async function formatToUrl(yt: YT, format: any): Promise<string | undefined> {
-  const player = yt.session.player;
-  if (player) {
-    try {
-      const deciphered = await format.decipher(player);
-      if (deciphered) return String(deciphered);
-    } catch (err) {
-      console.warn("[sidify] decipher failed, using raw URL:", (err as Error)?.message);
-    }
-  }
-  return format.url ? String(format.url) : undefined;
+  const audioOnly = formats
+    .filter((f) => f?.has_audio && !f?.has_video && (f?.url || f?.signature_cipher || f?.cipher))
+    // Non-OTF first: on-the-fly formats need explicit range juggling to scrub.
+    .sort((a, b) => Number(!!a.is_type_otf) - Number(!!b.is_type_otf) || (b?.bitrate ?? 0) - (a?.bitrate ?? 0));
+  return audioOnly[0] || null;
 }
 
 async function resolveViaClient(yt: YT, videoId: string, client: string): Promise<ResolvedAudio | null> {
@@ -678,7 +583,16 @@ async function resolveViaClient(yt: YT, videoId: string, client: string): Promis
     const format = pickAudioFormat(info);
     if (!format) return null;
 
-    const url = await formatToUrl(yt, format);
+    // `format.url` is already deciphered for most clients; `decipher()` covers the
+    // signatureCipher case using the session's JS player.
+    let url: string | undefined = format.url;
+    if (!url) {
+      try {
+        url = await format.decipher(yt.session.player);
+      } catch {
+        url = undefined;
+      }
+    }
     if (!url) return null;
 
     const basic = info?.basic_info || {};

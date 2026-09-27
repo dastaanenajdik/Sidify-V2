@@ -7,7 +7,6 @@ import { playContext } from "@/lib/audioEngine";
 import { usePlayer } from "@/store/player";
 import { useSettings } from "@/store/settings";
 import { cx, formatBytes, formatTime, upscaleArtwork } from "@/lib/format";
-import DownloadButton from "@/components/DownloadButton";
 import { LiveEq } from "@/components/SidifyLogo";
 import { currentTrack } from "@/store/player";
 
@@ -41,9 +40,8 @@ export default function DownloadsPage() {
         <div>
           <h1 className="font-display text-[30px] font-extrabold tracking-tight md:text-[36px]">Downloads</h1>
           <p className="text-muted mt-1 text-[13.5px]">
-            Real offline audio stored in this browser · tagged{" "}
-            <span className="font-semibold text-[var(--text)]">{QUALITY_META[downloadQuality]?.label}</span> (change in Settings) ·
-            use ⋮ → “Save to device” on any track for a file
+            Real offline audio stored in this browser · default quality{" "}
+            <span className="font-semibold text-[var(--text)]">{QUALITY_META[downloadQuality]?.label}</span> (change in Settings)
           </p>
         </div>
         {rows.length > 0 && (
@@ -123,12 +121,6 @@ export default function DownloadsPage() {
                     </span>
                     <div className="text-muted-2 mt-1 text-[11px] tabular-nums">{formatBytes(r.sizeBytes)}</div>
                   </div>
-                  <DownloadButton
-                    track={t}
-                    size={16}
-                    toDevice
-                    className="h-9 w-9 md:opacity-0 md:group-hover:opacity-100"
-                  />
                   <button
                     aria-label="Remove download"
                     onClick={(e) => {

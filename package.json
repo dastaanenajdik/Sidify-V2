@@ -6,7 +6,6 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "node --test tests/*.test.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
