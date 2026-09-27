@@ -8,11 +8,13 @@ import {
   BatteryCharging,
   Check,
   ChevronDown,
+  Clock3,
   Copy,
   Download,
   FileText,
   Infinity as InfinityIcon,
   ListMusic,
+  MicVocal,
   MoonStar,
   Orbit,
   Package,
@@ -22,9 +24,11 @@ import {
   Timer,
   TriangleAlert,
   WifiOff,
+  WrapText,
 } from "lucide-react";
 import {
   ANDROID_APP,
+  APP_COMING_SOON,
   APP_FAQ,
   APP_FEATURES,
   APP_SIZE_LABEL,
@@ -45,6 +49,8 @@ const FEATURE_ICONS: Record<string, IconComp> = {
   "sliders-horizontal": SlidersHorizontal,
   orbit: Orbit,
   download: Download,
+  "mic-vocal": MicVocal,
+  "wrap-text": WrapText,
   "list-music": ListMusic,
   sparkles: Sparkles,
   timer: Timer,
@@ -104,8 +110,8 @@ export default function AppDownloadPage() {
 
             <p className="text-muted mt-4 max-w-xl text-[14.5px] leading-7 md:text-[16px]">
               Everything you love on this site, wrapped in a real phone app: background playback that survives a locked
-              screen, a genuine studio equalizer, 8D spatial audio and offline downloads. Free APK, no account, running
-              in about a minute.
+              screen, a genuine studio equalizer with saved presets, synced lyrics and offline downloads. Free APK, no
+              account, running in about a minute.
             </p>
 
             <div className="mt-7 flex flex-wrap items-center gap-3">
@@ -167,15 +173,22 @@ export default function AppDownloadPage() {
             return (
               <div
                 key={f.title}
-                className="glass hover-panel group relative overflow-hidden rounded-3xl p-5"
+                className={cx("glass hover-panel group relative overflow-hidden rounded-3xl p-5", f.soon && "opacity-80")}
                 style={{ boxShadow: "0 22px 60px -46px var(--shadow)" }}
               >
                 <span
                   className="pointer-events-none absolute -top-16 -right-12 h-32 w-32 rounded-full opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100"
                   style={{ background: "radial-gradient(closest-side, var(--glow), transparent)" }}
                 />
-                <span className="relative mb-4 grid h-12 w-12 place-items-center rounded-2xl accent-bg text-black">
-                  <Icon size={22} strokeWidth={2.3} />
+                <span className="relative mb-4 flex items-center gap-2.5">
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl accent-bg text-black">
+                    <Icon size={22} strokeWidth={2.3} />
+                  </span>
+                  {f.soon && (
+                    <span className="text-muted flex items-center gap-1 rounded-full bg-[var(--panel-strong)] px-2.5 py-1 text-[9.5px] font-extrabold tracking-[0.14em] uppercase">
+                      <Clock3 size={11} strokeWidth={2.8} /> Coming soon
+                    </span>
+                  )}
                 </span>
                 <h3 className="font-display relative text-[16.5px] leading-snug font-extrabold tracking-tight">{f.title}</h3>
                 <p className="text-muted relative mt-1.5 text-[13px] leading-[21px]">{f.desc}</p>
@@ -205,9 +218,12 @@ export default function AppDownloadPage() {
                 <div className="font-display text-[16px] font-extrabold tracking-tight">
                   {ANDROID_APP.name} {ANDROID_APP.version}
                 </div>
-                <div className="text-muted text-[12px]">The whole app rebuilt around glass, sound and speed</div>
+                <div className="text-muted text-[12px]">Lyrics that follow the song, presets that stick, downloads you can watch</div>
               </div>
             </div>
+            <span className="glass text-muted rounded-full px-3 py-1.5 text-[11.5px] font-bold">
+              APK size {APP_SIZE_LABEL} · {ANDROID_APP.platform}
+            </span>
           </div>
 
           <ul className="grid grid-cols-1 gap-x-8 gap-y-3.5 p-5 md:grid-cols-2 md:p-6">
@@ -220,6 +236,28 @@ export default function AppDownloadPage() {
               </li>
             ))}
           </ul>
+
+          {APP_COMING_SOON.length > 0 && (
+            <div
+              className="flex items-start gap-3 border-t px-5 py-4 md:px-6"
+              style={{
+                borderColor: "color-mix(in srgb, #f59e0b 28%, transparent)",
+                background: "color-mix(in srgb, #f59e0b 8%, transparent)",
+              }}
+            >
+              <span className="mt-[2px] grid h-5 w-5 shrink-0 place-items-center rounded-full bg-amber-400/20 text-amber-400">
+                <Clock3 size={12} strokeWidth={2.8} />
+              </span>
+              <div className="min-w-0">
+                <div className="text-[10.5px] font-extrabold tracking-[0.2em] text-amber-400 uppercase">Coming soon</div>
+                {APP_COMING_SOON.map((item) => (
+                  <p key={item} className="text-muted mt-1 text-[13px] leading-[21px]">
+                    {item}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 

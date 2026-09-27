@@ -34,7 +34,7 @@ import { api } from "@/lib/clientApi";
 import { useBlocked, useDownloads } from "@/lib/library";
 import { Slider, Toggle, Modal } from "@/components/controls";
 import { cx, formatBytes } from "@/lib/format";
-import { ANDROID_APP } from "@/lib/appRelease";
+import { ANDROID_APP, APP_SIZE_LABEL } from "@/lib/appRelease";
 
 const APP_VERSION = "1.0.0";
 const CONTACT_EMAIL = "dastaanenajdik@gmail.com";
@@ -697,7 +697,7 @@ function AboutSection() {
           {checking ? "Checking…" : "Check now"}
         </button>
       </Row>
-      <Row label="Android app" desc={`${ANDROID_APP.name} ${ANDROID_APP.tag} · background playback, equalizer, 8D audio`}>
+      <Row label="Android app" desc={`${ANDROID_APP.name} ${ANDROID_APP.tag} · ${APP_SIZE_LABEL} · background playback, equalizer, synced lyrics`}>
         <Link
           href="/app"
           className="glass accent-text flex items-center gap-2 rounded-xl px-4 py-2 text-[12.5px] font-bold transition-transform hover:scale-[1.02]"

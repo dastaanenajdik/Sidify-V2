@@ -2,39 +2,51 @@
  * Single source of truth for the Android app release.
  *
  * Every surface that talks about the app — the home banner, the sidebar promo, the
- * /app landing page — reads from here, so shipping a new build only means editing
- * this one file (and pointing `apkUrl` at the new asset).
+ * /app landing page, the `/get` short link and its QR code — reads from here, so
+ * shipping a new build only means editing this one file. `apkUrl` points at the
+ * release's `latest` asset, so the link itself never goes stale.
  */
-
-import { formatBytes } from "./format";
 
 export const ANDROID_APP = {
   /** Marketing name shown to users. */
   name: "IfallMusic",
   /** What we call it on this site. */
   siteName: "Sidify app",
-  version: "2.2.0",
-  tag: "v2.2.0",
-  released: "23 Sept 2026",
+  version: "2.3.3",
+  tag: "v2.3.3",
+  released: "27 Sept 2026",
   /** Exact byte size of the asset in the GitHub release. */
-  sizeBytes: 62_755_455,
+  sizeBytes: 72_511_067,
   fileName: "app-release.apk",
-  platform: "Android phone & tablet",
+  platform: "Android",
   price: "Free",
   author: "Siddharth · ifallertzia",
+  /**
+   * The `latest` asset URL — it carries no version, so the download button, the QR
+   * code and the `/get` short link keep serving the newest build even after the next
+   * release ships. Only the version/size/notes below need editing per release.
+   */
   apkUrl:
-    "https://github.com/ifallertzia/Saxify-v1/releases/download/v2.2.0/app-release.apk",
+    "https://github.com/ifallertzia/Saxify-v1/releases/latest/download/app-release.apk",
   releaseUrl: "https://github.com/ifallertzia/Saxify-v1/releases/latest",
   repoUrl: "https://github.com/ifallertzia/Saxify-v1",
 } as const;
 
-/** Human label for the asset size — derived with the site's own formatter. */
-export const APP_SIZE_LABEL = formatBytes(ANDROID_APP.sizeBytes); // → "59.8 MB"
+/**
+ * Human label for the asset size.
+ *
+ * The release notes quote the APK in decimal megabytes (72.5 MB), so this uses the
+ * same unit instead of the site's binary `formatBytes`, which would print 69.2 MB for
+ * the very same file.
+ */
+export const APP_SIZE_LABEL = `${(ANDROID_APP.sizeBytes / 1_000_000).toFixed(1)} MB`; // → "72.5 MB"
 
 export type AppFeature = {
   icon: string;
   title: string;
   desc: string;
+  /** Announced but not in this build yet — the card gets a "Coming soon" pill. */
+  soon?: boolean;
 };
 
 /** The pitch — big, concrete promises, one line of proof each. */
@@ -47,17 +59,28 @@ export const APP_FEATURES: AppFeature[] = [
   {
     icon: "sliders-horizontal",
     title: "Real studio equalizer",
-    desc: "Five genuine Android audio-session bands with Bass Boost, Rock, Treble, Vocal and your own curve.",
+    desc: "Five genuine Android audio-session bands with Bass Boost, Rock, Treble and Vocal — plus custom presets you can save, and it opens straight from the player.",
   },
   {
     icon: "orbit",
     title: "8D spatial audio",
-    desc: "Seven ready-made spatial templates with orbit speed, depth and reverb sliders — plus a live orbit meter.",
+    desc: "Orbit speed, depth and reverb templates are still in the works — not part of this build. They land in a coming release.",
+    soon: true,
   },
   {
     icon: "download",
     title: "Offline downloads",
-    desc: "Songs save to Download/IfallMusic with a private offline copy, so they play with zero internet.",
+    desc: "Songs save to Download/IfallMusic with a private offline copy, and the player shows live progress and percentage next to the Like button.",
+  },
+  {
+    icon: "mic-vocal",
+    title: "Synced lyrics",
+    desc: "The current line is followed automatically as the song plays — tap any line to seek the track to that exact point.",
+  },
+  {
+    icon: "wrap-text",
+    title: "Compact lyrics view",
+    desc: "Less gap between lines, with proper room left for big and wrapped text, so more of the lyric fits on one screen.",
   },
   {
     icon: "list-music",
@@ -81,18 +104,22 @@ export const APP_FEATURES: AppFeature[] = [
   },
 ];
 
-/** Condensed from the v2.2.0 release notes on GitHub. */
+/** Condensed from the v2.3.3 release notes on GitHub. */
 export const APP_WHATS_NEW: string[] = [
-  "The app is now IfallMusic — a new wordmark, new icon, new notification channel and a new download folder.",
-  "Liquid-glass redesign on true black: every panel, sheet and row is frosted glass with deep vivid accents.",
-  "18 accents plus your own RGB mix, and an auto-rotating theme you can set to 1 / 2 / 2.5 / 3 / 5 minutes.",
-  "Library opens with its tabs in front of you — Liked, Playlists, Songs, Artists, Downloads, History — with live counters.",
-  "Download percentages now show on song rows, in the Downloads tab and in the mini-player.",
-  "8D spatial audio, a brand-new template: seven spatial presets, orbit speed, depth and reverb sliders.",
-  "Equalizer rebuilt in glass, with real Android audio-session bands and its own presets.",
-  "A Sound panel in the player — volume, the equalizer link and the 8D templates sit one tap from speed, sleep timer and queue.",
-  "Top artists show real faces again, and “Play today’s mix” fits every phone.",
-  "Contact / Report fixed, so the email draft arrives without stray “+” signs.",
+  "Compact lyrics — less gap between the lines, with proper space left for big and wrapped text.",
+  "Synced lyrics — the current line is followed automatically, and tapping a line seeks the song to that point.",
+  "Download progress in the player — the percentage now sits right next to the Like button.",
+  "Saved equalizer presets — save your own curves, and your selected settings stay put when the track changes.",
+  "Quick equalizer access — open the equalizer directly from the player.",
+  "Latest download shortcut — Settings opens the website and the latest app download link.",
+];
+
+/**
+ * Announced, not shipped. Rendered as a note beside the release notes so nobody
+ * goes hunting for a feature this build does not have.
+ */
+export const APP_COMING_SOON: string[] = [
+  `8D audio is coming soon — it is not available in ${ANDROID_APP.tag}. It arrives in a later build.`,
 ];
 
 export type InstallStep = { title: string; desc: string };

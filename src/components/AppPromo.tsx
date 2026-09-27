@@ -156,7 +156,7 @@ export function PhoneMock({ className }: { className?: string }) {
               ))}
             </span>
             <span className="absolute right-2 bottom-2 rounded-full bg-black/45 px-2 py-[3px] text-[8px] font-bold text-white backdrop-blur">
-              8D · ORBIT
+              SYNCED LYRICS
             </span>
           </div>
 
@@ -242,8 +242,8 @@ export function AppPromoBanner() {
           </h2>
 
           <p className="text-muted mt-3 max-w-lg text-[14px] leading-6 md:text-[15px]">
-            The same Sidify universe, now a real app on your phone — background playback, a studio equalizer, 8D
-            spatial audio and offline downloads. Free APK, no account, ready in a minute.
+            The same Sidify universe, now a real app on your phone — background playback, a studio equalizer with
+            saved presets, synced lyrics and offline downloads. Free APK, no account, ready in a minute.
           </p>
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
