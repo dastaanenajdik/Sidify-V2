@@ -1,10 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, downloadTrack, removeDownloadEverywhere, clearAllDownloads, saveBlobToDevice } from "./clientApi";
-import { idbGet, idbKeys } from "./offlineDb";
-import { downloadFileName } from "./downloadName";
+import { api, downloadTrack, removeDownloadEverywhere, clearAllDownloads } from "./clientApi";
 import { emitRefresh, onRefresh } from "./refreshBus";
 import { refreshBlockedFilter } from "./audioEngine";
 import { usePlayer } from "@/store/player";
@@ -59,54 +57,14 @@ export function useLiked() {
 /* ------------------------------- downloads -------------------------------- */
 
 /**
- * Downloads run through the same resolver + `/api/stream` proxy that playback uses, so
- * whatever plays can be saved. Two destinations share one fetch:
- *  - offline cache (IndexedDB) — the track then plays instantly, even with no network
- *  - "Save to device" — the same bytes handed to the browser's download manager as a
- *    real audio file (`Title - Artist.m4a`)
- * Every download affordance in the app funnels through `downloadTrackFlow`, so this
- * single switch still gates all of them.
+ * Downloads are temporarily disabled while the streaming engine settles.
+ * Every download affordance in the app (track rows, context menu, full player,
+ * auto-download-on-like) funnels through this one function, so gating it here
+ * keeps all existing UI, icons and layouts exactly as they are.
  */
-export const DOWNLOADS_ENABLED = true;
+export const DOWNLOADS_ENABLED = false;
 
-/** Turns a raw fetch/IndexedDB failure into one short line the user can act on. */
-export function describeDownloadError(err: unknown): string {
-  const e = err as { name?: string; message?: string } | null;
-  const msg = e?.message || "";
-  if (e?.name === "AbortError") return "Cancelled";
-  if (e?.name === "QuotaExceededError" || /quota|storage/i.test(msg)) return "Not enough free storage on this device";
-  if (/\(5\d\d\)/.test(msg)) return "YouTube didn't release the audio — try again in a minute";
-  if (/\(4\d\d\)/.test(msg)) return "This track is blocked, private or region-locked";
-  if (/incomplete/i.test(msg)) return msg.replace(/^Download incomplete/, "Stopped part-way");
-  if (/stalled/i.test(msg)) return "The stream stopped responding";
-  if (/failed to fetch|network ?error|load failed|terminated/i.test(msg)) return "Network dropped";
-  return msg || "Couldn't reach the server";
-}
-
-/**
- * Second attempt for the whole file.
- *
- * `fetchTrackAudio` already retries every slice four times (plus its 20 s watchdog) and
- * resumes where it stopped, so arriving here means the resolver itself went away — a 503
- * burst, a Wi-Fi → mobile handover. One more pass a moment later is what turns most of
- * those into a finished download instead of a "Download failed" toast.
- */
-async function downloadWithRetry(track: Track, onProgress: (pct: number) => void, toastId: number | null): Promise<number> {
-  const quality = useSettings.getState().downloadQuality;
-  try {
-    return await downloadTrack(track, quality, onProgress);
-  } catch (err) {
-    if ((err as { name?: string })?.name === "AbortError") throw err;
-    if (toastId != null) {
-      useUi.getState().updateToast(toastId, { title: "Connection lost — retrying…", desc: track.title, pct: undefined, kind: "info" });
-    }
-    await new Promise((r) => setTimeout(r, 1200));
-    onProgress(1);
-    return await downloadTrack(track, quality, onProgress);
-  }
-}
-
-export async function downloadTrackFlow(track: Track, opts?: { silent?: boolean; toDevice?: boolean }): Promise<void> {
+export async function downloadTrackFlow(track: Track, opts?: { silent?: boolean }): Promise<void> {
   if (!DOWNLOADS_ENABLED) {
     if (!opts?.silent) {
       useUi.getState().pushToast({
@@ -117,77 +75,31 @@ export async function downloadTrackFlow(track: Track, opts?: { silent?: boolean;
     }
     return;
   }
-  if (!track?.videoId) {
-    if (!opts?.silent) useUi.getState().pushToast({ title: "This track can't be downloaded", desc: track?.title, kind: "warn" });
-    return;
-  }
 
   const ui = useUi.getState();
   const p = usePlayer.getState();
-
   if (p.downloadedIds[track.id]) {
-    if (opts?.toDevice) {
-      // Already cached offline: hand the stored bytes over without another download.
-      const cached = await idbGet(track.id).catch(() => null);
-      if (cached) {
-        saveBlobToDevice(cached, downloadFileName(track.title, track.artist, cached.type));
-        ui.pushToast({ title: "Saving to device", desc: track.title, kind: "ok" });
-        return;
-      }
-    } else {
-      ui.pushToast({ title: "Already downloaded", desc: track.title, kind: "info" });
-      return;
-    }
+    ui.pushToast({ title: "Already downloaded", desc: track.title, kind: "info" });
+    return;
   }
-  // One download per track: a second tap on the icon is ignored, not queued.
   if (ui.downloadProgress[track.id] != null) return;
-
-  /** Sticky toast that carries the live percentage — it stays until the save ends. */
-  const toastId = opts?.silent
-    ? null
-    : ui.pushToast({
-        title: opts?.toDevice ? "Preparing file…" : "Downloading… 0%",
-        desc: track.title,
-        kind: "info",
-        pct: 0,
-        duration: 0,
-      });
-
-  const setProgress = (pct: number) => {
-    useUi.getState().setDownloadProgress(track.id, pct);
-    if (toastId != null) useUi.getState().updateToast(toastId, { pct, title: `Downloading… ${pct}%`, kind: "info" });
-  };
-
+  ui.pushToast({ title: "Downloading…", desc: track.title, kind: "info" });
   try {
-    setProgress(1);
-    const size = await downloadWithRetry(track, setProgress, toastId);
+    ui.setDownloadProgress(track.id, 1);
+    const size = await downloadTrack(track, useSettings.getState().downloadQuality, (pct) =>
+      useUi.getState().setDownloadProgress(track.id, pct)
+    );
     usePlayer.getState().set({
       downloadedIds: { ...usePlayer.getState().downloadedIds, [track.id]: true },
     });
-
-    let savedToDevice = false;
-    if (opts?.toDevice) {
-      const blob = await idbGet(track.id).catch(() => null);
-      if (blob) {
-        saveBlobToDevice(blob, downloadFileName(track.title, track.artist, blob.type));
-        savedToDevice = true;
-      }
-    }
-    if (toastId != null) useUi.getState().dismissToast(toastId);
     useUi.getState().pushToast({
-      title: savedToDevice ? "Saved to device" : "Available offline",
+      title: "Available offline",
       desc: `${track.title} · ${formatBytes(size)}`,
       kind: "ok",
     });
     emitRefresh("downloads");
-  } catch (err) {
-    if (toastId != null) useUi.getState().dismissToast(toastId);
-    useUi.getState().pushToast({
-      title: "Download failed",
-      desc: `${track.title} · ${describeDownloadError(err)}`,
-      kind: "warn",
-      duration: 6000,
-    });
+  } catch {
+    useUi.getState().pushToast({ title: "Download failed", desc: track.title, kind: "warn" });
   } finally {
     useUi.getState().setDownloadProgress(track.id, null);
   }
@@ -198,28 +110,13 @@ export function useDownloads() {
   const q = useQuery({ queryKey: ["downloads"], queryFn: api.downloads, staleTime: 30_000 });
   useRefreshOn("downloads", q.refetch);
 
-  /**
-   * IndexedDB is the truth for "can this play offline". The server list is metadata
-   * only, and before this the ✓ on a track came from that list alone — so a deployment
-   * without a database saved the audio and then showed nothing anywhere.
-   */
-  const [storedIds, setStoredIds] = useState<string[]>([]);
   useEffect(() => {
-    let live = true;
-    void idbKeys().then((keys) => {
-      if (live) setStoredIds(keys);
-    });
-    return () => {
-      live = false;
-    };
+    if (q.data) {
+      usePlayer.getState().set({
+        downloadedIds: Object.fromEntries(q.data.downloads.map((d) => [d.trackId, true])),
+      });
+    }
   }, [q.data]);
-
-  useEffect(() => {
-    const ids: Record<string, boolean> = {};
-    for (const d of q.data?.downloads ?? []) ids[d.trackId] = true;
-    for (const id of storedIds) ids[id] = true;
-    usePlayer.getState().set({ downloadedIds: ids });
-  }, [q.data, storedIds]);
 
   const remove = useMutation({
     mutationFn: async (trackId: string) => removeDownloadEverywhere(trackId),

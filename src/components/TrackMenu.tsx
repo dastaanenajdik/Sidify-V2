@@ -7,7 +7,6 @@ import {
   Ban,
   Disc3,
   Download,
-  FileDown,
   Heart,
   ListPlus,
   ListVideo,
@@ -62,7 +61,6 @@ export default function TrackMenu() {
       fn: () => void toggle(t),
     },
     { icon: Download, label: "Download offline", fn: () => void downloadTrackFlow(t) },
-    { icon: FileDown, label: "Save to device", fn: () => void downloadTrackFlow(t, { toDevice: true }) },
     { icon: Plus, label: "Add to playlist", fn: () => useUi.getState().setAddToPlaylistTrack(t) },
     { divider: true as const },
     ...(t.albumId

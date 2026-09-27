@@ -48,22 +48,12 @@ URL decipher nahi hota aur streaming 403 deta hai. Isliye session banane se **pe
 ```ts
 Platform.load({
   ...Platform.shim,
-  eval: (data, env) => evaluatePlayerScript(data.output, env),   // src/lib/engine.ts
+  eval: (data, env) => vm.runInNewContext(data.output, env, { timeout: 10_000 }),
 });
-// evaluatePlayerScript = vm.runInNewContext(`(function () {\n${output}\n})()`, sandbox, { timeout: 10_000 })
 ```
 
-**Kyun IIFE wrapper zaroori hai (stutter bug ka asli root cause tha):** youtubei.js v14+ ka `data.output`
-ek **function body** hai — uska aakhri statement `return process(n, sp, sig)` hota hai, aur official docs ka
-evaluator literally `new Function(data.output)()` hai. Pehle hum `vm.runInNewContext(data.output)` chala rahe the,
-jo code ko *Script* ki tarah compile karta hai → top-level `return` = `SyntaxError: Illegal return statement`
-→ **har decipher fail**. Upar se `resolveViaClient` `format.url` milte hi decipher skip kar deta tha, to
-googlevideo URL ka `n` throttle-token kabhi transform hi nahi hota tha — aisi URL ko CDN trickle speed pe
-serve karta hai, aur gaana kuch second baad buffer khatam hone pe kat-kat ke chalta tha. Ab **har format**
-`format.decipher(player)` se guzarta hai (raw URL sirf degraded/no-player session me). Sandbox me `URL`,
-`TextEncoder`, `atob` jaise web globals bhi diye gaye hain (extractor inhe host-provided maanta hai).
-Regression test: `tests/engine.test.cjs` real youtubei.js extractor + `Player.decipher` chala kar check karta hai
-ki `n` transform hota hai. `timeout: 10s` runaway script se bachata hai.
+`data.output` YouTube ke player script se nikla hua IIFE hai jo `{ sig, n }` return karta hai — `vm` ka
+completion value wahi hai jo `Player.decipher()` aage padhta hai. `timeout: 10s` runaway script se bachata hai.
 (⚠️ `node:vm` ek *stability* boundary hai, security sandbox nahi — isliye ye routes Node runtime pe hi chalte hain.)
 
 **`youtubei.js` LAZY import hota hai (`await import()`), static nahi** — ye zaroori hai:
@@ -180,12 +170,14 @@ hi nahi hota; WEB progressively strict hai.
 
 Har client pe:
 1. `playability_status.status` check (`OK` ke alawa → skip; `LOGIN_REQUIRED`/age-restricted → null)
-2. `pickAudioFormat()` → `rankAudioFormat()` se ranking: **audio-only** (kabhi muxed video file nahi) >
-   **non-OTF** > original language (dub/DRC variant nahi) > **AAC/mp4** (Safari-compatible) > bitrate.
-   `chooseFormat()` sirf fallback hai (unexpected streaming-data shape ke liye).
-3. `formatToUrl()` — **har format** `await format.decipher(yt.session.player)` se guzarta hai (pre-signed
-   ANDROID/TV URLs bhi), kyunki `n` throttle-token transform, signature cipher aur `cver`/`pot` yahin lagte hain.
-   Raw `format.url` sirf tab jab player hi na ho (degraded session) ya decipher throw kare.
+2. `info.chooseFormat({ type: 'audio', quality: 'best' })` — spec path. Default `format: 'mp4'` ki wajah se
+   ye **AAC/m4a** chunta hai, jo `<audio>` + Web Audio ke liye sabse compatible container hai.
+3. Agar `chooseFormat` throw kare (koi matching format nahi) → manual fallback:
+   `streaming_data.formats + adaptive_formats` me se audio-only (`has_audio && !has_video`),
+   **non-OTF pehle** (on-the-fly formats ko scrub karne ke liye explicit range juggling chahiye),
+   phir highest bitrate.
+4. `format.url` pehle se deciphered hota hai zyada-tar clients pe; na ho to
+   `await format.decipher(yt.session.player)` — **yahin custom `node:vm` evaluator kaam aata hai**.
 
 Sab clients fail ho jayein aur engine degraded mode me na ho → `resetYT()` se session rebuild karke
 fast clients dobara try (stale visitor-data / rotated player script recovery). Degraded mode me ye skip
@@ -194,18 +186,14 @@ hota hai (player hi nahi hai, rebuild se kuch nahi hoga) — client seedha IFram
 ### 4.2 `/api/stream` — proxy (do modes ek hi endpoint pe)
 
 ```
-GET /api/stream?video_id={id}                      → JSON metadata {title, artist, thumbnail, duration, mime_type, content_length, audio_url, download_url}
-GET /api/stream?video_id={id}&play=1               → actual audio BYTES (proxied)
-GET /api/stream?video_id={id}&play=1&download=1    → wahi bytes, `Content-Disposition: attachment` + asli file name
+GET /api/stream?video_id={id}          → JSON metadata {title, artist, thumbnail, duration, audio_url}
+GET /api/stream?video_id={id}&play=1   → actual audio BYTES (proxied)
 ```
 Proxy kyun? YouTube ke `googlevideo.com` URLs **CORS + IP-bound** hote hain. Server unhe fetch karke
 same-origin pe re-serve karta hai, **`Range` header passthrough** ke saath (seeking/scrubbing ke liye zaroori),
 aur `content-type/length/range/accept-ranges` copy karta hai (default format ke `mime_type`, warna `audio/mp4`,
-plus `cache-control: no-store`). Upstream fetch `accept-encoding: identity` bhejta hai (media bytes as-is) aur
-`signal: req.signal` — browser connection chhode (track change/seek) to upstream transfer bhi cancel.
-Upstream `403/410` (URL expire / doosri instance ki IP) **ya network failure** → `resolveAudio(id, skipCache=true)`
-se re-resolve + retry. Fallback `content-length` (resolver ka size) sirf **200** response pe lagta hai — 206 pe
-galat length browser ko stream drop karwa deti hai.
+plus `cache-control: no-store`). Upstream `403/410` (URL expire) → `resolveAudio(id, skipCache=true)` se
+re-resolve + retry.
 
 Range absent ho to jaan-boojh kar `bytes=0-` **nahi** bheja jata: full `200` response asli `Content-Length`
 lata hai, aur browser usi se seek-bar ke liye `duration` nikalta hai.
@@ -236,14 +224,7 @@ HTMLAudioElement (Deck 1) ─┘        │
 
 Features:
 - **Dual-deck crossfade** (0–12 s) — `linearRampToValueAtTime` se dono decks ke gains opposite ramp
-- **Gapless playback** — next track idle deck me preload (`el.load()`) **sirf** jab current track pura buffer ho
-  chuka ho (`buffered.end ≥ duration−1`) ya remaining < 9 s ho — track start pe eager preload hata diya, kyunki
-  doosra download bajte gaane se hi bandwidth chheenta tha (slow mobile link pe shuru ke 30–40 s underrun)
-- **Stream recovery (mid-track)** — `recoverStream()`: deck/plain element pe `error` **ya** 12 s tak position frozen +
-  `readyState < HAVE_FUTURE_DATA` (stall watchdog, 2.5 s interval) → wahi URL dobara set, `currentTime` restore,
-  `play()` — yaani nayi Range request usi jagah se. Max 3 per track; `currentTime ≤ 0.5` (track kabhi chala hi nahi)
-  ya cap ke baad hi `handleTrackError()` → skip. Pehle har mid-track media error pe seedha agla gaana lag jata tha.
-  `AudioContext({ latencyHint: "playback" })` — bada output buffer, phone pe scheduling hiccups se dropouts nahi.
+- **Gapless playback** — remaining < 9 s pe next track idle deck me preload (`el.load()`)
 - **5-band EQ** presets: Flat / Bass Boost / Rock / Treble / Vocal / Custom — `setTargetAtTime` se smooth
 - **Volume normalization**, **balance/pan**, **playback speed 0.5×–2×** (`el.playbackRate`)
 - Progress loop: `requestAnimationFrame` + ~220 ms throttle → Zustand (`positionMs`, `durationMs`)
@@ -290,63 +271,26 @@ Probe result **5 min cache**, 24 s abort timeout. `playSeq` counter se stale asy
 
 ---
 
-## 5. Downloads / Offline — ✅ enabled (same resolver as playback)
+## 5. Downloads / Offline — ⏸ temporarily disabled ("Coming Soon")
 
-Downloads usi `resolveAudio()` + `/api/stream?play=1` proxy se chalte hain jisse gaana bajta hai — jo bajta
-hai, wo save ho sakta hai. `src/lib/library.tsx` me single flag `DOWNLOADS_ENABLED = true`, aur
-`downloadTrackFlow(track, { silent?, toDevice? })` chaaron affordances ka **single funnel** hai.
+Downloads abhi **gate** kar diye gaye hain. `src/lib/library.tsx` me ek single flag hai:
 
-**Do destinations, ek fetch:**
-- **Download offline** (TrackRow ⬇ button, FullPlayer ⬇, ⋮ menu, auto-download-on-like) → `downloadTrack()` →
-  IndexedDB `sidify-offline/audio` + `POST /api/downloads` (metadata). Track phir `offlineObjectUrl()` se native deck
-  pe network ke bina bajta hai.
-- **Save to device** (⋮ menu → "Save to device", Downloads page ka FileDown button) → wahi blob
-  `saveBlobToDevice()` se browser ke download manager ko — file name `Title - Artist.m4a`
-  (`src/lib/downloadName.ts`; extension asli container se: AAC/mp4 → `.m4a`, opus → `.webm`, kabhi fake `.mp3` nahi).
-  Pehle se offline track ho to IndexedDB se seedha save hota hai, dobara download nahi.
+```ts
+export const DOWNLOADS_ENABLED = false;   // flip to true to restore
+```
 
-**Chunked fetch (`fetchTrackAudio`, `src/lib/clientApi.ts`):** file **2 MB Range chunks** me sequential
-requests se aati hai (`Range: bytes=a-b` → 206 + `Content-Range`). Wajah: proxy ek serverless function hai jiska
-`maxDuration = 60` har plan pe valid hai (300 Hobby pe build fail karta hai) — ek giant request slow link pe
-aadhe me kat sakti thi; chhote chunks CDN ke long-connection cutoffs se bhi bachte hain.
-Server 200 (no Range) de to whole-file bhi accept hota hai.
+`downloadTrackFlow()` chaaron download affordances ka **single funnel** hai — `TrackRow` (track list),
+`TrackMenu` (context menu), `FullPlayer` (player controls), aur auto-download-on-like. Gate isi function me
+lagaya gaya hai, isliye **koi UI file, icon ya layout touch nahi hua** — click pe sirf toast aata hai:
 
-Update 1.6 se ye downloader **resume karne wala** hai, restart karne wala nahi:
-- **Body streaming:** har response `getReader()` se slice-by-slice padha jata hai (`arrayBuffer()` se nahi).
-  Isse do cheezein milti hain — live percentage (har ~64 kB pe) aur aadhe toote transfer ke bytes bach jaate hain.
-- **Per-chunk retry (4 attempts):** har attempt `offset()` **dobara padhta hai**, yaani retry us byte se shuru hota
-  hai jahan tak data aaya tha. Pehle `arrayBuffer()` ka throw poora download maar deta tha — mobile pe
-  "Downloading… → Download failed" ka asli reason yahi tha. Backoff: progress mila ho to 250 ms, warna 800/1600/2500 ms.
-- **Inactivity watchdog (20 s):** jo request chup ho gayi (black-hole connection) wo abort hoti hai aur wahin se
-  resume hoti hai; saare attempts chup rahein to honest "Download stalled". Iske bina progress toast hamesha ke liye
-  ghoomta rehta.
-- **Integrity guards:** `Content-Range` ka start pichhle offset se match karna chahiye (warna hole), aur total
-  mid-download badle (re-resolve ne doosra format pakad liya) to do files splice hone ke bajaye download restart.
-  Truncated file cache nahi hoti — `Download incomplete (NN%)`.
-- **Size probe (parallel, non-blocking):** JSON mode se `content_length` milta hai, jisse percentage pehle hi byte se
-  honest hai; saath hi server-side resolver warm ho jata hai.
-- **Ek aur poori koshish:** `downloadWithRetry()` — chunk-level retries khatam hone ke baad ek second pass
-  ("Connection lost — retrying…"), kyunki 503 burst / Wi-Fi→mobile handover aksar doosri baar me nikal jata hai.
+> **"Download feature is coming soon! 🚀"**
 
-**Progress UI:** `src/components/DownloadButton.tsx` — ek hi component teeno jagah (TrackRow ⬇, FullPlayer ⬇,
-Downloads page "Save to device"). Download ke dauraan icon ki jagah **ring + live percentage** dikhta hai, aur
-saath me ek sticky toast (`duration: 0`) wahi % dikhata rehta hai (`useUi.updateToast`). Pehle sirf TrackRow pe
-number tha — FullPlayer/menu se download karne pe "Downloading…" ke baad kuch nahi dikhta tha.
-
-**Local mirror (`localLibrary.ts` → `downloads`):** save ka metadata device pe bhi rakha jata hai aur
-`/api/downloads` se merge hota hai; `downloadedIds` ab IndexedDB keys se bhi banta hai. Matlab DB ke bina (ya offline)
-bhi Downloads page aur ✓ sahi rehte hain — pehle save ho jaata tha aur app me kahin dikhta hi nahi tha.
-Metadata POST fail ho to bhi download cancel nahi hota.
-
-Tests: `tests/download.test.cjs` (16) + `tests/localDownloads.test.cjs` (7) + `tests/streamProxy.test.cjs` (5 —
-**asli** `/api/stream` route handler + **asli** downloader, real HTTP pe, mock googlevideo ke against).
-
-**Server side:** `/api/stream?video_id=…&play=1&download=1[&title=&artist=]` wahi bytes
-`Content-Disposition: attachment; filename="…"; filename*=UTF-8''…` ke saath deta hai (direct link / curl ke liye);
-JSON mode ab `mime_type`, `content_length`, `download_url` bhi lautata hai.
-
-**Quality label:** Settings ka "Download quality" sirf **tag** hai — file exactly waisi save hoti hai jaisi stream
-hoti hai (best AAC, aam taur pe 128 kbps). Koi transcode nahi.
+- Auto-download-on-like `{ silent: true }` ke saath call hota hai, taaki har like pe toast spam na ho.
+- Heavy IndexedDB blob-streaming path ab execute hi nahi hota (dead-but-intact — flag flip karte hi wapas).
+- Jo tracks pehle se downloaded hain unka **offline playback abhi bhi chalta hai**: `offlineDb.ts` ke reads
+  aur `audioEngine.chooseMode()` ka `downloadedIds` → `offlineObjectUrl()` → native deck path untouched hai.
+- Downloads page pe purane rows ki delete/clear bhi kaam karta hai (`removeDownloadEverywhere`, `clearAllDownloads`).
+- `/api/downloads` GET/DELETE intact hai; POST ab client se call hi nahi hota.
 
 ## 6. Lyrics — static + synced (LRC)
 
@@ -604,8 +548,7 @@ Dev-only (app shell me link nahi): `/dev/lyrics-sync` — synced-lyrics playgrou
 `Providers` (QueryClient + ThemeApplier + EngineBootstrap + PlatformBootstrap + DataSync) · `Sidebar` (+`MobileNav`) ·
 `MiniPlayer` · `FullPlayer` (queue Reorder, EQ panel, speed, sleep, video mode, lyrics panel) · `SeekBar` ·
 `LyricsView` (+`LyricsModeToggle`) · `CopyLyricsButton` · `TrackRow` · `TrackMenu` · `cards` (AlbumCard/ArtistCard) ·
-`controls` (PlayButton/Toggle) · `DownloadButton` (progress ring + live %) · `Modals` (AddToPlaylist + SleepTimer) ·
-`Toasts` · `Section` · `SidifyLogo` (+`LiveEq`)
+`controls` (PlayButton/Toggle) · `Modals` (AddToPlaylist + SleepTimer) · `Toasts` · `Section` · `SidifyLogo` (+`LiveEq`)
 
 ---
 
@@ -632,9 +575,8 @@ ESLint `9.39.4` (flat config) + `eslint-config-next/core-web-vitals` · `drizzle
    `/api/home` sirf cache key ke liye use karta hai. (Ab chaaho to `Innertube.create({ location })` se wire ho sakta hai.)
 7. **"Cast to device" aur "Car mode" buttons stub hain** — sirf toast, koi Chromecast/AirPlay/Android Auto code nahi.
 8. **Explicit filter no-op hai** — InnerTube search se reliable explicit flag nahi milta.
-9. **Download quality setting cosmetic hai** — `pickAudioFormat()` hamesha best audio leta hai (aam taur pe
-   128 kbps AAC), bitrate selection nahi; setting sirf download ko *tag* karti hai.
-   **"Download on Wi-Fi only" toggle bhi abhi no-op hai** — koi network-type gate wire nahi kiya gaya.
+9. **Download quality setting cosmetic hai** — downloads abhi gated hain; re-enable karne pe bhi `chooseFormat`
+   hamesha best audio leta hai, bitrate selection nahi.
 10. **`node:vm` security sandbox nahi hai.** Evaluate hone wala script YouTube ka player code hai (TLS se aata hai)
     aur `timeout` guard hai — par ise isolation mat samajhna. Isliye ye routes Edge pe nahi, sirf Node runtime pe chalte hain.
 11. Unused deps: `clsx`, `dotenv`. Package name abhi bhi `nextjs-postgresql-template`.
@@ -790,141 +732,6 @@ Gehre navigation stack me (play → kai pages navigate) dusra Back guard hata de
 entries ki wajah se poora exit ek aur Back maang sakta hai; agla same-URL Back naya cycle shuru
 karta hai. Chrome plain tab me exit ke baad audio rukega hi (WebAPK/TWA me background chalta hai).
 
-## 15.9 Update 1.4 (27 Sept 2026) — visibility-aware playback + plain-audio handoff
-
-**Report / diagnosis:** video mode ON me Back se full player band karne ya screen-off par
-Chrome offscreen YouTube iframe ko pause kar sakta hai. App/session zinda rehne ke bawajood
-audio rukta tha; ye §15.7–15.8 ke page-unload guard se alag transport issue hai.
-
-**Fix — `src/lib/engineMode.ts` + `src/lib/audioEngine.ts`:**
-
-- Pure `decideEngineAction()` video tabhi maangta hai jab preference ON, full player open,
-  document visible, track me video aur embed unblocked ho. Back/hidden/audio preference par
-  iframe → native; visible player reopen par native → iframe; wanted paused iframe → resume.
-  Paused/loading/uninitialized transport ko policy start nahi karti.
-- `chooseMode()` ab visibility-aware `videoWanted()` use karta hai. Reconciliation existing
-  `playIndex(index, { resumeMs })` se hoti hai; live media clock capture hota hai taaki hidden
-  tab ke stale UI ticks se position peeche na jaye. Visibility, player-open/video preference,
-  loading completion aur watchdog triggers wired hain. Normal attempts me **1200 ms throttle**,
-  forced UI/visibility triggers throttle bypass karte hain; failed/mismatched switch me
-  **30 s cooldown** (force bhi respect karta hai). Embed startup exception video ko **60 s**
-  block karti hai. Native fallback ab engine state bhi correctly update karta hai.
-- **Plain `<audio>` fallback sirf hidden + playing + native + AudioContext non-running par**.
-  Running graph ko touch nahi karte (unnecessary second request/re-buffer gap avoid).
-  Same source/position ek element me jaate hain jo `createMediaElementSource` se kabhi nahi
-  judta; decks pause, pending crossfade cancel. AudioContext state change + **3 s hidden watch**
-  delayed suspension detect karte hain. Hidden native startup suspended `resume()` ka wait
-  nahi karta. Visible return par context resume + live position restore karke deck wapas.
-- Toggle/seek/previous, progress, watchdog, repeat/end/sleep, volume/speed/normalization aur
-  deck cleanup plain element ko respect karte hain. EQ/pan/crossfade plain path me unavailable;
-  foreground deck par DSP wapas. Stale iframe events / async handoffs newer track ko nahi rok sakte.
-- `setVideoMode()` sirf preference set + reconciliation karta hai; separate manual restart removed.
-
-**Tests:** `tests/engineMode.test.cjs` pure policy ki har branch + plain predicate ke saare
-combinations; `tests/audioEngine.test.cjs` actual transpiled transport with deterministic DOM,
-media/context, timers and store doubles (Back/screen-off, controls, restore, stale async work,
-failed engine cooldown, throttle, autoplay/end/sleep). Existing node:test + TypeScript pattern.
-
-**Limits / device smoke check:** real Android Chrome me video play → Back → screen-off → unlock
-→ player reopen test karna ab bhi zaroori hai; mocks OS suspension/autoplay policy prove nahi
-karte. Native playback ke liye working `/api/stream` extraction ya downloaded audio chahiye;
-extraction unavailable ho to existing iframe fallback background guarantee nahi de sakta.
-Browser/OS tab kill aur heavily throttled background timers ko web app prevent nahi kar sakti.
-
-## 15.10 Update 1.5 (27 Sept 2026) — background playback on phones (plain-audio handoff + recovery + engine report)
-
-**Report:** "Back karne ke baad ya screen-off ke baad gaana pause ho jata hai; sirf Brave browser me chalta hai —
-kahi WebView se to nahi chal raha? TWA ya Flutter me browser-like app bana loon?"
-
-**Diagnosis (browser rule, app wrapper nahi):** Chromium mobile me `<audio>` background me chalta rehta hai,
-lekin `<video>` (aur YouTube **iframe embed**, jo andar video banata hai) hidden hote hi pause hota hai. Brave apni
-*Settings → Media → Background play* setting se ye override karta hai — isliye "sirf Brave" pattern bana. Sidify
-ka iframe fallback (jab `/api/stream` extraction server IP pe block ho) wahi case hai jo Chrome me rukta hai; aur
-`createMediaElementSource` wala element background me "audible" nahi rehta, isliye Web Audio graph bhi silent ho
-sakta hai — phones pe ye **bina koi AudioContext state event** hota hai, to purana "suspend hone ka wait karo"
-handoff miss ho jata tha.
-
-**Fix — `src/lib/engineMode.ts` + `src/lib/audioEngine.ts` + naya `src/lib/playbackDiag.ts`:**
-
-- `needsPlainElement({ hidden, playing, engine, ctxRunning, mobile })` — mobile par **hamesha** handoff
-  (`mobile || !ctxRunning`); desktop par graph chalta rehta hai (EQ + re-buffer gap bacha ke). Mobile detect:
-  Android/iPhone/iPad/iPod/Mobile/SamsungBrowser UA, plus iPadOS (Macintosh + `maxTouchPoints > 1`).
-- Handoff **pehle** hota hai jab tab freeze na hua ho — frozen background tab recovery chala hi nahi sakti.
-  `handoffToPlainAudio()` same URL + live position copy karta hai, decks pause + gains reset, aur plain element
-  `createMediaElementSource` se kabhi nahi judta.
-- **Hidden-pause recovery:** deck/plain/iframe ke `pause` events → `noteHiddenPause` (visible ya khud ka pause ho to
-  ignore; "plain" bina element, "deck" jab plain active — dono skip). Pure decision
-  `decideHiddenPauseRecovery({ hidden, wantedPlaying, engine, plainActive, plainPaused, attempts })` →
-  `plain-handoff | plain-resume | iframe-resume | none`, per hidden window **max 2 attempts**, user pause se koi
-  fight nahi. Attempts `playIndex` aur har `visibilitychange` pe reset.
-- **Media Session sync:** `updateMediaSessionState()` — `playbackState` (playing/paused, try/catch) + 1 Hz
-  `setPositionState({ duration, position (clamped), playbackRate })`; visibility, `isPlaying` store change aur
-  dono progress loops (native + iframe) se call. Media-key handlers ab `diagLog("mediakey", …)` bhi karte hain —
-  notification se pause ka evidence milta hai.
-- **Diagnostics (`src/lib/playbackDiag.ts`):** 90-event ring buffer (`diagLog`/`diagClear`/`diagEvents`),
-  `formatEvents`, `buildReport({ fields, list, now })`. Engine events: `visibility`, `mode`, `plain-handoff`,
-  `plain-handoff-failed`, `deck-restore`, `PAUSE-WHILE-HIDDEN`, `recover`, `recover-failed`, `mediakey`.
-  `getEngineDiag()` live status deta hai (`idle | native-plain | native-graph | embed` + `backgroundSafe`),
-  `playbackReport()` clipboard-ready report banata hai.
-- **UI:** Settings → System me naya **“Playback engine”** row (`src/components/PlaybackStatusRow.tsx`) — live
-  status + Background-safe / Pauses off-screen pill, “Copy report” button, embed case me “Fix” (background guide).
-  Guide (`UpdatePopups`) me honest note: PWA/TWA/WebView install browser rules nahi badalte; changelog
-  `Minor update 1.5`.
-
-**Tests:** `tests/engineMode.test.cjs` 13 (mobile-aware `needsPlainElement` ke saare combinations + recovery
-policy ke dono cases), `tests/audioEngine.test.cjs` 18 (4 naye: mobile screen-off par graph chalta hote hue bhi
-handoff; plain element ka OS pause do baar resume; notification pause se fight nahi; hidden iframe pause ka
-resume jab native unavailable), naya `tests/playbackDiag.test.cjs` 5 (stamp, order/clear, 90-event cap, report
-format, empty buffer). Harness me `./playbackDiag` stub aur `ua` option add hua.
-
-**Limits / device smoke check:** TWA/WebAPK wahi Chromium engine hai — screen-off rule nahi badalta; WebView
-wrapper mein to media app invisible hote hi pause hota hai (native foreground service ke bina). Agar kisi track ka
-native extraction server IP pe blocked hai to playback iframe pe rahega aur Chrome usse screen-off pe rokega —
-us case ke liye Settings row amber dikhata hai aur Brave/native app recommend karta hai (asli fix server-side
-extraction hai). Real Android phone pe: play → screen off → engine row “plain element” check → “Copy report”.
-
-## 15.11 Update 1.6 (27 Sept 2026) — gaana jaldi shuru + download jo poora hota hai (live %)
-
-Do shikayat thi: **(a)** play dabane pe gaana aane me time lagta tha, **(b)** download "Downloading…" dikhata tha,
-phir kuch nahi, phir "Download failed".
-
-### Playback — pehla byte jaldi
-
-1. **`src/instrumentation.ts` (naya):** `register()` instance startup pe `warmEngine()` chalata hai — InnerTube
-   session + `base.js` (jo `n` throttle token decipher karta hai) **request se pehle** boot ho jata hai. Yehi 2-5 s
-   pehle user ke pehle click ke andar jaate the, aur cold instance pe har 2 MB download chunk ke andar bhi.
-   Fire-and-forget hai (`getYT()` ka in-flight promise share hota hai), `NEXT_RUNTIME`/`NEXT_PHASE` guarded,
-   kabhi throw nahi karta. Dev log me ye dikhta hai: server "Ready" ke turant baad `[sidify] full InnerTube session…`.
-2. **Resolver prefetch (`prefetchTrack`, `audioEngine.ts`):** TrackRow pe `onPointerEnter` (desktop hover) aur
-   `onPointerDown` (phone — click se pehle) par `/api/stream?video_id=…` (JSON mode) chal jata hai. Isse click tak
-   resolver cache warm ho jata hai **aur** native/iframe ka faisla pehle ho jata hai, yaani `probeNative()` ka
-   2.5 s wait pehle gaane pe nahi lagta. Video-id pe dedupe (hover+touch+click = 1 request), max 2 in-flight,
-   downloaded tracks skip. `warmStart()` session-restore wale track ke liye yahi idle-time pe karta hai.
-3. **Gapless preload ab waste nahi hota:** pehle `preloadNextSoon()` idle deck me next track buffer karta tha, phir
-   `playNative()` hamesha *active* deck pe naya `src` set karke wo buffer phek deta tha (sirf crossfade use karta tha).
-   Ab deck pe `srcUrl`/`preloadId` bookkeeping hai: agar idle deck pe wahi track buffered hai to `active` swap ho jata
-   hai aur **koi nayi request nahi jaati** (`preload-hit` diag). Same-src re-assignment bhi skip hota hai
-   (element errored ho tab hi reload).
-4. **Preload jaldi shuru:** `readyToPreload()` — track poora buffered ho, ya <25 s bache ho **aur** 20 s buffer me ho.
-   Pehle 9 s tha, jo resolve khatam hone ke liye kaafi nahi tha. Bandwidth contest wala purana rule barkarar:
-   jab current track ke paas headroom nahi, tab preload nahi (`tests/audioEngine.test.cjs` #22 wahi pin karta hai).
-
-### Downloads — poora hone wala, dikhta hua
-
-Section 5 me detail hai. Short me: body streaming + per-chunk resume + 4 attempts + 20 s inactivity watchdog +
-range/length integrity guards + truncated-file rejection; UI me `DownloadButton` ka **ring + live percentage**
-(teeno jagah) aur sticky toast jo wahi % dikhata hai; metadata ka local mirror taaki DB ke bina bhi save dikhe.
-
-**Jo actually fix hua:** `fetchWithRetry()` sirf `fetch()` call ko retry karta tha — `res.arrayBuffer()` body ke
-dauraan tootne pe (mobile pe normal) exception seedha `downloadTrackFlow` ke catch me jaata tha aur poora download
-"Download failed" ban jaata tha. Ab bytes stream hote hain aur retry wahin se continue karta hai.
-
-**Verify:** `npm test` → 128 pass (naye: download 16, localDownloads 7, streamProxy 5, audioEngine +4).
-`tests/streamProxy.test.cjs` **asli** route handler ko real HTTP pe chalata hai (mock googlevideo ke against) —
-Range passthrough, 403→re-resolve, 503 error text, `.m4a` attachment. `npx tsc --noEmit` clean; `eslint` baseline
-se unchanged. YouTube/Google Fonts is sandbox se blocked hain, isliye real-YT end-to-end yahan nahi chal sakta —
-`next build` sirf font fetch pe ruka (dev server fallback fonts ke saath chalta hai).
-
 ## 16. TL;DR stack list
 
 ```
@@ -935,12 +742,9 @@ PostgreSQL · Drizzle ORM 0.45 · pg 8.20 · drizzle-kit
 youtubei.js 18 (InnerTube) · custom node:vm decipher evaluator · Platform.load shim override
 InnerTube clients: YTMUSIC (search) · ANDROID/TV_SIMPLY/YTMUSIC_ANDROID/MWEB/WEB (streaming)
 Web Audio API (dual-deck, 5-band biquad EQ, StereoPanner, crossfade)
-IndexedDB (offline audio) · Downloads enabled: offline cache + "Save to device"
-  (resumable chunked Range fetch · live % ring · inactivity watchdog · local metadata mirror · honest .m4a/.webm)
-instrumentation.ts engine warm-up · resolver prefetch (hover/touchstart) · gapless preload deck reuse
+IndexedDB (offline audio — reads live, writes gated) · Downloads currently disabled ("coming soon")
 YouTube IFrame Player API (hidden-harbor singleton)
 Lyrics: LRCLIB (+lyrics.ovh fallback) · hand-rolled LRC parser · rAF media clock for line-synced highlighting
-Media Session API (playbackState + position state) · playback diagnostics (ring buffer + copyable report)
-IndexedDB (offline audio) · Service Worker (hand-written) · Web App Manifest (PWA)
+Media Session API · IndexedDB (offline audio) · Service Worker (hand-written) · Web App Manifest (PWA)
 ESLint 9 (flat) · PostCSS 8
 ```

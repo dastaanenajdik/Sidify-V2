@@ -19,14 +19,13 @@
  * are parked in `extras[playlistId]` and folded back in on read.
  */
 
-import type { Artist, DownloadRow, FollowedArtistRow, PlaylistRow, Track } from "./types";
+import type { Artist, FollowedArtistRow, PlaylistRow, Track } from "./types";
 
 const KEY = "sidify-local-library";
 const MAX_LIKED = 500;
 const MAX_RECENT = 50;
 const MAX_FOLLOWED = 200;
 const MAX_BLOCKED = 200;
-const MAX_DOWNLOADS = 400;
 
 /**
  * After a failure we stop knocking on the same dead endpoint for a short while (so a
@@ -52,8 +51,6 @@ interface LocalLib {
   plRemoved: Record<string, string[]>;
   followed: (Artist & { _followedAt?: number })[];
   blocked: { artistId: string; name: string; blockedAt: string }[];
-  /** Offline saves on this device (metadata for the IndexedDB blobs). */
-  downloads: DownloadRow[];
   nextLocalId: number;
 }
 
@@ -66,7 +63,6 @@ const EMPTY: LocalLib = {
   plRemoved: {},
   followed: [],
   blocked: [],
-  downloads: [],
   nextLocalId: -1,
 };
 
@@ -95,7 +91,7 @@ function read(): LocalLib {
   if (!ssafe()) return { ...EMPTY };
   const raw = window.localStorage.getItem(KEY) || "";
   if (cache && cache.raw === raw) return cache.data;
-  let data: LocalLib = { ...EMPTY, liked: [], recent: [], playlists: [], extras: {}, plRemoved: {}, followed: [], blocked: [], likedRemoved: [], downloads: [] };
+  let data: LocalLib = { ...EMPTY, liked: [], recent: [], playlists: [], extras: {}, plRemoved: {}, followed: [], blocked: [], likedRemoved: [] };
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as Partial<LocalLib>;
@@ -108,7 +104,6 @@ function read(): LocalLib {
         followed: Array.isArray(parsed.followed) ? parsed.followed : [],
         blocked: Array.isArray(parsed.blocked) ? parsed.blocked : [],
         likedRemoved: Array.isArray(parsed.likedRemoved) ? parsed.likedRemoved : [],
-        downloads: Array.isArray(parsed.downloads) ? parsed.downloads : [],
         extras: parsed.extras && typeof parsed.extras === "object" ? parsed.extras : {},
         plRemoved: parsed.plRemoved && typeof parsed.plRemoved === "object" ? parsed.plRemoved : {},
         nextLocalId: typeof parsed.nextLocalId === "number" && parsed.nextLocalId < 0 ? parsed.nextLocalId : -1,
@@ -346,65 +341,6 @@ export function playlistLocal(id: number, server: PlaylistRow | null): PlaylistR
 
 export function localPlaylistIds(): number[] {
   return read().playlists.map((p) => p.id);
-}
-
-/* ------------------------------- downloads ------------------------------- */
-
-/**
- * Downloads live in IndexedDB on this device — the server row is only metadata for the
- * list. Keeping a local copy of that metadata means a backend without a database (or an
- * offline device) still shows the songs that are actually saved, instead of an empty
- * Downloads page right after a successful save.
- */
-export function downloadSavedLocal(track: Track, quality: string, sizeBytes: number) {
-  write((d) => {
-    const rest = (d.downloads ?? []).filter((r) => r.trackId !== track.id);
-    d.downloads = [
-      { trackId: track.id, track, quality: quality || "high", sizeBytes: sizeBytes || 0, downloadedAt: new Date().toISOString() },
-      ...rest,
-    ].slice(0, MAX_DOWNLOADS);
-  });
-}
-
-export function downloadRemovedLocal(trackId: string) {
-  write((d) => {
-    d.downloads = (d.downloads ?? []).filter((r) => r.trackId !== trackId);
-  });
-}
-
-export function clearDownloadsLocal() {
-  write((d) => {
-    d.downloads = [];
-  });
-}
-
-export function downloadsLocal(): DownloadRow[] {
-  return [...(read().downloads ?? [])];
-}
-
-export function downloadedIdsLocal(): string[] {
-  return (read().downloads ?? []).map((r) => r.trackId);
-}
-
-/**
- * Server rows first (they carry the newest size/quality), then anything this device
- * saved that the server never heard about. Deduplicated by track id.
- */
-export function mergeDownloads(server: DownloadRow[]): DownloadRow[] {
-  const out: DownloadRow[] = [];
-  const seen = new Set<string>();
-  for (const r of server) {
-    if (!r?.trackId || seen.has(r.trackId)) continue;
-    seen.add(r.trackId);
-    out.push(r);
-  }
-  for (const r of read().downloads ?? []) {
-    if (!r?.trackId || seen.has(r.trackId)) continue;
-    seen.add(r.trackId);
-    out.push(r);
-  }
-  out.sort((a, b) => (b.downloadedAt || "").localeCompare(a.downloadedAt || ""));
-  return out;
 }
 
 /* ----------------------------- artists / blocks ---------------------------- */
