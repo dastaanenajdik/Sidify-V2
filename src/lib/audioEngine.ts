@@ -8,6 +8,7 @@ import { offlineObjectUrl } from "./offlineDb";
 import { api } from "./clientApi";
 import { emitRefresh } from "./refreshBus";
 import { ytController } from "./ytPlayer";
+import { decideEngineAction, needsPlainElement } from "./engineMode";
 
 /* ------------------------------------------------------------------ */
 /* Sidify transport engine.                                             */
@@ -43,6 +44,16 @@ let nativeCapable: boolean | null = null;
 let nativeProbeAt = 0;
 let errorSkips = 0;
 let ytWired = false;
+let videoBlockedUntil = 0;
+let lastModeSwitchAt = -Infinity;
+let modeCooldownUntil = 0;
+let modeSwitching = false;
+let modeRecheck = false;
+// This element must NEVER be passed to createMediaElementSource: a suspended graph
+// silences even an otherwise-playing media element connected to it.
+let plainAudio: HTMLAudioElement | null = null;
+let restoringPlain: HTMLAudioElement | null = null;
+let hiddenWatch: ReturnType<typeof setInterval> | null = null;
 const recentRecorded = new Map<string, number>();
 const playHistory: number[] = [];
 
@@ -96,6 +107,9 @@ function ensureCtx() {
   master.connect(panner);
   panner.connect(actx.destination);
   decks = [createDeck(0), createDeck(1)];
+  actx.addEventListener("statechange", () => {
+    if (document.visibilityState === "hidden") watchHiddenPlayback();
+  });
   applySettings();
 }
 
@@ -118,10 +132,10 @@ function createDeck(i: number): Deck {
   postGain.connect(master!);
 
   el.addEventListener("ended", () => {
-    if (i === active && !fading && !isIframeMode()) void handleEnded();
+    if (i === active && !plainAudio && !fading && !isIframeMode()) void handleEnded();
   });
   el.addEventListener("error", () => {
-    if (i === active && !isIframeMode()) handleTrackError();
+    if (i === active && !plainAudio && !isIframeMode()) handleTrackError();
   });
 
   return { el, filters, postGain, trackId: null };
@@ -140,6 +154,10 @@ export function applySettings() {
     master!.gain.setTargetAtTime(p.volume * normFactor, actx.currentTime, 0.03);
     panner!.pan.setTargetAtTime(s.balance, actx.currentTime, 0.03);
   }
+  if (plainAudio) {
+    plainAudio.volume = p.volume * (s.normalization ? 0.82 : 1);
+    plainAudio.playbackRate = p.speed;
+  }
   ytController.setVolume(p.volume);
   ytController.setRate(p.speed);
 }
@@ -152,7 +170,167 @@ function ramp(node: AudioParam, to: number, secs: number) {
   node.linearRampToValueAtTime(to, now + Math.max(0.05, secs));
 }
 
+/* ---------------------- background native audio ----------------------- */
+
+function nativeElement(): HTMLAudioElement | undefined {
+  return plainAudio ?? decks[active]?.el;
+}
+
+function stopPlainAudio() {
+  const el = plainAudio;
+  plainAudio = null;
+  restoringPlain = null;
+  if (!el) return;
+  el.pause();
+  el.removeAttribute("src");
+  el.load();
+}
+
+function shouldUsePlainAudio() {
+  return needsPlainElement({
+    hidden: document.visibilityState === "hidden",
+    playing: P().isPlaying,
+    engine: P().engineMode,
+    ctxRunning: actx?.state === "running",
+  });
+}
+
+async function handoffToPlainAudio() {
+  const deck = decks[active];
+  if (plainAudio || !deck?.trackId || !deck.el.src || !shouldUsePlainAudio()) return;
+  const el = new Audio();
+  el.preload = "auto";
+  el.src = deck.el.src;
+  el.currentTime = deck.el.currentTime;
+  plainAudio = el;
+  if (crossfadeTimer) clearTimeout(crossfadeTimer);
+  crossfadeTimer = null;
+  fading = false;
+  for (const d of decks) d.el.pause();
+  for (const d of decks) d.postGain.gain.cancelScheduledValues(actx!.currentTime);
+  decks[1 - active].postGain.gain.value = 0;
+  deck.postGain.gain.value = 1;
+  applySettings();
+  el.addEventListener("ended", () => {
+    if (plainAudio === el && !isIframeMode()) void handleEnded();
+  });
+  el.addEventListener("error", () => {
+    if (plainAudio === el && !isIframeMode()) handleTrackError();
+  });
+  try {
+    await el.play();
+  } catch {
+    // A track change/stop can abort this play promise. Never stop its replacement.
+    if (plainAudio !== el) return;
+    P().set({ isPlaying: false, isLoading: false });
+  }
+}
+
+async function restoreNativeDeck() {
+  const el = plainAudio;
+  if (!el || !actx || restoringPlain === el) return;
+  restoringPlain = el;
+  const seq = playSeq;
+  try {
+    await actx.resume();
+    if (plainAudio !== el || seq !== playSeq || isIframeMode() ||
+        document.visibilityState !== "visible" || actx.state !== "running") return;
+    const deck = decks[active];
+    const position = el.currentTime;
+    el.pause();
+    deck.el.currentTime = position;
+    stopPlainAudio();
+    P().set({ positionMs: position * 1000 });
+    if (P().isPlaying) {
+      try {
+        await deck.el.play();
+      } catch {
+        if (seq === playSeq && !plainAudio) P().set({ isPlaying: false });
+      }
+    }
+  } catch {
+    // Keep the plain element playing if the browser still refuses the graph.
+  } finally {
+    if (restoringPlain === el) restoringPlain = null;
+  }
+}
+
+function watchHiddenPlayback() {
+  if (document.visibilityState !== "hidden") return;
+  void reconcileEngineMode();
+  if (!P().isLoading) void handoffToPlainAudio();
+  const el = nativeElement();
+  if (!isIframeMode() && !P().isLoading && el && decks[active]?.trackId) {
+    P().set({ positionMs: el.currentTime * 1000 });
+  }
+}
+
+function startHiddenWatch() {
+  if (!hiddenWatch) hiddenWatch = setInterval(watchHiddenPlayback, 3000);
+  watchHiddenPlayback();
+}
+
 /* ------------------------- mode selection ----------------------------- */
+
+function videoWanted() {
+  const s = P();
+  return s.videoMode && s.fullPlayerOpen && document.visibilityState === "visible" &&
+    Date.now() >= videoBlockedUntil;
+}
+
+async function reconcileEngineMode(force = false) {
+  if (modeSwitching) {
+    modeRecheck ||= force;
+    return;
+  }
+  let s = P();
+  const now = Date.now();
+  const action = decideEngineAction({
+    playing: s.isPlaying,
+    loading: s.isLoading,
+    engine: s.engineMode,
+    videoMode: s.videoMode,
+    playerOpen: s.fullPlayerOpen,
+    appVisible: document.visibilityState === "visible",
+    hasVideo: !!currentTrack(s)?.videoId,
+    iframePaused: ytController.getPlayerState() === 2,
+    videoBlocked: now < videoBlockedUntil,
+  });
+  if (action === "none" || now < modeCooldownUntil || (!force && now - lastModeSwitchAt < 1200)) return;
+  lastModeSwitchAt = now;
+  if (action === "resume-video") {
+    ytController.resume();
+    return;
+  }
+  // rAF is stopped in the background and the hidden watch only ticks every 3s.
+  // Capture the live transport clock before switching, not its last UI sample.
+  const track = currentTrack(s);
+  if (isIframeMode() && ytController.currentVideoId === track?.videoId) {
+    s.set({ positionMs: ytController.getTime() * 1000 });
+  } else if (s.engineMode === "native" && decks[active]?.trackId === track?.id) {
+    s.set({ positionMs: nativeElement()!.currentTime * 1000 });
+  }
+  s = P();
+  modeSwitching = true;
+  const expected = action === "play-video" ? "iframe" : "native";
+  const seq = playSeq + 1;
+  try {
+    await playIndex(s.index, { resumeMs: s.positionMs });
+    // chooseMode may fall back to iframe when extraction is unavailable. That is
+    // also a failed switch: do not reload the same song every watchdog tick.
+    if (seq === playSeq && (P().engineMode !== expected || !P().isPlaying)) {
+      modeCooldownUntil = Date.now() + 30_000;
+    }
+  } catch {
+    if (seq === playSeq) modeCooldownUntil = Date.now() + 30_000;
+  } finally {
+    modeSwitching = false;
+    if (modeRecheck) {
+      modeRecheck = false;
+      void reconcileEngineMode(true);
+    }
+  }
+}
 
 /**
  * "Can this environment extract full-length audio?" is answered by probing /api/stream.
@@ -208,7 +386,7 @@ async function chooseMode(track: Track, seq: number): Promise<"native" | "iframe
     const local = await offlineObjectUrl(track.id);
     if (local) return "native";
   }
-  if (P().videoMode) return "iframe";
+  if (videoWanted() && track.videoId) return "iframe";
   if (!track.videoId) return null;
   const cap = await probeNative(track);
   if (seq !== playSeq) return null;
@@ -247,6 +425,7 @@ export async function playIndex(i: number, opts?: { resumeMs?: number }) {
     crossfadeTimer = null;
   }
   fading = false;
+  stopPlainAudio();
   unlockEngine();
 
   usePlayer.getState().set({
@@ -280,12 +459,15 @@ async function playIframe(track: Track, seq: number, resumeMs: number) {
     await ytController.playVideo(track.videoId!, Math.floor(resumeMs / 1000));
   } catch {
     if (seq !== playSeq) return;
+    videoBlockedUntil = Date.now() + 60_000;
     // The embed engine itself failed (blocked script, offline, extension). If direct
     // extraction is available, use it instead of giving up on the track.
     if (await probeNative(track)) {
+      if (seq !== playSeq) return;
       await playNative(track, P().index, seq, resumeMs);
       return;
     }
+    if (seq !== playSeq) return;
     usePlayer.getState().set({ isPlaying: false, isLoading: false });
     toast("Couldn't start the YouTube player");
     return;
@@ -304,7 +486,9 @@ async function playIframe(track: Track, seq: number, resumeMs: number) {
 }
 
 async function playNative(track: Track, i: number, seq: number, resumeMs: number) {
+  if (seq !== playSeq) return;
   ensureCtx();
+  P().set({ engineMode: "native" });
   ytController.pause();
   const to = decks[active];
   const from = decks[1 - active];
@@ -326,14 +510,25 @@ async function playNative(track: Track, i: number, seq: number, resumeMs: number
   }
 
   if (seq !== playSeq) return;
+  stopPlainAudio();
+  to.el.pause();
   to.el.src = url;
   to.el.playbackRate = P().speed;
   to.trackId = track.id;
   to.postGain.gain.value = 1;
-  if (resumeMs > 1000) to.el.currentTime = resumeMs / 1000;
+  to.el.currentTime = Math.max(0, resumeMs / 1000);
   try {
-    await actx!.resume();
-    await to.el.play();
+    if (shouldUsePlainAudio()) {
+      await handoffToPlainAudio();
+    } else {
+      await actx!.resume();
+      if (seq !== playSeq) return;
+      // The hidden watch may have handed off while resume() was pending.
+      if (!plainAudio) {
+        if (shouldUsePlainAudio()) await handoffToPlainAudio();
+        else await to.el.play();
+      }
+    }
   } catch (err) {
     if (seq !== playSeq) return;
     // Decoding/container failures are engine-specific, not track-specific: give this
@@ -373,9 +568,11 @@ function armIframeStartCheck(track: Track, seq: number, resumeMs: number) {
       if (seq !== playSeq || !s.isPlaying || !isIframeMode()) return;
       if (ytController.getPlayerState() !== -1) return; // started or buffering - both fine
       if (await probeNative(track)) {
+        if (seq !== playSeq) return;
         void playNative(track, s.index, seq, resumeMs);
         return;
       }
+      if (seq !== playSeq) return;
       usePlayer.getState().set({ isPlaying: false, isLoading: false });
       toast("Playback couldn't start", "Tap play again, or try another song");
     })();
@@ -383,6 +580,7 @@ function armIframeStartCheck(track: Track, seq: number, resumeMs: number) {
 }
 
 function stopDecks() {
+  stopPlainAudio();
   if (crossfadeTimer) {
     clearTimeout(crossfadeTimer);
     crossfadeTimer = null;
@@ -400,11 +598,22 @@ function wireYt() {
   if (ytWired) return;
   ytWired = true;
   ytController.setCallbacks({
-    onEnded: () => void handleEnded(),
-    onState: (playing) => {
-      if (isIframeMode()) P().set({ isPlaying: playing });
+    onEnded: () => {
+      if (isIframeMode() && !P().isLoading) void handleEnded();
     },
-    onError: () => handleTrackError(),
+    onState: (playing) => {
+      if (!isIframeMode() || P().isLoading) return;
+      // Offscreen iframe pauses are browser policy, not a user pause. Preserve
+      // playback intent so the visibility/player-close handoff can still run.
+      if (!playing && P().isPlaying && !videoWanted()) {
+        void reconcileEngineMode(true);
+        return;
+      }
+      P().set({ isPlaying: playing });
+    },
+    onError: () => {
+      if (isIframeMode() && !modeSwitching) handleTrackError();
+    },
   });
 }
 
@@ -502,9 +711,9 @@ export async function togglePlay() {
   if (!track) return;
 
   if (isIframeMode()) {
-    if (ytController.isPlaying()) {
-      ytController.pause();
+    if (s.isPlaying) {
       P().set({ isPlaying: false });
+      ytController.pause();
       saveSession();
     } else {
       if (ytController.currentVideoId !== track.videoId) {
@@ -514,6 +723,22 @@ export async function togglePlay() {
       }
       ytController.resume();
       P().set({ isPlaying: true });
+      void reconcileEngineMode(true);
+    }
+    return;
+  }
+
+  if (plainAudio) {
+    const el = plainAudio;
+    if (s.isPlaying) {
+      el.pause();
+      P().set({ isPlaying: false });
+      saveSession();
+    } else {
+      try {
+        await el.play();
+        if (plainAudio === el) P().set({ isPlaying: true });
+      } catch { /* autoplay denied: keep transport paused */ }
     }
     return;
   }
@@ -526,9 +751,13 @@ export async function togglePlay() {
     return;
   }
   if (deck.el.paused) {
-    await actx!.resume();
-    await deck.el.play().catch(() => {});
     P().set({ isPlaying: true });
+    if (shouldUsePlainAudio()) await handoffToPlainAudio();
+    else {
+      await actx!.resume();
+      await deck.el.play().catch(() => { P().set({ isPlaying: false }); });
+    }
+    void reconcileEngineMode(true);
   } else {
     deck.el.pause();
     P().set({ isPlaying: false });
@@ -566,8 +795,8 @@ export async function prev() {
       P().set({ positionMs: 0 });
       return;
     }
-  } else if (actx && decks[active].el.currentTime > 4) {
-    decks[active].el.currentTime = 0;
+  } else if (actx && nativeElement()!.currentTime > 4) {
+    nativeElement()!.currentTime = 0;
     P().set({ positionMs: 0 });
     return;
   }
@@ -582,9 +811,9 @@ export function seekTo(ms: number) {
     return;
   }
   if (!actx) return;
-  const deck = decks[active];
-  if (deck.el.seekable.length === 0 && deck.el.readyState < 2) return;
-  deck.el.currentTime = Math.max(0, ms / 1000);
+  const el = nativeElement()!;
+  if (el.seekable.length === 0 && el.readyState < 2) return;
+  el.currentTime = Math.max(0, ms / 1000);
   P().set({ positionMs: ms });
 }
 
@@ -600,20 +829,8 @@ export function setSpeed(v: number) {
 
 /** Toggle between video mode (visible YouTube player) and audio mode. */
 export async function setVideoMode(v: boolean) {
-  const s = P();
-  if (s.videoMode === v) return;
-  usePlayer.getState().set({ videoMode: v });
-  const track = currentTrack(s);
-  if (!track?.videoId || !s.isPlaying) return;
-
-  const pos = P().positionMs;
-  if (v) {
-    await playIndex(s.index, { resumeMs: pos });
-  } else if (nativeCapable === true) {
-    ytController.pause();
-    await playIndex(s.index, { resumeMs: pos });
-  }
-  // v=false with native unavailable: iframe keeps playing, FullPlayer hides it.
+  P().set({ videoMode: v });
+  await reconcileEngineMode(true);
 }
 
 let endingBusy = false;
@@ -634,13 +851,14 @@ async function runEndOfTrack() {
   const s = P();
   endedAt = Date.now();
   if (s.sleepMode === "eot") {
+    P().set({ isPlaying: false });
     clearSleepTimer();
     if (isIframeMode()) {
       ytController.pause();
       ytController.seekTo(0);
     } else if (actx) {
-      decks[active].el.pause();
-      decks[active].el.currentTime = 0;
+      nativeElement()!.pause();
+      nativeElement()!.currentTime = 0;
     }
     P().set({ isPlaying: false, positionMs: 0 });
     return;
@@ -651,8 +869,8 @@ async function runEndOfTrack() {
       ytController.seekTo(0);
       ytController.resume();
     } else if (actx) {
-      decks[active].el.currentTime = 0;
-      await decks[active].el.play().catch(() => {});
+      nativeElement()!.currentTime = 0;
+      await nativeElement()!.play().catch(() => {});
     }
     return;
   }
@@ -661,6 +879,8 @@ async function runEndOfTrack() {
 
 function stopAtEnd() {
   P().set({ isPlaying: false });
+  ytController.pause();
+  stopDecks();
   saveSession();
 }
 
@@ -676,6 +896,7 @@ let watchdog: ReturnType<typeof setInterval> | null = null;
 function startWatchdog() {
   if (watchdog) return;
   watchdog = setInterval(() => {
+    void reconcileEngineMode();
     const s = P();
     if (!s.isPlaying || s.isLoading || fading || !s.queue.length || endingBusy) return;
     if (Date.now() - endedAt < 2000) return;
@@ -684,7 +905,7 @@ function startWatchdog() {
       if (ytController.getPlayerState() === 0) void handleEnded(); // ENDED while we still think it plays
     } else if (actx) {
       const deck = decks[active];
-      if (deck?.trackId && deck.el.ended) void handleEnded();
+      if (deck?.trackId && nativeElement()?.ended) void handleEnded();
     }
   }, 2500);
 }
@@ -696,6 +917,7 @@ export function startLoop() {
     rafId = requestAnimationFrame(loop);
     const now = performance.now();
 
+    if (P().isLoading) return;
     if (isIframeMode()) {
       if (now - lastTick > 240) {
         lastTick = now;
@@ -712,12 +934,14 @@ export function startLoop() {
     if (!actx) return;
     const deck = decks[active];
     if (!deck.trackId) return;
-    const t = deck.el.currentTime;
-    const dur = deck.el.duration || 0;
+    const el = nativeElement()!;
+    const t = el.currentTime;
+    const dur = el.duration || 0;
     if (now - lastTick > 220) {
       lastTick = now;
       P().set({ positionMs: t * 1000, durationMs: dur ? dur * 1000 : P().durationMs });
     }
+    if (plainAudio) return; // DSP/crossfade is unavailable on the plain element.
     const { crossfadeSecs, gapless } = S();
     const s = P();
     const remaining = dur - t;
@@ -738,7 +962,7 @@ export function startLoop() {
 }
 
 async function preloadNextSoon() {
-  if (isIframeMode()) return;
+  if (isIframeMode() || plainAudio) return;
   const s = P();
   const ni = nextIndex();
   if (ni === null) return;
@@ -908,12 +1132,9 @@ export function setSleepTimer(minutes: number | "eot") {
   const endsAt = Date.now() + minutes * 60_000;
   P().set({ sleepMode: "timer", sleepEndsAt: endsAt });
   sleepTimeout = setTimeout(() => {
-    if (isIframeMode()) {
-      ytController.pause();
-      P().set({ isPlaying: false });
-    } else {
-      void togglePlay();
-    }
+    P().set({ isPlaying: false });
+    ytController.pause();
+    nativeElement()?.pause();
     clearSleepTimer();
   }, minutes * 60_000);
 }
@@ -990,20 +1211,31 @@ export function initEngine() {
   initialized = true;
   startLoop();
   armEngineUnlock();
-  // Coming back to the tab: if the OS/iframe paused us mid-track, keep the transport honest.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible") return;
-    const s = P();
-    if (s.isPlaying && isIframeMode() && !ytController.isPlaying()) ytController.resume();
+    void reconcileEngineMode(true);
+    if (document.visibilityState === "hidden") {
+      startHiddenWatch();
+      saveSession();
+    } else {
+      if (hiddenWatch) clearInterval(hiddenWatch);
+      hiddenWatch = null;
+      if (plainAudio) void restoreNativeDeck();
+      else void actx?.resume().catch(() => {});
+    }
   });
+  if (document.visibilityState === "hidden") startHiddenWatch();
   useSettings.subscribe(applySettings);
   usePlayer.subscribe((state, prevState) => {
     if (state.volume !== prevState.volume || state.speed !== prevState.speed) applySettings();
+    if (state.fullPlayerOpen !== prevState.fullPlayerOpen || state.videoMode !== prevState.videoMode) {
+      void reconcileEngineMode(true);
+    }
+    // A visibility/preference change during loading must not be lost.
+    if (prevState.isLoading && !state.isLoading) {
+      queueMicrotask(() => { void reconcileEngineMode(true); });
+    }
   });
   window.addEventListener("beforeunload", saveSession);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") saveSession();
-  });
 }
 
 export function isEngineReady() {
