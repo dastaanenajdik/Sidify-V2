@@ -12,8 +12,8 @@ export const ANDROID_APP = {
   name: "IfallMusic",
   /** What we call it on this site. */
   siteName: "Sidify app",
-  version: "2.3.3",
-  tag: "v2.3.3",
+  version: "2.3.4",
+  tag: "v2.3.4",
   released: "27 Sept 2026",
   /** Exact byte size of the asset in the GitHub release. */
   sizeBytes: 72_511_067,
@@ -27,7 +27,7 @@ export const ANDROID_APP = {
    * release ships. Only the version/size/notes below need editing per release.
    */
   apkUrl:
-    "https://github.com/ifallertzia/Saxify-v1/releases/latest/download/app-release.apk",
+    "https://github.com/ifallertzia/Saxify-v1/releases/download/v2.3.4/app-release.apk",
   releaseUrl: "https://github.com/ifallertzia/Saxify-v1/releases/latest",
   repoUrl: "https://github.com/ifallertzia/Saxify-v1",
 } as const;
