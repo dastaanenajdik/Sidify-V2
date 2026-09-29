@@ -12,11 +12,11 @@ export const ANDROID_APP = {
   name: "IfallMusic",
   /** What we call it on this site. */
   siteName: "Sidify app",
-  version: "2.3.4",
-  tag: "v2.3.4",
-  released: "27 Sept 2026",
+  version: "2.5.0",
+  tag: "v2.5.0",
+  released: "29 Sept 2026",
   /** Exact byte size of the asset in the GitHub release. */
-  sizeBytes: 72_511_067,
+  sizeBytes: 73_298_043,
   fileName: "app-release.apk",
   platform: "Android",
   price: "Free",
@@ -27,7 +27,7 @@ export const ANDROID_APP = {
    * release ships. Only the version/size/notes below need editing per release.
    */
   apkUrl:
-    "https://github.com/ifallertzia/Saxify-v1/releases/download/v2.3.4/app-release.apk",
+    "https://github.com/ifallertzia/Saxify-v1/releases/download/v2.5.0/app-release.apk",
   releaseUrl: "https://github.com/ifallertzia/Saxify-v1/releases/latest",
   repoUrl: "https://github.com/ifallertzia/Saxify-v1",
 } as const;
@@ -35,11 +35,11 @@ export const ANDROID_APP = {
 /**
  * Human label for the asset size.
  *
- * The release notes quote the APK in decimal megabytes (72.5 MB), so this uses the
+ * The release notes quote the APK in decimal megabytes (73.3 MB), so this uses the
  * same unit instead of the site's binary `formatBytes`, which would print 69.2 MB for
  * the very same file.
  */
-export const APP_SIZE_LABEL = `${(ANDROID_APP.sizeBytes / 1_000_000).toFixed(1)} MB`; // → "72.5 MB"
+export const APP_SIZE_LABEL = `${(ANDROID_APP.sizeBytes / 1_000_000).toFixed(1)} MB`; // → "73.3 MB"
 
 export type AppFeature = {
   icon: string;
@@ -83,6 +83,16 @@ export const APP_FEATURES: AppFeature[] = [
     desc: "Less gap between lines, with proper room left for big and wrapped text, so more of the lyric fits on one screen.",
   },
   {
+    icon: "layout-dashboard",
+    title: "Clean UI",
+    desc: "A tidy, uncluttered interface — big readable controls, calm spacing and nothing in your way while you listen.",
+  },
+  {
+    icon: "smartphone",
+    title: "Your on-device music",
+    desc: "The app scans your phone\u2019s storage and brings every song already saved on it into the library — browse and play songs, albums and artists offline.",
+  },
+  {
     icon: "list-music",
     title: "Playlists & library",
     desc: "Liked songs, playlists, artists, downloads and history — big colourful tabs with live counters.",
@@ -104,8 +114,13 @@ export const APP_FEATURES: AppFeature[] = [
   },
 ];
 
-/** Condensed from the v2.3.3 release notes on GitHub. */
+/** Condensed from the v2.5.0 release notes on GitHub. */
 export const APP_WHATS_NEW: string[] = [
+  "On-device music — the app scans your phone\u2019s storage and lists the songs, albums and artists already on it.",
+  "Playlist button at the bottom of the player — add the playing song to a playlist, or start a new one, without leaving the player.",
+  "Sleep timer now sits in the top bar of the player, next to the lyrics button.",
+  "Settings tidied up — small gaps between rows, and Contact / Report / Feedback moved into their own section.",
+  "Some known bugs fixed.",
   "Compact lyrics — less gap between the lines, with proper space left for big and wrapped text.",
   "Synced lyrics — the current line is followed automatically, and tapping a line seeks the song to that point.",
   "Download progress in the player — the percentage now sits right next to the Like button.",
