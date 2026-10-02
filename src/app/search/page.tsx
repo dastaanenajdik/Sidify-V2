@@ -1,10 +1,9 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Clock, Mic, Search as SearchIcon, TrendingUp, X } from "lucide-react";
+import { ArrowUpRight, Clock, Mic, Search as SearchIcon, TrendingUp, X } from "lucide-react";
 import { api } from "@/lib/clientApi";
 import { useSettings } from "@/store/settings";
 import { playContext } from "@/lib/audioEngine";
@@ -38,8 +37,10 @@ function loadHistory(): string[] {
   }
 }
 function pushHistory(term: string) {
+  const clean = term.trim();
+  if (!clean) return;
   try {
-    const next = [term, ...loadHistory().filter((t) => t.toLowerCase() !== term.toLowerCase())].slice(0, 8);
+    const next = [clean, ...loadHistory().filter((t) => t.toLowerCase() !== clean.toLowerCase())].slice(0, 8);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
   } catch {}
 }
@@ -56,38 +57,62 @@ function SearchInner() {
   const router = useRouter();
   const region = useSettings((s) => s.region);
   const ef = useSettings((s) => s.explicitFilter);
-  const [q, setQ] = useState(params.get("q") || "");
-  const [debounced, setDebounced] = useState(q);
+  const initial = params.get("q") ?? "";
+  const [q, setQ] = useState(initial);
+  const [debounced, setDebounced] = useState(initial);
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("all");
   const [focused, setFocused] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  /**
+   * Query string we last wrote into the URL ourselves.
+   *
+   * The old code pushed `q.trim()` to the router and then copied the URL back into the
+   * input on every param change. Because the debounce fires ~300 ms *after* a keystroke,
+   * typing "arijit " pushed "arijit", the echo came back without the space, and the sync
+   * effect wiped the space the user had just typed. Keeping the raw value in the URL and
+   * ignoring our own echo keeps spaces (and everything else) intact.
+   */
+  const pushedRef = useRef<string>(initial);
+  /** True between a keystroke and the moment its URL update has been written. */
+  const editingRef = useRef(false);
+
+  const term = useMemo(() => debounced.trim(), [debounced]);
 
   useEffect(() => {
     setHistory(loadHistory());
     inputRef.current?.focus();
   }, []);
 
+  // Adopt queries that come from elsewhere (links, category tiles, back/forward) —
+  // never our own echo, and never while the user is mid-word.
   useEffect(() => {
-    const pQ = params.get("q") || "";
+    const pQ = params.get("q") ?? "";
+    const mine = pushedRef.current;
+    // Our own value coming back, possibly normalised by the router (trimmed / re-encoded).
+    const isEcho = pQ === mine || (pQ.length <= mine.length && pQ.trim() === mine.trim());
+    if (isEcho || editingRef.current) return;
+    pushedRef.current = pQ;
     setQ(pQ);
     setDebounced(pQ);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
+  // Debounced URL sync. Raw value (spaces included) goes into the URL, search itself
+  // always runs on the trimmed term.
   useEffect(() => {
     const t = setTimeout(() => {
       setDebounced(q);
-      const url = q.trim() ? `/search?q=${encodeURIComponent(q.trim())}` : "/search";
-      router.replace(url, { scroll: false });
-    }, 300);
+      pushedRef.current = q;
+      router.replace(q ? `/search?q=${encodeURIComponent(q)}` : "/search", { scroll: false });
+      editingRef.current = false;
+    }, 320);
     return () => clearTimeout(t);
   }, [q, router]);
 
   const { data, isFetching } = useQuery({
-    queryKey: ["search", debounced, tab, region],
-    queryFn: () => api.search(debounced, tab, region, tab === "songs" ? 30 : 22),
-    enabled: !!debounced.trim(),
+    queryKey: ["search", term, tab, region],
+    queryFn: () => api.search(term, tab, region, tab === "songs" ? 30 : 22),
+    enabled: !!term,
     staleTime: 60_000,
   });
 
@@ -96,14 +121,25 @@ function SearchInner() {
   const albums = data?.albums ?? [];
   const artists = data?.artists ?? [];
 
-  const submit = (term: string) => {
-    if (!term.trim()) return;
-    pushHistory(term.trim());
+  const submit = (value: string) => {
+    const clean = value.trim();
+    if (!clean) return;
+    pushHistory(clean);
     setHistory(loadHistory());
-    setQ(term.trim());
+    setQ(clean);
+    setDebounced(clean);
+    pushedRef.current = clean;
+    editingRef.current = false;
+    router.replace(`/search?q=${encodeURIComponent(clean)}`, { scroll: false });
     inputRef.current?.blur();
     setFocused(false);
   };
+
+  const suggestions = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return [];
+    return history.filter((h) => h.toLowerCase().includes(needle) && h.toLowerCase() !== needle).slice(0, 5);
+  }, [q, history]);
 
   return (
     <div className="mx-auto max-w-[1280px] px-4 pt-6 md:px-7">
@@ -120,16 +156,30 @@ function SearchInner() {
           <input
             ref={inputRef}
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              editingRef.current = true;
+              setQ(e.target.value);
+            }}
             onFocus={() => setFocused(true)}
             onBlur={() => setTimeout(() => setFocused(false), 160)}
-            onKeyDown={(e) => e.key === "Enter" && submit(q)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit(q);
+              if (e.key === "Escape") setFocused(false);
+            }}
+            name="q"
+            type="text"
+            inputMode="search"
+            enterKeyHint="search"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             placeholder="Songs, artists, albums…"
             className="min-w-0 flex-1 bg-transparent text-[15.5px] font-medium outline-none placeholder:text-muted-2"
             aria-label="Search music"
           />
           {q && (
-            <button aria-label="Clear" onClick={() => setQ("")} className="text-muted hover:text-[var(--text)]">
+            <button aria-label="Clear" onClick={() => { setQ(""); inputRef.current?.focus(); }} className="text-muted hover:text-[var(--text)]">
               <X size={17} />
             </button>
           )}
@@ -143,16 +193,42 @@ function SearchInner() {
           </button>
         </div>
 
-        {/* live suggestion hint */}
-        {focused && q.trim() && !data && (
-          <div className="glass-strong absolute top-full right-0 left-0 mt-2 rounded-2xl p-4 text-sm text-muted">
-            Typing… live results appear instantly
+        {/* live suggestions */}
+        {focused && q.trim() && (
+          <div className="glass-strong absolute top-full right-0 left-0 z-30 mt-2 overflow-hidden rounded-2xl p-1.5">
+            <button
+              onMouseDown={(e) => {
+                e.preventDefault();
+                submit(q);
+              }}
+              className="hover-panel flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13.5px] font-semibold"
+            >
+              <SearchIcon size={15} className="accent-text shrink-0" />
+              <span className="truncate">
+                Search for <span className="accent-text">“{q.trim()}”</span>
+              </span>
+              <ArrowUpRight size={14} className="text-muted-2 ml-auto shrink-0" />
+            </button>
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  submit(s);
+                }}
+                className="hover-panel flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[13px]"
+              >
+                <Clock size={14} className="text-muted-2 shrink-0" />
+                <span className="text-muted truncate">{s}</span>
+              </button>
+            ))}
+            {isFetching && !data && <div className="text-muted-2 px-3 py-2 text-[11.5px]">Typing… live results appear instantly</div>}
           </div>
         )}
       </div>
 
       {/* tabs */}
-      {debounced.trim() && (
+      {term && (
         <div className="mt-5 flex gap-2">
           {TABS.map((t) => (
             <button
@@ -170,7 +246,7 @@ function SearchInner() {
       )}
 
       {/* empty state */}
-      {!debounced.trim() && (
+      {!term && (
         <div className="mt-7">
           {history.length > 0 && (
             <div className="mb-7">
@@ -216,7 +292,7 @@ function SearchInner() {
       )}
 
       {/* results */}
-      {debounced.trim() && data && (
+      {term && data && (
         <div className="mt-6 space-y-9">
           {(tab === "all" || tab === "songs") && songs.length > 0 && (
             <section>
@@ -230,7 +306,7 @@ function SearchInner() {
                     key={songs[i].id}
                     tracks={songs}
                     index={i}
-                    contextLabel={`Results for “${debounced}”`}
+                    contextLabel={`Results for “${term}”`}
                   />
                 ))}
               </div>
@@ -260,12 +336,12 @@ function SearchInner() {
           )}
 
           {songs.length + albums.length + artists.length === 0 && (
-            <p className="text-muted py-16 text-center text-sm">No results for “{debounced}”. Try a different search.</p>
+            <p className="text-muted py-16 text-center text-sm">No results for “{term}”. Try a different search.</p>
           )}
         </div>
       )}
 
-      {debounced.trim() && isFetching && !data && (
+      {term && isFetching && !data && (
         <div className="mt-6 space-y-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="shimmer h-14 rounded-xl" />

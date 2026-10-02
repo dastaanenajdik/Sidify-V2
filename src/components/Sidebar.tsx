@@ -34,7 +34,7 @@ export default function Sidebar() {
   const profileName = useSettings((s) => s.profileName);
 
   return (
-    <aside className="sticky top-0 z-30 hidden h-dvh w-[248px] shrink-0 flex-col border-r border-[var(--border-soft)] bg-[var(--bg)] md:flex">
+    <aside className="chrome-surface sticky top-0 z-30 hidden h-dvh w-[248px] shrink-0 flex-col border-r border-[var(--border-soft)] md:flex">
       <Link href="/" className="flex items-center gap-2.5 px-5 pt-6 pb-7">
         <SidifyLogo size={38} />
         <span className="font-display text-[22px] font-extrabold tracking-tight">

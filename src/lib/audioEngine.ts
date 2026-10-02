@@ -8,6 +8,7 @@ import { offlineObjectUrl } from "./offlineDb";
 import { api } from "./clientApi";
 import { emitRefresh } from "./refreshBus";
 import { ytController } from "./ytPlayer";
+import { inferMood } from "./backdrop";
 
 /* ------------------------------------------------------------------ */
 /* Sidify transport engine.                                             */
@@ -940,6 +941,10 @@ function artworkList(track: Track): MediaImage[] {
 }
 
 function updateMediaSession(track: Track) {
+  // Mood drives the deluxe backdrop tint. Set it before the guards below so it also
+  // works when Media Session controls are disabled or unsupported.
+  useUi.getState().setMood(inferMood([track.title, track.artist, track.album].filter(Boolean).join(" ")));
+
   if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
   if (!S().mediaControls) return;
   try {

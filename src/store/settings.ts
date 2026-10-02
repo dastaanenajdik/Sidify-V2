@@ -65,6 +65,9 @@ interface SettingsState {
 
   explicitFilter: boolean;
 
+  /** Rotating "deluxe" artwork backdrop behind the whole app. */
+  deluxeBackdrop: boolean;
+
   profileName: string;
   profileEmail: string;
 
@@ -100,6 +103,8 @@ export const useSettings = create<SettingsState>()(
       bluetoothAutoplay: false,
 
       explicitFilter: false,
+
+      deluxeBackdrop: true,
 
       profileName: "Siddharth",
       profileEmail: "",

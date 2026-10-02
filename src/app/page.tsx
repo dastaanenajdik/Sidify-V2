@@ -13,6 +13,7 @@ import TrackRow from "@/components/TrackRow";
 import { AlbumCard, ArtistCard, SongTile } from "@/components/cards";
 import { AppPromoBanner } from "@/components/AppPromo";
 import SidifyLogo from "@/components/SidifyLogo";
+import { DeluxeArtDots } from "@/components/DeluxeBackdrop";
 
 const MOODS = [
   { name: "Pop", q: "pop hits", g: "from-fuchsia-500 to-purple-700" },
@@ -54,9 +55,9 @@ export default function HomePage() {
       {/* ANDROID APP PROMO — the unmissable one, first thing on the page */}
       <AppPromoBanner />
 
-      {/* HERO */}
-      <div className="relative mb-7 overflow-hidden rounded-[28px] border border-[var(--border-soft)] p-6 md:p-9">
-        <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(120deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 55%)" }} />
+      {/* HERO — sits directly on the rotating deluxe artwork */}
+      <div className="glass relative mb-7 overflow-hidden rounded-[28px] p-6 pb-16 md:p-9">
+        <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(120deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%)" }} />
         <div className="pointer-events-none absolute -top-24 -right-16 h-72 w-72 rounded-full blur-3xl" style={{ background: "radial-gradient(closest-side, var(--glow), transparent)" }} />
         <div className="pointer-events-none absolute -bottom-28 left-1/4 h-64 w-64 rounded-full bg-violet-600/20 blur-3xl" />
         <div className="relative">
@@ -87,6 +88,11 @@ export default function HomePage() {
               Explore music <ArrowRight size={15} />
             </Link>
           </div>
+        </div>
+
+        {/* backdrop slideshow controls — 12 artworks, auto-changing */}
+        <div className="absolute right-4 bottom-4 md:right-6 md:bottom-5">
+          <DeluxeArtDots />
         </div>
       </div>
 

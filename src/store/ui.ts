@@ -39,6 +39,12 @@ interface UiState {
   bgHelpOpen: boolean;
   setBgHelpOpen: (v: boolean) => void;
 
+  /** Mood inferred from the current track — tints the deluxe backdrop. */
+  mood: string | null;
+  /** The mood before the last change, kept so the tint can crossfade. */
+  prevMood: string | null;
+  setMood: (m: string | null) => void;
+
   downloadProgress: Record<string, number>;
   setDownloadProgress: (id: string, pct: number | null) => void;
 }
@@ -67,6 +73,10 @@ export const useUi = create<UiState>()((set, get) => ({
 
   bgHelpOpen: false,
   setBgHelpOpen: (v) => set({ bgHelpOpen: v }),
+
+  mood: null,
+  prevMood: null,
+  setMood: (m) => set((st) => (st.mood === m ? {} : { prevMood: st.mood, mood: m })),
 
   downloadProgress: {},
   setDownloadProgress: (id, pct) => {

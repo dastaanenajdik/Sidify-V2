@@ -4,8 +4,8 @@
 
 /* v2: bumped with the 1.0 playback/library fixes so no client keeps serving the previous
  * app shell + chunks after this release. Old caches are deleted on activate. */
-const SHELL_CACHE = "sidify-shell-v3";
-const STATIC_CACHE = "sidify-static-v3";
+const SHELL_CACHE = "sidify-shell-v4";
+const STATIC_CACHE = "sidify-static-v4";
 
 const APP_SHELL = [
   "./",
