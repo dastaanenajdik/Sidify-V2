@@ -13,7 +13,6 @@ import TrackRow from "@/components/TrackRow";
 import { AlbumCard, ArtistCard, SongTile } from "@/components/cards";
 import { AppPromoBanner } from "@/components/AppPromo";
 import SidifyLogo from "@/components/SidifyLogo";
-import { DeluxeArtDots } from "@/components/DeluxeBackdrop";
 
 const MOODS = [
   { name: "Pop", q: "pop hits", g: "from-fuchsia-500 to-purple-700" },
@@ -90,10 +89,7 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* backdrop slideshow controls — 12 artworks, auto-changing */}
-        <div className="absolute right-4 bottom-4 md:right-6 md:bottom-5">
-          <DeluxeArtDots />
-        </div>
+
       </div>
 
       {/* QUICK PICKS */}

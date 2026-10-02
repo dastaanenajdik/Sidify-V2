@@ -4,11 +4,10 @@ import { create } from "zustand";
 import { ART_COUNT } from "@/lib/backdrop";
 
 /**
- * Shared state for the deluxe backdrop slideshow so any screen (hero dots, mini
- * player, settings) can steer it. The actual `<img>` fading lives in
+ * Shared state for the deluxe backdrop slideshow for the full-screen player. The actual `<img>` fading lives in
  * `components/DeluxeBackdrop.tsx`.
  *
- * The order is a session-shuffled walk over all 12 artworks: every image shows up
+ * The order is a session-shuffled walk over all available artworks: every image shows up
  * once before any repeats, which keeps the rotation fresh instead of random-clumping.
  */
 function shuffledOrder(): number[] {

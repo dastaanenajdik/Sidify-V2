@@ -7,8 +7,8 @@ import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
 
 /**
- * Full-screen "deluxe" backdrop: 12 artworks crossfading on a slow loop behind the whole
- * app, with a mood tint that follows whatever is playing and a scrim that keeps UI text
+ * Full-screen "deluxe" backdrop: artworks crossfading on a slow loop behind the full-screen
+ * player, with a mood tint that follows whatever is playing and a scrim that keeps UI text
  * readable on top. Purely decorative — never blocks pointer events.
  *
  * Nothing is rendered on the server (the store starts at `current = -1`), which keeps the
@@ -60,7 +60,7 @@ export default function DeluxeBackdrop() {
   const visible = [current, previous].filter((i) => i != null && i >= 0) as number[];
 
   return (
-    <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-[var(--bg-deep)]" aria-hidden>
+    <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-[var(--bg-deep)]" aria-hidden>
       {/* artwork slideshow */}
       {visible.map((i) => {
         const art = DELUXE_ART[i];
@@ -99,7 +99,7 @@ export default function DeluxeBackdrop() {
         />
       )}
 
-      {/* readability scrim — keeps every screen's copy crisp over the art */}
+      {/* readability scrim — keeps the player's copy crisp over the art */}
       <div
         className="absolute inset-0"
         style={{
@@ -108,7 +108,7 @@ export default function DeluxeBackdrop() {
         }}
       />
 
-      {/* top/bottom falloff so the sidebar and player edges melt into the art */}
+      {/* top/bottom falloff so the player edges melt into the art */}
       <div
         className="absolute inset-x-0 bottom-0 h-40"
         style={{ background: "linear-gradient(180deg, transparent, var(--bg))", opacity: 0.7 }}
@@ -119,7 +119,7 @@ export default function DeluxeBackdrop() {
 }
 
 /**
- * Tiny dot rail for the hero card: shows which of the 12 artworks is on screen and lets
+ * Tiny dot rail for the player: shows which artwork is on screen and lets
  * anyone jump between them (the slideshow keeps rolling from there).
  */
 export function DeluxeArtDots({ className }: { className?: string }) {

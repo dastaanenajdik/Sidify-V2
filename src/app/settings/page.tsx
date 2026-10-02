@@ -298,7 +298,7 @@ function AppearanceSection() {
           ))}
         </div>
       </Row>
-      <Row label="Deluxe backdrop" desc="Rotating luxe artwork behind the whole app">
+      <Row label="Deluxe backdrop" desc="Rotating luxe artwork only in the full-screen player">
         <Toggle
           checked={s.deluxeBackdrop}
           onChange={(v) => s.set({ deluxeBackdrop: v })}

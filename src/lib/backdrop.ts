@@ -1,8 +1,8 @@
 /**
  * Deluxe backdrop catalogue.
  *
- * 12 hand-picked "deluxe" artworks (art-deco salons, liquid chrome, neon sunsets,
- * gilded frames, crystal prisms…) that rotate behind the whole app like a slow
+ * 10 hand-picked "deluxe" artworks (liquid chrome, neon sunsets,
+ * gilded frames, crystal prisms…) that rotate behind the full-screen player like a slow
  * slideshow. Files live in /public/art as `lux-NN.jpg` (1920×1080) plus a light
  * `lux-NN-sm.jpg` (960×540) that phones download instead.
  */
@@ -15,25 +15,24 @@ export interface DeluxeArt {
   srcSmall: string;
 }
 
-const ART_LABELS = [
-  "Mirror Lounge",
-  "Liquid Gold",
-  "Silk Water",
-  "Neon Sunset",
-  "Gilded Bloom",
-  "Velvet Stage",
-  "Crystal Prism",
-  "Cosmic Vinyl",
-  "Emerald Deco",
-  "Kintsugi Neon",
-  "Halo Salon",
-  "Iridescence",
+const ART_ENTRIES: Array<[number, string]> = [
+  [2, "Liquid Gold"],
+  [3, "Silk Water"],
+  [4, "Neon Sunset"],
+  [5, "Gilded Bloom"],
+  [6, "Velvet Stage"],
+  [7, "Crystal Prism"],
+  [8, "Cosmic Vinyl"],
+  [9, "Emerald Deco"],
+  [10, "Kintsugi Neon"],
+  [12, "Iridescence"],
 ];
 
-export const DELUXE_ART: DeluxeArt[] = ART_LABELS.map((label, i) => {
-  const n = String(i + 1).padStart(2, "0");
+// Keep original file IDs when removing artwork; array indices drive the rotation.
+export const DELUXE_ART: DeluxeArt[] = ART_ENTRIES.map(([id, label]) => {
+  const n = String(id).padStart(2, "0");
   return {
-    id: i + 1,
+    id,
     label,
     src: `/art/lux-${n}.jpg`,
     srcSmall: `/art/lux-${n}-sm.jpg`,
