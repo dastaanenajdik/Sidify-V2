@@ -298,7 +298,7 @@ function AppearanceSection() {
           ))}
         </div>
       </Row>
-      <Row label="Deluxe backdrop" desc="Rotating luxe artwork only in the full-screen player">
+      <Row label="Deluxe backdrop" desc="Rotating luxe artwork across the site and full-screen player">
         <Toggle
           checked={s.deluxeBackdrop}
           onChange={(v) => s.set({ deluxeBackdrop: v })}
@@ -606,7 +606,7 @@ function PrivacySection() {
           Clear
         </button>
       </Row>
-      <Row label="Clear listening history" desc="Deletes recently played from the server">
+      <Row label="Clear listening history" desc="Deletes recent tracks stored on this browser and the server">
         <button
           onClick={async () => {
             await api.clearRecent();

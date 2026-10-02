@@ -5,17 +5,19 @@ import { ART_FADE_MS, ART_INTERVAL_MS, DELUXE_ART, moodFor, moodLayerStyle } fro
 import { useBackdrop, upcomingArt } from "@/store/backdrop";
 import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
+import { usePlayer } from "@/store/player";
 
 /**
- * Full-screen "deluxe" backdrop: artworks crossfading on a slow loop behind the full-screen
- * player, with a mood tint that follows whatever is playing and a scrim that keeps UI text
- * readable on top. Purely decorative — never blocks pointer events.
+ * Deluxe artwork backdrop shared by the site and the full-screen player. The `site` scope
+ * places it behind the app; the player keeps its existing local layer and rotation controls.
+ * Mood tint follows the current track and the scrim keeps UI text readable. Purely decorative.
  *
- * Nothing is rendered on the server (the store starts at `current = -1`), which keeps the
- * random starting artwork from breaking hydration.
+ * The store starts at `current = -1`, so server markup contains no randomly chosen artwork
+ * and the client can initialize the slideshow after mount without a hydration mismatch.
  */
-export default function DeluxeBackdrop() {
+export default function DeluxeBackdrop({ scope = "player" }: { scope?: "site" | "player" } = {}) {
   const enabled = useSettings((s) => s.deluxeBackdrop);
+  const fullPlayerOpen = usePlayer((s) => s.fullPlayerOpen);
   const moodId = useUi((s) => s.mood);
   const prevMoodId = useUi((s) => s.prevMood);
   const current = useBackdrop((s) => s.current);
@@ -23,6 +25,7 @@ export default function DeluxeBackdrop() {
   const rev = useBackdrop((s) => s.rev);
 
   const live = current >= 0;
+  const visibleOnSite = scope !== "site" || !fullPlayerOpen;
   const mood = useMemo(() => moodFor(moodId), [moodId]);
 
   // First artwork (after mount only).
@@ -32,10 +35,10 @@ export default function DeluxeBackdrop() {
 
   // Auto-rotation: 11s per artwork, timer restarts whenever someone jumps manually.
   useEffect(() => {
-    if (!enabled || !live) return;
+    if (!enabled || !live || !visibleOnSite) return;
     const t = window.setInterval(() => useBackdrop.getState().next(), ART_INTERVAL_MS);
     return () => window.clearInterval(t);
-  }, [enabled, live, rev]);
+  }, [enabled, live, visibleOnSite, rev]);
 
   // Drop the outgoing image once its fade is done (keeps at most 2 in memory).
   useEffect(() => {
@@ -46,21 +49,22 @@ export default function DeluxeBackdrop() {
 
   // Prefetch the upcoming artwork so a crossfade never waits on the network.
   useEffect(() => {
-    if (!enabled || !live) return;
+    if (!enabled || !live || !visibleOnSite) return;
     const t = window.setTimeout(() => {
       const img = new Image();
       img.decoding = "async";
       img.src = window.innerWidth < 768 ? DELUXE_ART[upcomingArt()].srcSmall : DELUXE_ART[upcomingArt()].src;
     }, 3500);
     return () => window.clearTimeout(t);
-  }, [enabled, live, rev]);
+  }, [enabled, live, visibleOnSite, rev]);
 
-  if (!enabled) return null;
+  if (!enabled || !visibleOnSite) return null;
 
   const visible = [current, previous].filter((i) => i != null && i >= 0) as number[];
+  const placement = scope === "site" ? "fixed inset-0 -z-10" : "absolute inset-0 z-0";
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-[var(--bg-deep)]" aria-hidden>
+    <div className={`pointer-events-none ${placement} overflow-hidden bg-[var(--bg-deep)]`} aria-hidden>
       {/* artwork slideshow */}
       {visible.map((i) => {
         const art = DELUXE_ART[i];

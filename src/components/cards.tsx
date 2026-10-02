@@ -83,7 +83,7 @@ export function ArtistCard({ artist }: { artist: Artist }) {
   const { loading, run } = useAsyncPlay();
   return (
     <div className="group relative">
-      <Link href={`/artist/${artist.id}`} className="hover-panel block rounded-2xl border border-transparent p-3" draggable={false}>
+      <Link href={`/artist/${encodeURIComponent(artist.id)}`} className="hover-panel block rounded-2xl border border-transparent p-3" draggable={false}>
         <div className="relative mb-3 aspect-square overflow-hidden rounded-full">
           {artist.artwork ? (
             <img

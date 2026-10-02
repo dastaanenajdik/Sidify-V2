@@ -34,17 +34,17 @@
   color-scheme: light;
 }
 
-/* Keep app pages solid; decorative artwork is scoped to the full-screen player. */
+/* Keep the canvas painted by <html>, while leaving body transparent so the site-wide
+   artwork backdrop can sit behind every screen without being covered by a flat layer. */
 html {
   background: var(--bg);
   color: var(--text);
   overscroll-behavior-y: none;
-  /* Fallback tint so the very first paint (and Deluxe backdrop switched off) is never white. */
   background-color: var(--bg);
 }
 
 body {
-  background: var(--bg);
+  background: transparent;
   color: var(--text);
   overscroll-behavior-y: none;
 }

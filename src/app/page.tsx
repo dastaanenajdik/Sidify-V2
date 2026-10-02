@@ -11,8 +11,9 @@ import { playContext } from "@/lib/audioEngine";
 import Section from "@/components/Section";
 import TrackRow from "@/components/TrackRow";
 import { AlbumCard, ArtistCard, SongTile } from "@/components/cards";
-import { AppPromoBanner } from "@/components/AppPromo";
 import SidifyLogo from "@/components/SidifyLogo";
+import { DeluxeArtDots } from "@/components/DeluxeBackdrop";
+import { recentTracksLocal } from "@/lib/localLibrary";
 
 const MOODS = [
   { name: "Pop", q: "pop hits", g: "from-fuchsia-500 to-purple-700" },
@@ -40,7 +41,7 @@ export default function HomePage() {
   const name = useSettings((s) => s.profileName);
   const { data, isLoading } = useQuery({
     queryKey: ["home", region],
-    queryFn: () => api.home(region),
+    queryFn: () => api.home(region, recentTracksLocal()),
     staleTime: 5 * 60_000,
   });
 
@@ -51,9 +52,6 @@ export default function HomePage() {
 
   return (
     <div className="mx-auto max-w-[1280px] px-4 pt-5 md:px-7 md:pt-7">
-      {/* ANDROID APP PROMO — the unmissable one, first thing on the page */}
-      <AppPromoBanner />
-
       {/* HERO — sits directly on the rotating deluxe artwork */}
       <div className="glass relative mb-7 overflow-hidden rounded-[28px] p-6 pb-16 md:p-9">
         <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(120deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%)" }} />
@@ -89,25 +87,36 @@ export default function HomePage() {
           </div>
         </div>
 
-
+        {/* Home controls for the shared site-wide rotating artwork. */}
+        <div className="absolute right-4 bottom-4 md:right-6 md:bottom-5">
+          <DeluxeArtDots />
+        </div>
       </div>
 
-      {/* QUICK PICKS */}
+      {/* PERSONALIZED QUICK PICKS */}
       {isLoading ? (
         <GridSkeleton />
-      ) : (
-        recommended.length > 0 && (
-          <div className="mb-8">
-            <h2 className="font-display mb-3 px-1 text-[19px] font-bold tracking-tight md:text-[21px]">
-              {data?.basedOnArtist ? `More like ${data.basedOnArtist}` : "Made for you"}
-            </h2>
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
-              {recommended.slice(0, 6).map((t, i) => (
-                <SongTile key={t.id} track={t} onPlay={() => playContext(recommended, i, "Made for you")} />
-              ))}
-            </div>
+      ) : recommended.length > 0 ? (
+        <div className="mb-8">
+          <h2 className="font-display mb-3 px-1 text-[19px] font-bold tracking-tight md:text-[21px]">Made for you</h2>
+          {data?.basedOnArtist && (
+            <p className="text-muted -mt-1 mb-3 px-1 text-[12px]">Inspired by {data.basedOnArtist} and your recent listening.</p>
+          )}
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+            {recommended.slice(0, 6).map((t, i) => (
+              <SongTile key={t.id} track={t} onPlay={() => playContext(recommended, i, "Made for you")} />
+            ))}
           </div>
-        )
+        </div>
+      ) : (
+        <div className="glass mb-8 rounded-2xl px-5 py-4">
+          <h2 className="font-display text-[18px] font-bold tracking-tight">Made for you</h2>
+          <p className="text-muted mt-1 text-[13px] leading-5">
+            {recent.length
+              ? "We couldn’t find fresh tracks from your listening favourites just yet. Keep playing what you love and this mix will learn your taste."
+              : "Play a few songs you love and we’ll build recommendations around your listening history."}
+          </p>
+        </div>
       )}
 
       {/* MOODS */}
@@ -162,7 +171,7 @@ export default function HomePage() {
       {/* TOP ARTISTS */}
       {(data?.topArtists?.length ?? 0) > 0 && (
         <div className="mb-8">
-          <Section title="Top artists" subtitle="Commanding the charts right now">
+          <Section title="Artists you listen to" subtitle="Ranked from your recent listening history">
             {data!.topArtists.map((a) => (
               <div key={a.id} className="w-[150px] shrink-0 snap-start md:w-[168px]">
                 <ArtistCard artist={a} />
