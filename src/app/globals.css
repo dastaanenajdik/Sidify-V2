@@ -34,14 +34,7 @@
   color-scheme: light;
 }
 
-/* The page colour lives on <html> ONLY.
- *
- * <body> must stay transparent: the deluxe backdrop is `fixed inset-0 -z-10`, and a painted
- * body background is drawn ABOVE negative-z-index layers (CSS painting order: in-flow block
- * backgrounds come after negative stacking contexts). With `background` on body the whole
- * artwork slideshow was hidden behind a flat wall of --bg — this is why the 1.1 release looked
- * "unchanged" in production. Keeping the base colour on <html> leaves the canvas filled while
- * letting the artwork show through. */
+/* Keep app pages solid; decorative artwork is scoped to the full-screen player. */
 html {
   background: var(--bg);
   color: var(--text);
@@ -51,7 +44,7 @@ html {
 }
 
 body {
-  background: transparent;
+  background: var(--bg);
   color: var(--text);
   overscroll-behavior-y: none;
 }

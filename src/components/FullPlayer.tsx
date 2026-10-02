@@ -36,6 +36,7 @@ import { useLiked, downloadTrackFlow } from "@/lib/library";
 import { cx, formatTime, upscaleArtwork } from "@/lib/format";
 import type { Track } from "@/lib/types";
 import SeekBar from "./SeekBar";
+import DeluxeBackdrop, { DeluxeArtDots } from "./DeluxeBackdrop";
 import LyricsView, { LyricsModeToggle, lyricsAreSynced, type LyricsMode } from "./LyricsView";
 import { PlayButton, Toggle } from "./controls";
 import { LiveEq } from "./SidifyLogo";
@@ -110,6 +111,8 @@ function Shell({ track }: { track: Track }) {
         <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, color-mix(in srgb, var(--bg) 55%, transparent), var(--bg) 92%)" }} />
       </div>
 
+      <DeluxeBackdrop />
+
       <div className="relative z-10 mx-auto flex h-full max-w-[1400px] flex-col px-5 pt-4 pb-6 md:px-10 md:pt-6">
         {/* header */}
         <div className="flex items-center justify-between">
@@ -128,6 +131,8 @@ function Shell({ track }: { track: Track }) {
             <MoreHorizontal size={19} />
           </button>
         </div>
+
+        <DeluxeArtDots className="mt-3 flex justify-center" />
 
         {/* body */}
         <div className="flex min-h-0 flex-1 flex-col gap-6 pt-5 lg:flex-row lg:items-center lg:gap-14">

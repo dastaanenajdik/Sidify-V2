@@ -15,12 +15,11 @@ import { ANDROID_APP, APP_SIZE_LABEL } from "@/lib/appRelease";
 export const UPDATE_INFO = {
   tag: "Release 1.1.0",
   date: "2 Oct 2026",
-  headline: "The deluxe backdrop is finally on screen — everywhere",
+  headline: "Deluxe artwork, just for your player",
   items: [
-    "The rotating deluxe artwork now actually shows. The backdrop was being painted over by the page background, so every screen looked flat even though the art was there — the page colour now lives on <html> and the artwork shows through on Home, Search, Library, Downloads, the players and Settings.",
-    "12 hand-made artworks crossfade behind the app every 11 seconds with a slow Ken-Burns drift, a mood tint that follows the song (chill / party / romance / focus / retro / late-night…) and a readability scrim so text stays crisp.",
-    "Jump between artworks from the dots on the Home hero — the label above them shows the current piece (Mirror Lounge, Liquid Gold, Silk Water, Neon Sunset…).",
-    "New glass mini player: the bar is tinted by the artwork behind it with a live progress hairline.",
+    "Rotating artwork now appears only in the full-screen player. Home, Search, Library, Downloads and Settings keep their clean, solid backgrounds.",
+    "10 artworks crossfade every 11 seconds with a slow Ken-Burns drift and a mood tint that follows the song. Salon and barber-shop images have been removed.",
+    "Jump between artworks using the dots inside the full-screen player.",
     "Deluxe backdrop is now a real switch: Settings → Appearance → “Deluxe backdrop” (on by default).",
     "Search keeps every character you type — spaces included — with history, suggestions and category tiles.",
     "“Check for updates” in Settings → About is real now: it asks the browser for the newest build, shows the deployment id, and reloads you onto it. Installed PWAs also refresh silently in the background on the next visit — no more waiting for a hard reload to see a new release.",
