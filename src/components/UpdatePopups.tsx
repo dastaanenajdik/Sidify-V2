@@ -13,27 +13,18 @@ import { ANDROID_APP, APP_SIZE_LABEL } from "@/lib/appRelease";
 /* ------------------------------------------------------------------ */
 
 export const UPDATE_INFO = {
-  tag: "Minor update 1.1",
-  date: "26 Sept 2026",
-  headline: "Lyrics now light up line by line, plus a Lyrics Finder",
+  tag: "Release 1.1.0",
+  date: "2 Oct 2026",
+  headline: "The deluxe backdrop is finally on screen — everywhere",
   items: [
-    "Synced lyrics — open the full player, tap Lyrics and switch the toggle at the top from Static to Synced: the current line lights up as the song plays and the view follows it.",
-    "New Lyrics Finder in Your Library — type any song name (and the singer, if you know it) and its lyrics appear right there, ready to copy. Nothing needs to be playing.",
-    "In Synced view you can tap any line to jump the song there, and scrolling away pauses the auto-follow until you tap “Current line”.",
-    "Copy lyrics moved to the bottom of the panel as a small button, so the lyrics get the whole width.",
-    "You can still view plain lyrics — open the full player and tap Lyrics for the static text of any available song.",
-    "Songs now play one after another — when a song ends, a similar song starts on its own.",
-    "Playlists, Liked Songs and search results keep rolling to the next song and the one after that.",
-    "The first song you tap now starts right away (earlier you had to tap a second song).",
-    "Like ❤ works again — liked songs are saved and show up in Your Library.",
-    "“Add to playlist” works — tap a playlist in the list and the song goes straight into it.",
-    "Creating a new playlist works — type a name, hit Save, and it appears in your library.",
-    "Listening history updates while you play, so the History tab is never stale.",
-    "Song errors now skip ahead to a similar track instead of stopping playback.",
-    "New guide inside Settings: “Instructions to play in background” — Brave browser first (recommended), every other browser as the backup.",
-    `${ANDROID_APP.name} ${ANDROID_APP.version} is out — compact lyrics with room for wrapped text, synced lyrics that follow the current line and seek when you tap one, and download progress with a percentage next to the Like button in the player.`,
-    `Save your own equalizer presets now; your selected settings stay put when the track changes, and the equalizer opens straight from the player. Settings also got a shortcut to this website and the latest app download link.`,
-    `The Android app is live — the free ${APP_SIZE_LABEL} APK (${ANDROID_APP.tag}) is one tap away in the “Get the app” banner on Home (and in the sidebar). 8D audio is not in this build yet — it is coming soon.`,
+    "The rotating deluxe artwork now actually shows. The backdrop was being painted over by the page background, so every screen looked flat even though the art was there — the page colour now lives on <html> and the artwork shows through on Home, Search, Library, Downloads, the players and Settings.",
+    "12 hand-made artworks crossfade behind the app every 11 seconds with a slow Ken-Burns drift, a mood tint that follows the song (chill / party / romance / focus / retro / late-night…) and a readability scrim so text stays crisp.",
+    "Jump between artworks from the dots on the Home hero — the label above them shows the current piece (Mirror Lounge, Liquid Gold, Silk Water, Neon Sunset…).",
+    "New glass mini player: the bar is tinted by the artwork behind it with a live progress hairline.",
+    "Deluxe backdrop is now a real switch: Settings → Appearance → “Deluxe backdrop” (on by default).",
+    "Search keeps every character you type — spaces included — with history, suggestions and category tiles.",
+    "“Check for updates” in Settings → About is real now: it asks the browser for the newest build, shows the deployment id, and reloads you onto it. Installed PWAs also refresh silently in the background on the next visit — no more waiting for a hard reload to see a new release.",
+    `Android app stays at ${ANDROID_APP.name} ${ANDROID_APP.tag} — the free ${APP_SIZE_LABEL} APK is one tap away in the “Get the app” banner on Home (and in the sidebar).`,
   ],
 };
 

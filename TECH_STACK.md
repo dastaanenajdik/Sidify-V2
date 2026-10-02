@@ -491,7 +491,8 @@ optimistic updates (like toggle turant UI me, fail pe rollback).
 | Service worker | `public/sw.js` — **hand-written**, koi Workbox/next-pwa nahi |
 | Caching strategy | Navigations: **network-first** + offline shell fallback (`/`); static assets (`/_next/static`, `/_next/image`, images/fonts/css/js): **cache-first** + background fill |
 | Never cached | `/api/*` (search/stream/library) aur **saare cross-origin** requests (YouTube thumbnails/media) |
-| Cache names | `sidify-shell-v1`, `sidify-static-v1` (activate pe purane purge) |
+| Cache names | `sidify-shell-v5`, `sidify-static-v5` (activate pe purane purge) |
+| Update flow | `src/lib/pwa.ts` — `registerServiceWorker()` (`updateViaCache: "none"`, visibility/30-min re-check, `controllerchange` pe ek baar reload, sessionStorage guard se reload-loop nahi) · SW me `postMessage({type:"SKIP_WAITING"})` handler · Settings → About ka "Check now" = asli `reg.update()` + build SHA display (`NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA`, `next.config.ts` se inject) |
 | Install flow | `beforeinstallprompt` capture → `window.__sidifyInstall`, custom "Install Sidify" button (Settings), `appinstalled` → success toast |
 | Headers (`next.config.ts`) | `sw.js`: `Cache-Control: max-age=0, must-revalidate` + `Service-Worker-Allowed: /` · manifest: 1 h cache · global: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` |
 | iOS | `appleWebApp: { capable, title, statusBarStyle: black-translucent }`, apple-touch-icon |
@@ -731,6 +732,53 @@ swipe = tab close = audio band (sirf native player + foreground service fix kar 
 Gehre navigation stack me (play → kai pages navigate) dusra Back guard hata deta hai par buried
 entries ki wajah se poora exit ek aur Back maang sakta hai; agla same-URL Back naya cycle shuru
 karta hai. Chrome plain tab me exit ke baad audio rukega hi (WebAPK/TWA me background chalta hai).
+
+## 15.9 Update 1.1.0 (2 Oct 2026) — deluxe backdrop actually on screen + real PWA updates
+
+**Report:** "Merge ke baad bhi changes dikh nahi rahe — sab kuch pehle jaisa flat hai."
+
+**Root cause (visual):** PR #20 ka deluxe backdrop `fixed inset-0 -z-10` pe render hota hai, par
+`globals.css` me `body { background: var(--bg) }` tha. CSS painting order me in-flow block ka
+background **negative-z-index layer ke upar** paint hota hai — matlab 12 artworks load ho rahe the
+aur poora DOM bhi theek tha, bas ek flat `#06060a` deewar unke saamne thi. Isi wajah se production
+"unchanged" lag raha tha.
+
+**Fix:**
+
+- Base page colour ab **sirf `html`** pe hai (canvas fill). `body` transparent hai, isliye backdrop
+  Home / Search / Library / Downloads / players / Settings — har jagah dikhta hai.
+  (Fallback ke liye `html` pe `background` + `background-color` dono.)
+- `DeluxeBackdrop` pehle se hi correct tha (`-z-10`, `aria-hidden`, `pointer-events-none`,
+  crossfade + Ken-Burns + mood tint + scrim) — koi component change nahi chahiye tha.
+- 12 artworks `public/art/lux-01…12.jpg` (1920×1080) + `-sm` (960×540) commit me hi hain; naye
+  posters generate kiye hi nahi — wahi assets use hue (phones `-sm` download karte hain).
+- Ab visible feedback: `DeluxeArtDots` Home hero pe, aur Settings → Appearance me
+  **Deluxe backdrop** toggle (default on).
+- `PlatformBootstrap` (Providers) pehle 4 desktop artworks warm karta hai taaki pehla crossfade
+  network pe wait na kare.
+
+**Root cause (deploy "nahi hua" lagna):** Vercel ne PR #20 ka *preview* deploy block kar diya tha —
+private repo + `agent@arena.ai` jaisa commit author jo kisi GitHub/Vercel account se linked nahi
+("GitHub couldn't verify an account for the commit" / "Deployment was blocked"), jabki merge commit
+(bot account) ka production deploy 38 s me ✅ complete ho gaya tha. Saath hi installed PWA purana
+app shell serve karta rehta tha aur "Check now" sirf ek `setTimeout` toast tha.
+
+**Fix (PWA updates):**
+
+- `src/lib/pwa.ts`: `registerServiceWorker()` + `checkForUpdate()` + `armNextAutoReload()`
+  (sessionStorage `sidify-sw-reload` guard — reload loop impossible).
+- `public/sw.js`: cache `v4 → v5`, aur `SKIP_WAITING` message handler (naya worker turant activate).
+- `src/app/settings/page.tsx`: "Check now" asli check karta hai (updated → reload, current → toast),
+  **Build** row me deployment SHA dikhta hai (1.1.0).
+- `next.config.ts`: `env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA = process.env.VERCEL_GIT_COMMIT_SHA`.
+
+**Verification:** headless Chromium (dev server) se before/after screenshot — `body` transparent,
+`html` = `rgb(6,6,10)`, `-z-10` layer pe `lux-NN-sm.jpg` visible; "old CSS simulate" (body pe
+`var(--bg)` force) karne pe wahi flat dark screen wapas aa gayi — yaani production ka exact symptom
+reproduce + fix confirm. Mobile viewport (390×844) pe Library page pe artwork visible.
+
+**Commit hygiene:** is baar ke commits `dastaanenajdik <319007633+dastaanenajdik@users.noreply.github.com>`
+se authored hain, isliye PR ka Vercel preview bhi block nahi hoga.
 
 ## 16. TL;DR stack list
 

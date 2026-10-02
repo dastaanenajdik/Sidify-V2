@@ -35,8 +35,11 @@ import { useBlocked, useDownloads } from "@/lib/library";
 import { Slider, Toggle, Modal } from "@/components/controls";
 import { cx, formatBytes } from "@/lib/format";
 import { ANDROID_APP, APP_SIZE_LABEL } from "@/lib/appRelease";
+import { checkForUpdate } from "@/lib/pwa";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
+/** Vercel commit SHA — lets the About screen prove which build a device is running. */
+const BUILD_ID = (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7);
 const CONTACT_EMAIL = "dastaanenajdik@gmail.com";
 
 const SECTIONS = [
@@ -294,6 +297,13 @@ function AppearanceSection() {
             </button>
           ))}
         </div>
+      </Row>
+      <Row label="Deluxe backdrop" desc="Rotating luxe artwork behind the whole app">
+        <Toggle
+          checked={s.deluxeBackdrop}
+          onChange={(v) => s.set({ deluxeBackdrop: v })}
+          label="Deluxe backdrop"
+        />
       </Row>
       <Row label="App region" desc="Changes charts, search and catalog storefront">
         <NativeSelect value={s.region} onChange={(v) => s.set({ region: v })} options={REGIONS} ariaLabel="Region" />
@@ -682,14 +692,27 @@ function AboutSection() {
           <Volume2 size={13} className="accent-text" /> {APP_VERSION}
         </span>
       </Row>
-      <Row label="Check for updates" desc="Silent over-the-air PWA updates">
+      <Row label="Check for updates" desc="Asks the browser for the newest Sidify build">
         <button
-          onClick={() => {
+          onClick={async () => {
             setChecking(true);
-            setTimeout(() => {
+            try {
+              const result = await checkForUpdate();
+              if (result === "updated") {
+                pushToast({ title: "Update found", desc: "Reloading onto the new build…", kind: "ok" });
+                return; // the page reloads onto the fresh shell
+              }
+              pushToast({
+                title: result === "current" ? "You're up to date" : "Update check unavailable",
+                desc:
+                  result === "current"
+                    ? `Sidify v${APP_VERSION} is the latest build`
+                    : "This browser isn't running the installed app shell",
+                kind: result === "current" ? "ok" : "warn",
+              });
+            } finally {
               setChecking(false);
-              pushToast({ title: "You're up to date", desc: `Sidify v${APP_VERSION} is the latest build`, kind: "ok" });
-            }, 1400);
+            }
           }}
           className="glass flex min-w-[132px] items-center justify-center gap-2 rounded-xl px-4 py-2 text-[12.5px] font-bold hover:accent-text"
         >
@@ -697,6 +720,13 @@ function AboutSection() {
           {checking ? "Checking…" : "Check now"}
         </button>
       </Row>
+      {BUILD_ID && (
+        <Row label="Build" desc="Deployment currently served to this device">
+          <span className="glass text-muted-2 flex items-center gap-2 rounded-xl px-3 py-1.5 font-mono text-[11.5px]">
+            {BUILD_ID}
+          </span>
+        </Row>
+      )}
       <Row label="Android app" desc={`${ANDROID_APP.name} ${ANDROID_APP.tag} · ${APP_SIZE_LABEL} · background playback, equalizer, synced lyrics`}>
         <Link
           href="/app"
