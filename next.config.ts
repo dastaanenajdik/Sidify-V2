@@ -2,6 +2,11 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["youtubei.js"],
+  // Expose the Vercel commit SHA to the client so Settings → About can show which build a
+  // device is actually running (useful when a cached PWA shell keeps serving an old release).
+  env: {
+    NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? "",
+  },
   // Dev-only: the sandbox preview proxies dev traffic from `*.e2b.app`, and Next blocks
   // cross-origin dev requests (HMR + client chunks) unless the host is allowed here.
   allowedDevOrigins: ["*.e2b.app", "localhost", "127.0.0.1"],

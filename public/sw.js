@@ -2,10 +2,12 @@
  * Network-first for navigations, cache-first for static assets.
  * Live search/stream API responses are never cached. */
 
-/* v2: bumped with the 1.0 playback/library fixes so no client keeps serving the previous
- * app shell + chunks after this release. Old caches are deleted on activate. */
-const SHELL_CACHE = "sidify-shell-v4";
-const STATIC_CACHE = "sidify-static-v4";
+/* v3: bumped after the backdrop/z-index fix in 1.1.0. Any client still holding the old
+ * app shell must drop it, so both cache names move forward and activate() deletes the
+ * previous ones. Installed PWAs pick this up at most one reload after the deploy thanks to
+ * `src/lib/pwa.ts` (updateViaCache: none + controllerchange reload). */
+const SHELL_CACHE = "sidify-shell-v5";
+const STATIC_CACHE = "sidify-static-v5";
 
 const APP_SHELL = [
   "./",
@@ -36,6 +38,12 @@ self.addEventListener("activate", (event) => {
       )
       .then(() => self.clients.claim())
   );
+});
+
+/* Explicit update request from the page (Settings → "Check now"): activate immediately
+ * instead of waiting for every Sidify tab to be closed. */
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 function isApi(url) {

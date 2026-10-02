@@ -6,6 +6,8 @@ import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
 import { initEngine, restoreSession, togglePlay, next, prev, applySettings } from "@/lib/audioEngine";
 import { useLiked, useDownloads, useBlocked } from "@/lib/library";
+import { DELUXE_ART } from "@/lib/backdrop";
+import { registerServiceWorker, armNextAutoReload } from "@/lib/pwa";
 import MiniPlayer from "./MiniPlayer";
 import FullPlayer from "./FullPlayer";
 import BackGuard from "./BackGuard";
@@ -81,8 +83,18 @@ function PlatformBootstrap() {
     };
     document.addEventListener("error", onErr, true);
 
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    // PWA shell + silent update checks (see src/lib/pwa.ts). A new deploy therefore reaches
+    // installed clients on their next visit instead of waiting for all tabs to be closed.
+    const unregisterPwa = registerServiceWorker();
+    const disarmAutoReload = armNextAutoReload();
+
+    // Warm the deluxe artwork so the first crossfade never waits on the network.
+    if (window.matchMedia("(min-width: 768px)").matches) {
+      DELUXE_ART.slice(0, 4).forEach((art) => {
+        const img = new Image();
+        img.decoding = "async";
+        img.src = art.src;
+      });
     }
 
     const bip = (e: Event) => {
@@ -99,6 +111,8 @@ function PlatformBootstrap() {
 
     return () => {
       document.removeEventListener("error", onErr, true);
+      unregisterPwa();
+      disarmAutoReload();
       window.removeEventListener("beforeinstallprompt", bip as EventListener);
       window.removeEventListener("appinstalled", onInstalled);
     };
