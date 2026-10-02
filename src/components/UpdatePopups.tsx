@@ -15,23 +15,48 @@ import { ANDROID_APP, APP_SIZE_LABEL } from "@/lib/appRelease";
 export const UPDATE_INFO = {
   tag: "Release 1.1.0",
   date: "2 Oct 2026",
-  headline: "Deluxe artwork, just for your player",
+  headline: "The vivid Sidify backdrop is back",
   items: [
-    "Rotating artwork now appears only in the full-screen player. Home, Search, Library, Downloads and Settings keep their clean, solid backgrounds.",
-    "10 artworks crossfade every 11 seconds with a slow Ken-Burns drift and a mood tint that follows the song. Salon and barber-shop images have been removed.",
-    "Jump between artworks using the dots inside the full-screen player.",
-    "Deluxe backdrop is now a real switch: Settings → Appearance → “Deluxe backdrop” (on by default).",
+    "Vivid rotating artwork is back across Home, Search, Library, Downloads and Settings; the full-screen player keeps its own artwork rotator.",
+    "10 artworks crossfade every 11 seconds with a slow Ken-Burns drift and a mood tint that follows the song. Salon and barber-shop images are not included.",
+    "Jump between artworks using the dots on Home or inside the full-screen player.",
+    "Deluxe backdrop is controlled from Settings → Appearance → “Deluxe backdrop” (on by default).",
     "Search keeps every character you type — spaces included — with history, suggestions and category tiles.",
     "“Check for updates” in Settings → About is real now: it asks the browser for the newest build, shows the deployment id, and reloads you onto it. Installed PWAs also refresh silently in the background on the next visit — no more waiting for a hard reload to see a new release.",
-    `Android app stays at ${ANDROID_APP.name} ${ANDROID_APP.tag} — the free ${APP_SIZE_LABEL} APK is one tap away in the “Get the app” banner on Home (and in the sidebar).`,
+    `Android app stays at ${ANDROID_APP.name} ${ANDROID_APP.tag} — the free ${APP_SIZE_LABEL} APK is available from “Get the app” in the sidebar.`,
   ],
 };
 
 const LOCK_SECONDS = 5;
 const SEEN_KEY = "sidify-notices-shown";
 const BG_HELP_SEEN_KEY = "sidify-background-help-shown";
-// Also remember within this page when browser storage is blocked.
+// Remember within this page too, in case browser storage is unavailable.
 let backgroundHelpShown = false;
+
+function startupNoticesAlreadyShown(): boolean {
+  try {
+    return localStorage.getItem(SEEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberStartupNotices(): void {
+  try {
+    localStorage.setItem(SEEN_KEY, "1");
+  } catch {
+    // The notice still appears; persistence is unavailable in this browser.
+  }
+}
+
+function backgroundGuideAlreadyShown(): boolean {
+  if (backgroundHelpShown) return true;
+  try {
+    return localStorage.getItem(BG_HELP_SEEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /*  Shell: same glass panel language as the rest of the app.           */
@@ -315,7 +340,8 @@ function BackgroundHelp({ onClose }: { onClose: () => void }) {
 
       <p className="text-muted mb-5 text-[13.5px] leading-6">
         Mobile browsers stop audio the moment you leave a page. The fastest fix is four steps with Brave; the
-        second method works in the browser you already have. Do this once per session.
+        second method works in the browser you already have. This guide appears automatically only once and stays
+        available in Settings if you need it again.
       </p>
 
       {/* ---- Method 1 — recommended ---- */}
@@ -398,32 +424,24 @@ export default function UpdatePopups() {
   const setBgHelpOpen = useUi((s) => s.setBgHelpOpen);
   const [showUpdate, setShowUpdate] = useState(false);
 
-  // sessionStorage is only available on the client, so the decision is made right after
-  // mount (before paint) instead of during the first render.
+  // localStorage scopes this to one browser profile, rather than showing the notices
+  // again every time a new tab/session opens the site.
   useEffect(() => {
-    let seen = "";
-    try {
-      seen = sessionStorage.getItem(SEEN_KEY) || "";
-    } catch {
-      seen = "";
-    }
-    if (seen) return;
-    const raf = requestAnimationFrame(() => setShowUpdate(true));
+    if (startupNoticesAlreadyShown()) return;
+    const raf = requestAnimationFrame(() => {
+      // Mark it when it is actually about to appear. Deferring this until the frame also
+      // keeps React Strict Mode's setup/cleanup replay from consuming the first-visit flag.
+      rememberStartupNotices();
+      setShowUpdate(true);
+    });
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const remember = () => {
-    try {
-      sessionStorage.setItem(SEEN_KEY, "1");
-    } catch {
-      /* private mode - the notice simply shows again next visit */
-    }
-  };
-
   const finishUpdate = () => {
     setShowUpdate(false);
-    remember();
-    setBgHelpOpen(true);
+    // Show the playback guide automatically only on its first visit too. It remains
+    // available any time from Settings → Instructions to play background.
+    if (!backgroundGuideAlreadyShown()) setBgHelpOpen(true);
   };
 
   const closeBg = () => setBgHelpOpen(false);

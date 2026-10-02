@@ -76,7 +76,12 @@ async function send<T = { ok: boolean }>(path: string, method: "POST" | "PATCH" 
 }
 
 export const api = {
-  home: (country: string) => fetch(`/api/home?country=${country}`).then((r) => j<HomeData>(r)),
+  home: (country: string, history: Track[]) =>
+    fetch("/api/home", {
+      method: "POST",
+      headers: JSON_HDRS,
+      body: JSON.stringify({ country, history }),
+    }).then((r) => j<HomeData>(r)),
 
   search: (q: string, type: string, country: string, limit = 20) =>
     fetch(`/api/search?q=${encodeURIComponent(q)}&type=${type}&country=${country}&limit=${limit}`).then((r) =>
@@ -84,7 +89,7 @@ export const api = {
     ),
 
   artist: (id: string) =>
-    fetch(`/api/artist/${id}`).then((r) => j<{ artist: Artist; songs: Track[]; albums: Album[] }>(r)),
+    fetch(`/api/artist/${encodeURIComponent(id)}`).then((r) => j<{ artist: Artist; songs: Track[]; albums: Album[] }>(r)),
 
   album: (id: string) => fetch(`/api/album/${id}`).then((r) => j<{ album: Album; tracks: Track[] }>(r)),
 

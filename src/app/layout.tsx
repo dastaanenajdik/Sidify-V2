@@ -4,6 +4,7 @@ import { Inter, Sora } from "next/font/google";
 import "./globals.css";
 import Providers from "@/components/Providers";
 import Sidebar from "@/components/Sidebar";
+import DeluxeBackdrop from "@/components/DeluxeBackdrop";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const sora = Sora({ subsets: ["latin"], variable: "--font-sora" });
@@ -31,6 +32,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en" suppressHydrationWarning data-theme="dark">
       <body className={`${inter.variable} ${sora.variable} text-[var(--text)] antialiased`}>
         <Providers>
+          {/* Shared artwork backdrop behind Home, Library, Search and the rest of the site.
+              The full-screen player keeps its own existing rotator on top. */}
+          <DeluxeBackdrop scope="site" />
           <div className="relative flex h-dvh overflow-hidden">
             <Sidebar />
             <div className="flex min-w-0 flex-1 flex-col">

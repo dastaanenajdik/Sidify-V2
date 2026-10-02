@@ -1,11 +1,12 @@
 "use client";
 
 import { ReactNode, useEffect, useState } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
 import { initEngine, restoreSession, togglePlay, next, prev, applySettings } from "@/lib/audioEngine";
 import { useLiked, useDownloads, useBlocked } from "@/lib/library";
+import { onRefresh } from "@/lib/refreshBus";
 import { DELUXE_ART } from "@/lib/backdrop";
 import { registerServiceWorker, armNextAutoReload } from "@/lib/pwa";
 import MiniPlayer from "./MiniPlayer";
@@ -148,9 +149,21 @@ function EngineBootstrap() {
 
 /** Keeps global id-maps (liked / downloaded / blocked) warm everywhere. */
 function DataSync() {
+  const queryClient = useQueryClient();
   useLiked();
   useDownloads();
   useBlocked();
+
+  // Keep personalized home recommendations fresh even when the user plays music on
+  // another route and returns Home after its cached query would otherwise look fresh.
+  useEffect(
+    () =>
+      onRefresh((key) => {
+        if (key === "recent") void queryClient.invalidateQueries({ queryKey: ["home"] });
+      }),
+    [queryClient]
+  );
+
   return null;
 }
 

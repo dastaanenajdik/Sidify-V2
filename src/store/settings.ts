@@ -65,7 +65,7 @@ interface SettingsState {
 
   explicitFilter: boolean;
 
-  /** Rotating "deluxe" artwork backdrop behind the whole app. */
+  /** Rotating "deluxe" artwork backdrop behind the site and full-screen player. */
   deluxeBackdrop: boolean;
 
   profileName: string;

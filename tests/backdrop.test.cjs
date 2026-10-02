@@ -22,11 +22,13 @@ test('catalogue excludes salon images and keeps the original asset IDs', () => {
   }
 });
 
-test('slideshow and its controls are mounted only inside the full player', () => {
+test('site-wide backdrop returns while the full-screen player keeps its own rotator', () => {
   const read = p => fs.readFileSync(path.resolve(__dirname, '../src/' + p), 'utf8');
-  assert.doesNotMatch(read('app/layout.tsx'), /DeluxeBackdrop/);
-  assert.doesNotMatch(read('app/page.tsx'), /DeluxeArtDots/);
+  assert.match(read('app/layout.tsx'), /<DeluxeBackdrop scope="site" \/>/);
+  assert.match(read('app/page.tsx'), /<DeluxeArtDots \/>/);
   assert.match(read('components/FullPlayer.tsx'), /<DeluxeBackdrop \/>/);
   assert.match(read('components/FullPlayer.tsx'), /<DeluxeArtDots/);
+  assert.match(read('components/DeluxeBackdrop.tsx'), /fixed inset-0 -z-10/);
   assert.match(read('components/DeluxeBackdrop.tsx'), /absolute inset-0 z-0/);
+  assert.match(read('app/globals.css'), /body \{\s*background: transparent;/);
 });
