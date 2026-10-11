@@ -3,8 +3,7 @@
  *
  * Every surface that talks about the app — the home banner, the sidebar promo, the
  * /app landing page, the `/get` short link and its QR code — reads from here, so
- * shipping a new build only means editing this one file. `apkUrl` points at the
- * release's `latest` asset, so the link itself never goes stale.
+ * shipping a new build only means editing this one file.
  */
 
 export const ANDROID_APP = {
@@ -12,34 +11,39 @@ export const ANDROID_APP = {
   name: "IfallMusic",
   /** What we call it on this site. */
   siteName: "Sidify app",
-  version: "2.5.0",
-  tag: "v2.5.0",
-  released: "29 Sept 2026",
+  version: "2.7.0",
+  tag: "v2.7.0",
+  /** Android `versionCode` of this build — shown next to the version. */
+  build: 29,
+  released: "3 Oct 2026",
   /** Exact byte size of the asset in the GitHub release. */
-  sizeBytes: 73_298_043,
+  sizeBytes: 69_567_785,
   fileName: "app-release.apk",
   platform: "Android",
   price: "Free",
   author: "Siddharth · ifallertzia",
   /**
-   * The `latest` asset URL — it carries no version, so the download button, the QR
-   * code and the `/get` short link keep serving the newest build even after the next
-   * release ships. Only the version/size/notes below need editing per release.
+   * Tagged asset URL for the current release. The download button, the QR code and
+   * the `/get` short link all read this, so bump `version` / `tag` / `apkUrl`
+   * together when a new build ships.
    */
   apkUrl:
-    "https://github.com/ifallertzia/Saxify-v1/releases/download/v2.5.0/app-release.apk",
-  releaseUrl: "https://github.com/ifallertzia/Saxify-v1/releases/latest",
-  repoUrl: "https://github.com/ifallertzia/Saxify-v1",
+    "https://github.com/ifallertzia/ifallmusic/releases/download/v2.7.0/app-release.apk",
+  releaseUrl: "https://github.com/ifallertzia/ifallmusic/releases/latest",
+  repoUrl: "https://github.com/ifallertzia/ifallmusic",
 } as const;
+
+/** `v2.7.0 (build 29)` — the label the release page and the spec table quote. */
+export const APP_VERSION_LABEL = `${ANDROID_APP.tag} (build ${ANDROID_APP.build})`;
 
 /**
  * Human label for the asset size.
  *
- * The release notes quote the APK in decimal megabytes (73.3 MB), so this uses the
- * same unit instead of the site's binary `formatBytes`, which would print 69.2 MB for
+ * The release notes quote the APK in decimal megabytes (69.6 MB), so this uses the
+ * same unit instead of the site's binary `formatBytes`, which would print 66.3 MB for
  * the very same file.
  */
-export const APP_SIZE_LABEL = `${(ANDROID_APP.sizeBytes / 1_000_000).toFixed(1)} MB`; // → "73.3 MB"
+export const APP_SIZE_LABEL = `${(ANDROID_APP.sizeBytes / 1_000_000).toFixed(1)} MB`; // → "69.6 MB"
 
 export type AppFeature = {
   icon: string;
@@ -114,8 +118,10 @@ export const APP_FEATURES: AppFeature[] = [
   },
 ];
 
-/** Condensed from the v2.5.0 release notes on GitHub. */
+/** Condensed from the v2.7.0 (build 29) release notes on GitHub. */
 export const APP_WHATS_NEW: string[] = [
+  "Liked page on the home screen — your liked songs now open as their own page, straight from Home.",
+  "Recommendations and playback follow the vibe more accurately — what plays after a song is picked from that song itself, so the next track matches the mood you were in.",
   "On-device music — the app scans your phone\u2019s storage and lists the songs, albums and artists already on it.",
   "Playlist button at the bottom of the player — add the playing song to a playlist, or start a new one, without leaving the player.",
   "Sleep timer now sits in the top bar of the player, next to the lyrics button.",
@@ -191,6 +197,7 @@ export const APP_FAQ: Faq[] = [
 export const APP_SPECS: { label: string; value: string }[] = [
   { label: "App name", value: ANDROID_APP.name },
   { label: "Version", value: `${ANDROID_APP.version} (latest)` },
+  { label: "Build", value: `${ANDROID_APP.build}` },
   { label: "Released", value: ANDROID_APP.released },
   { label: "File", value: ANDROID_APP.fileName },
   { label: "Size", value: APP_SIZE_LABEL },

@@ -35,6 +35,7 @@ import {
   APP_FEATURES,
   APP_SIZE_LABEL,
   APP_SPECS,
+  APP_VERSION_LABEL,
   APP_WHATS_NEW,
   INSTALL_STEPS,
 } from "@/lib/appRelease";
@@ -62,7 +63,7 @@ const FEATURE_ICONS: Record<string, IconComp> = {
 };
 
 const STATS: { icon: IconComp; label: string; value: string }[] = [
-  { icon: Package, label: "Version", value: `${ANDROID_APP.version} latest` },
+  { icon: Package, label: "Version", value: `${ANDROID_APP.version} · build ${ANDROID_APP.build}` },
   { icon: Download, label: "Download size", value: APP_SIZE_LABEL },
   { icon: BatteryCharging, label: "Runs on", value: "Android" },
   { icon: InfinityIcon, label: "Price", value: "Free forever" },
@@ -99,7 +100,7 @@ export default function AppDownloadPage() {
               </span>
               <span className="glass flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-bold">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full accent-bg" />
-                {ANDROID_APP.name} {ANDROID_APP.tag}
+                {ANDROID_APP.name} {APP_VERSION_LABEL}
               </span>
               <span className="glass rounded-full px-3 py-1 text-[11px] font-bold text-muted">
                 Released {ANDROID_APP.released}
@@ -205,9 +206,9 @@ export default function AppDownloadPage() {
       {/* --------------------------- WHAT'S NEW --------------------------- */}
       <section id="whats-new" className="mb-12 scroll-mt-6">
         <Header
-          eyebrow={`Release notes · ${ANDROID_APP.tag}`}
+          eyebrow={`Release notes · ${APP_VERSION_LABEL}`}
           title={`What's new in ${ANDROID_APP.version}`}
-          sub={`Shipped ${ANDROID_APP.released} — this is the build behind the download button.`}
+          sub={`Shipped ${ANDROID_APP.released} — build ${ANDROID_APP.build} is the one behind the download button.`}
         />
         <div className="glass-strong overflow-hidden rounded-3xl">
           <div
@@ -222,7 +223,7 @@ export default function AppDownloadPage() {
                 <div className="font-display text-[16px] font-extrabold tracking-tight">
                   {ANDROID_APP.name} {ANDROID_APP.version}
                 </div>
-                <div className="text-muted text-[12px]">Lyrics that follow the song, presets that stick, downloads you can watch</div>
+                <div className="text-muted text-[12px]">Liked songs on Home, next tracks that match the vibe, lyrics that follow the song</div>
               </div>
             </div>
             <span className="glass text-muted rounded-full px-3 py-1.5 text-[11.5px] font-bold">
