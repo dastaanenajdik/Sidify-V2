@@ -116,7 +116,7 @@ function Shell({ track }: { track: Track }) {
       <div className="relative z-10 mx-auto flex h-full max-w-[1400px] flex-col px-5 pt-4 pb-6 md:px-10 md:pt-6">
         {/* header */}
         <div className="flex items-center justify-between">
-          <button aria-label="Close player" onClick={close} className="glass grid h-10 w-10 place-items-center rounded-full">
+          <button aria-label="Close player" onClick={close} className="nv-glass grid h-10 w-10 place-items-center rounded-full">
             <ChevronDown size={20} />
           </button>
           <div className="text-center">
@@ -126,7 +126,7 @@ function Shell({ track }: { track: Track }) {
           <button
             aria-label="More"
             onClick={(e) => useUi.getState().openMenu({ track, x: e.clientX - 200, y: e.clientY })}
-            className="glass grid h-10 w-10 place-items-center rounded-full"
+            className="nv-glass grid h-10 w-10 place-items-center rounded-full"
           >
             <MoreHorizontal size={19} />
           </button>
@@ -198,16 +198,18 @@ function Shell({ track }: { track: Track }) {
               <button
                 aria-label="Shuffle"
                 onClick={() => usePlayer.getState().set({ shuffle: !shuffle })}
-                className={cx("grid h-11 w-11 place-items-center rounded-full", shuffle ? "accent-text" : "text-muted hover:text-[var(--text)]")}
-                style={shuffle ? { filter: "drop-shadow(0 0 8px var(--glow))" } : undefined}
+                className={cx(
+                  "nv-glass grid h-11 w-11 place-items-center rounded-full",
+                  shuffle ? "nv-glass-active accent-text" : "text-muted hover:text-[var(--text)]"
+                )}
               >
                 <Shuffle size={19} />
               </button>
-              <button aria-label="Previous" onClick={() => void prev()} className="grid h-12 w-12 place-items-center rounded-full hover:bg-[var(--panel)]">
+              <button aria-label="Previous" onClick={() => void prev()} className="nv-glass grid h-12 w-12 place-items-center rounded-full">
                 <SkipBack size={26} fill="currentColor" />
               </button>
-              <PlayButton playing={isPlaying} size={68} onClick={() => void togglePlay()} label={isPlaying ? "Pause" : "Play"} />
-              <button aria-label="Next" onClick={() => void next(true)} className="grid h-12 w-12 place-items-center rounded-full hover:bg-[var(--panel)]">
+              <PlayButton playing={isPlaying} size={68} onClick={() => void togglePlay()} label={isPlaying ? "Pause" : "Play"} variant="glass" />
+              <button aria-label="Next" onClick={() => void next(true)} className="nv-glass grid h-12 w-12 place-items-center rounded-full">
                 <SkipForward size={26} fill="currentColor" />
               </button>
               <button
@@ -216,8 +218,10 @@ function Shell({ track }: { track: Track }) {
                   const order: Array<typeof repeat> = ["off", "all", "one"];
                   usePlayer.getState().set({ repeat: order[(order.indexOf(repeat) + 1) % 3] });
                 }}
-                className={cx("grid h-11 w-11 place-items-center rounded-full", repeat !== "off" ? "accent-text" : "text-muted hover:text-[var(--text)]")}
-                style={repeat !== "off" ? { filter: "drop-shadow(0 0 8px var(--glow))" } : undefined}
+                className={cx(
+                  "nv-glass grid h-11 w-11 place-items-center rounded-full",
+                  repeat !== "off" ? "nv-glass-active accent-text" : "text-muted hover:text-[var(--text)]"
+                )}
               >
                 {repeat === "one" ? <Repeat1 size={19} /> : <Repeat size={19} />}
               </button>
@@ -229,8 +233,8 @@ function Shell({ track }: { track: Track }) {
                 <button
                   onClick={() => setSpeedOpen((v) => !v)}
                   className={cx(
-                    "glass flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12.5px] font-semibold",
-                    speed !== 1 ? "accent-text" : "text-muted"
+                    "nv-glass flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12.5px] font-semibold",
+                    speed !== 1 ? "nv-glass-active accent-text" : "text-muted"
                   )}
                 >
                   <Gauge size={15} /> {speed}x
@@ -417,7 +421,10 @@ function ToolButton({ children, label, onClick, active }: { children: React.Reac
     <button
       aria-label={label}
       onClick={onClick}
-      className={cx("glass grid h-10 w-10 place-items-center rounded-full transition-colors", active ? "accent-text" : "text-muted hover:text-[var(--text)]")}
+      className={cx(
+        "nv-glass grid h-10 w-10 place-items-center rounded-full transition-colors",
+        active ? "nv-glass-active accent-text" : "text-muted hover:text-[var(--text)]"
+      )}
     >
       {children}
     </button>

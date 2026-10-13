@@ -48,6 +48,8 @@ interface SettingsState {
   crossfadeSecs: number;
   gapless: boolean;
   autoplay: boolean;
+  /** Autoplay follows YouTube Music's own "Up next" queue instead of keyword guesses. */
+  ytRadio: boolean;
   rememberPosition: boolean;
 
   eqPreset: string;
@@ -84,10 +86,11 @@ export const useSettings = create<SettingsState>()(
 
       wifiQuality: "high",
       mobileQuality: "medium",
-      crossfadeSecs: 0,
-      gapless: true,
-      autoplay: true,
-      rememberPosition: true,
+    crossfadeSecs: 0,
+    gapless: true,
+    autoplay: true,
+    ytRadio: true,
+    rememberPosition: true,
 
       eqPreset: "flat",
       eqGains: [0, 0, 0, 0, 0],

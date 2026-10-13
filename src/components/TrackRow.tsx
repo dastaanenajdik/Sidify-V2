@@ -132,8 +132,19 @@ export default function TrackRow({
             <Download size={15} />
           )}
         </button>
-        <span className="text-muted-2 hidden w-10 text-right text-[12.5px] tabular-nums sm:inline">
-          {formatTime(track.durationMs)}
+        <span className="flex items-center gap-1.5">
+          {/* YouTube Music rows get the HD badge; plain YouTube video results stay bare. */}
+          {track.source === "ytmusic" && (
+            <span
+              title="From YouTube Music"
+              className="accent-text rounded-[4px] border border-[var(--border)] bg-[var(--panel-strong)] px-1 py-px text-[9px] font-bold tracking-wider"
+            >
+              HD
+            </span>
+          )}
+          <span className="text-muted-2 w-10 text-right text-[12.5px] tabular-nums">
+            {track.durationMs > 0 ? formatTime(track.durationMs) : "--:--"}
+          </span>
         </span>
         <button
           aria-label="More options"

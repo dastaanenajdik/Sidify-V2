@@ -811,14 +811,41 @@ async function startCrossfade(secs: number) {
 
 /* --------------------------- autoplay fill ---------------------------- */
 
+/** Appends tracks the queue doesn't already contain. Returns true when something landed. */
+function appendFresh(candidates: Track[], cur: Track, max = 10): boolean {
+  const state = usePlayer.getState();
+  const existing = new Set(state.queue.map((t) => t.id));
+  const fresh = filterBlocked(candidates)
+    .filter((t) => t.id !== cur.id && !existing.has(t.id))
+    .slice(0, max);
+  if (!fresh.length) return false;
+  usePlayer.getState().set({ queue: [...usePlayer.getState().queue, ...fresh] });
+  return true;
+}
+
 /**
- * Queue finished -> keep the radio going. Searches for tracks that sound like what just
- * played and appends them. Several queries are tried in order because "the artist" alone
- * sometimes returns nothing usable (covers, remixes, or a lookup that just failed).
+ * Queue finished -> keep the radio going.
+ *
+ * First choice is YouTube Music's own "Up next" queue for the current track (the exact
+ * songs YTM would play after it, song-radio included) so autoplay feels like the real
+ * app instead of a keyword guess. Only when that yields nothing do we fall back to
+ * searching for tracks that sound like what just played — several queries are tried in
+ * order because "the artist" alone sometimes returns nothing usable (covers, remixes,
+ * or a lookup that just failed).
  */
 async function appendSimilar(): Promise<boolean> {
   const cur = currentTrack(P());
   if (!cur) return false;
+
+  if (S().ytRadio && cur.videoId) {
+    try {
+      const res = await api.radio(cur.videoId, 12);
+      if (appendFresh(res?.tracks ?? [], cur)) return true;
+    } catch {
+      /* fall through to the search ladder */
+    }
+  }
+
   const seed = (cur.title || "").replace(/\s*\[.*?\]|\s*\(.*?\)|\s*(official|video|audio|lyrics|full song|hd|hq)\s*/gi, " ").replace(/\s+/g, " ").trim();
   const queries = [cur.artist, `${cur.artist} ${seed}`.trim(), seed, cur.album, P().contextLabel.replace(/^Results for\s+|[""]/g, "")]
     .map((q) => (q || "").trim())
@@ -829,14 +856,7 @@ async function appendSimilar(): Promise<boolean> {
   for (const q of order) {
     try {
       const res = await api.search(q, "songs", S().region, 12);
-      const state = usePlayer.getState();
-      const existing = new Set(state.queue.map((t) => t.id));
-      const fresh = filterBlocked(res.songs)
-        .filter((t) => t.id !== cur.id && !existing.has(t.id))
-        .slice(0, 8);
-      if (!fresh.length) continue;
-      usePlayer.getState().set({ queue: [...usePlayer.getState().queue, ...fresh] });
-      return true;
+      if (appendFresh(res.songs, cur, 8)) return true;
     } catch {
       /* try the next seed */
     }

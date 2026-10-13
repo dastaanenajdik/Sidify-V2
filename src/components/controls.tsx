@@ -12,22 +12,37 @@ export function PlayButton({
   size = 52,
   className,
   label = "Play",
+  variant = "accent",
 }: {
   playing?: boolean;
   onClick?: (e: React.MouseEvent) => void;
   size?: number;
   className?: string;
   label?: string;
+  /** "accent" = solid accent disc; "glass" = Nosved-style radial white glass hero button. */
+  variant?: "accent" | "glass";
 }) {
+  const glass = variant === "glass";
   return (
     <button
       aria-label={label}
       onClick={onClick}
       className={cx(
-        "ring-focus grid shrink-0 place-items-center rounded-full accent-bg text-black transition-transform duration-150 hover:scale-105 active:scale-95",
+        "ring-focus grid shrink-0 place-items-center rounded-full transition-transform duration-150 hover:scale-105 active:scale-95",
+        glass ? cx("nv-glass text-white", !playing && "scale-[1.05]") : "accent-bg text-black",
         className
       )}
-      style={{ width: size, height: size, boxShadow: "0 8px 28px -6px var(--glow)" }}
+      style={
+        glass
+          ? {
+              width: size,
+              height: size,
+              background: "radial-gradient(circle at 50% 38%, rgba(255,255,255,0.16), rgba(255,255,255,0.05))",
+              borderColor: "rgba(255,255,255,0.25)",
+              boxShadow: "0 8px 28px -6px var(--glow)",
+            }
+          : { width: size, height: size, boxShadow: "0 8px 28px -6px var(--glow)" }
+      }
     >
       {playing ? (
         <Pause size={size * 0.42} fill="currentColor" strokeWidth={0} />

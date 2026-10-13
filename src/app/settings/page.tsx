@@ -356,6 +356,9 @@ function PlaybackSection() {
       <Row label="Autoplay" desc="Keep similar music flowing when your queue ends">
         <Toggle checked={s.autoplay} onChange={(v) => s.set({ autoplay: v })} />
       </Row>
+      <Row label="YouTube Music radio" desc="Queue exactly what YouTube Music plays next — its own up-next / song radio, not a keyword guess">
+        <Toggle checked={s.ytRadio} onChange={(v) => s.set({ ytRadio: v })} />
+      </Row>
       <Row label="Remember playback position" desc="Resume exactly where you left off">
         <Toggle checked={s.rememberPosition} onChange={(v) => s.set({ rememberPosition: v })} />
       </Row>

@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { usePlayer } from "@/store/player";
 import { seekTo } from "@/lib/audioEngine";
-import { formatSecs } from "@/lib/format";
+import { cx, formatSecs } from "@/lib/format";
 
 export default function SeekBar({ showTimes = true, className }: { showTimes?: boolean; className?: string }) {
   const positionMs = usePlayer((s) => s.positionMs);
   const durationMs = usePlayer((s) => s.durationMs);
+  const isPlaying = usePlayer((s) => s.isPlaying);
   const [scrub, setScrub] = useState<number | null>(null);
   const ref = useRef<HTMLInputElement>(null);
 
@@ -25,7 +26,7 @@ export default function SeekBar({ showTimes = true, className }: { showTimes?: b
         ref={ref}
         type="range"
         aria-label="Seek"
-        className="th-slider w-full"
+        className={cx("nv-slider w-full", !isPlaying && "is-paused")}
         min={0}
         max={dur}
         step={0.1}

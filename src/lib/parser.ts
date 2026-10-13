@@ -69,6 +69,32 @@ export function durationTextToSeconds(text?: string): number {
   return parts.reduce((acc, n) => acc * 60 + n, 0);
 }
 
+const TIME_TEXT_RE = /^\d{1,2}:\d{2}(?::\d{2})?$/;
+
+/**
+ * Some YouTube Music layouts (top-result cards, grid shelves, raw JSON payloads)
+ * don't expose `node.duration` at all — the runtime lives in a fixed/flex column
+ * ("3:45") or in `lengthText`. Scan those before giving up on the duration.
+ */
+function durationFromColumns(node: any): number {
+  const pools: any[] = [];
+  if (Array.isArray(node?.fixed_columns)) pools.push(...node.fixed_columns);
+  if (Array.isArray(node?.flex_columns)) pools.push(...node.flex_columns);
+  for (const col of pools) {
+    const title = col?.title ?? col;
+    const direct = readText(title).trim();
+    if (direct && TIME_TEXT_RE.test(direct)) return durationTextToSeconds(direct);
+    const runs = title?.runs ?? title?.textRuns;
+    if (Array.isArray(runs)) {
+      for (const r of runs) {
+        const t = String(r?.text ?? "").trim();
+        if (TIME_TEXT_RE.test(t)) return durationTextToSeconds(t);
+      }
+    }
+  }
+  return 0;
+}
+
 function collectThumbnails(node: any): string[] {
   const out: string[] = [];
   const push = (list: any) => {
@@ -119,6 +145,8 @@ export interface FlatItem {
   durationSecs: number;
   thumbnail: string;
   year?: string;
+  /** Provenance tag stamped by the engine: which ladder step produced this item. */
+  source?: "ytmusic" | "youtube";
 }
 
 function extractId(node: any): string {
@@ -182,7 +210,9 @@ export function toFlatItem(node: any): FlatItem | null {
   const duration =
     Number(node?.duration?.seconds ?? node?.duration_seconds ?? 0) ||
     durationTextToSeconds(node?.duration?.text ?? (typeof node?.duration === "string" ? node.duration : "")) ||
-    Math.round(Number(node?.length_seconds ?? 0) / 1) ||
+    Math.round(Number(node?.length_seconds ?? node?.videoDetails?.lengthSeconds ?? 0) / 1) ||
+    durationTextToSeconds(readText(node?.lengthText)) ||
+    durationFromColumns(node) ||
     0;
 
   return {
@@ -215,6 +245,7 @@ function mergeFlatItem(target: FlatItem, extra: FlatItem): void {
   if (!target.durationSecs && extra.durationSecs) target.durationSecs = extra.durationSecs;
   if (!target.thumbnail && extra.thumbnail) target.thumbnail = extra.thumbnail;
   if (!target.year && extra.year) target.year = extra.year;
+  if (!target.source && extra.source) target.source = extra.source;
   // Prefer a concrete item_type over the inferred "unknown".
   if (target.itemType === "unknown" && extra.itemType !== "unknown") target.itemType = extra.itemType;
 }
@@ -285,6 +316,7 @@ export function toTrack(item: FlatItem | null): Track | null {
     durationMs: Math.max(0, Math.round((item.durationSecs || 0) * 1000)),
     explicit: false,
     releaseDate: item.year,
+    source: item.source,
   };
 }
 

@@ -12,6 +12,8 @@ export interface Track {
   genre?: string;
   releaseDate?: string;
   explicit?: boolean;
+  /** Where the row came from: a YouTube Music shelf or a plain YouTube video search. */
+  source?: "ytmusic" | "youtube";
 }
 
 export interface Album {

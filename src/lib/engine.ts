@@ -183,6 +183,7 @@ export function resetYT(): void {
   g.__sidifyYtPromise = null;
   g.__sidifyDegraded = false;
   audioCache.clear();
+  radioCache.clear();
 }
 
 /* ------------------------------ caching ------------------------------ */
@@ -245,23 +246,57 @@ async function resolveTracks(yt: YT, q: string, wanted: number, useFiltered: boo
     const filtered = await musicSearch(yt, q, "song").catch(() => null);
     if (filtered) {
       const tracks = classifyItems(flattenShelves(filtered), wanted).tracks;
-      if (tracks.length) return tracks;
+      if (tracks.length) return tagSource(tracks, "ytmusic");
     }
   }
 
   const unfiltered = await musicSearch(yt, q).catch(() => null);
   if (unfiltered) {
     const tracks = classifyItems(flattenShelves(unfiltered), wanted).tracks;
-    if (tracks.length) return tracks;
+    if (tracks.length) return tagSource(tracks, "ytmusic");
   }
 
   // Last resort so a search screen is never blank: plain YouTube video search.
   const web = await webSearchVideos(yt, q).catch(() => null);
   if (!web) return [];
-  return flattenShelves(web.results ?? web)
-    .map(toTrack)
-    .filter(Boolean)
-    .slice(0, wanted) as Track[];
+  return tagSource(
+    flattenShelves(web.results ?? web)
+      .map(toTrack)
+      .filter(Boolean)
+      .slice(0, wanted) as Track[],
+    "youtube"
+  );
+}
+
+/** Stamps provenance so the UI can badge YouTube Music rows differently. */
+function tagSource(tracks: Track[], source: "ytmusic" | "youtube"): Track[] {
+  for (const t of tracks) t.source = source;
+  return tracks;
+}
+
+/**
+ * Some YouTube Music rows arrive without a runtime (top-result cards, re-arranged
+ * shelves). Rather than show "0:00", resolve the missing few through a lightweight
+ * `player` call each — bounded, parallel, and never allowed to fail the search.
+ */
+const DURATION_BACKFILL_MAX = 6;
+
+async function backfillDurations(tracks: Track[]): Promise<void> {
+  const missing = tracks.filter((t) => t.videoId && !t.durationMs).slice(0, DURATION_BACKFILL_MAX);
+  if (!missing.length) return;
+  let yt: YT;
+  try {
+    yt = await getYT();
+  } catch {
+    return;
+  }
+  await Promise.allSettled(
+    missing.map(async (t) => {
+      const info = await yt.getBasicInfo(t.videoId!, { client: "ANDROID" } as any);
+      const secs = Number(info?.basic_info?.duration ?? 0);
+      if (Number.isFinite(secs) && secs > 0) t.durationMs = Math.round(secs * 1000);
+    })
+  );
 }
 
 async function runSearch(query: string, type: SearchKind, limit: number): Promise<SearchResult> {
@@ -272,6 +307,7 @@ async function runSearch(query: string, type: SearchKind, limit: number): Promis
   /* ---- songs only ---- */
   if (type === "songs") {
     const tracks = await resolveTracks(yt, q, cap, true);
+    await backfillDurations(tracks).catch(() => {});
     return { tracks, albums: [], artists: [] };
   }
 
@@ -313,6 +349,8 @@ async function runSearch(query: string, type: SearchKind, limit: number): Promis
 
   let tracks = classified.tracks;
   if (!tracks.length) tracks = await resolveTracks(yt, q, wanted, false);
+  else tagSource(tracks, "ytmusic");
+  await backfillDurations(tracks).catch(() => {});
 
   const filled = backfillFromTracks(tracks, classified.albums, classified.artists);
   return { tracks, albums: filled.albums.slice(0, 6), artists: filled.artists.slice(0, 6) };
@@ -376,7 +414,7 @@ async function runChannel(idOrName: string, limit: number): Promise<ChannelData 
         return {
           name: name || "Artist",
           channelId: idOrName,
-          tracks: classified.tracks,
+          tracks: tagSource(classified.tracks, "ytmusic"),
           albums: classified.albums,
         };
       }
@@ -400,7 +438,7 @@ async function runChannel(idOrName: string, limit: number): Promise<ChannelData 
             classified.tracks[0]?.artist ||
             "Artist",
           channelId: isHandle ? classified.tracks[0]?.artistId : idOrName,
-          tracks: classified.tracks,
+          tracks: tagSource(classified.tracks, "youtube"),
           albums: classified.albums,
         };
       }
@@ -497,7 +535,7 @@ async function runAlbum(albumId: string, limit: number): Promise<AlbumData | nul
   const yt = await getYT();
   const album = await yt.music.getAlbum(albumId);
   const items = flattenShelves(album?.contents ?? album);
-  const tracks = items.map(toTrack).filter(Boolean).slice(0, limit) as Track[];
+  const tracks = tagSource(items.map(toTrack).filter(Boolean).slice(0, limit) as Track[], "ytmusic");
   if (!tracks.length) return null;
 
   const header: any = album?.header;
@@ -529,6 +567,54 @@ async function runAlbum(albumId: string, limit: number): Promise<AlbumData | nul
     },
     tracks,
   };
+}
+
+/* ------------------------------ radio / up-next ------------------------------ */
+
+const radioCache = new Map<string, CacheEntry<Track[]>>();
+const RADIO_TTL = 10 * 60_000;
+
+/**
+ * YouTube Music's own "Up next" queue for a track — i.e. exactly what YTM would play
+ * after this song (the automix/song-radio panel), topped up with the related shelf.
+ * This is what powers "keep playing what YouTube Music would play next".
+ */
+export async function ytRadioNext(videoId: string, limit = 12): Promise<Track[]> {
+  if (!isVideoId(videoId)) return [];
+  const cap = Math.min(Math.max(limit, 1), 25);
+  const key = `r:${videoId}:${cap}`;
+  const hit = radioCache.get(key);
+  if (hit && Date.now() - hit.at < RADIO_TTL) return hit.data;
+
+  return dedupe(key, async () => {
+    const out: Track[] = [];
+    const seen = new Set<string>([videoId]);
+    const push = (nodes: any) => {
+      for (const t of classifyItems(flattenShelves(nodes), cap).tracks) {
+        if (!t.videoId || seen.has(t.videoId)) continue;
+        seen.add(t.videoId);
+        t.source = "ytmusic";
+        out.push(t);
+      }
+    };
+
+    try {
+      const yt = await getYT();
+      // `automix: true` lets YouTube Music open the song radio once the panel ends.
+      const panel = await yt.music.getUpNext(videoId, true).catch(() => null);
+      if (panel) push(panel.contents ?? panel);
+      if (out.length < cap) {
+        const related = await yt.music.getRelated(videoId).catch(() => null);
+        if (related) push(related);
+      }
+    } catch (e) {
+      console.error("radio extract failed", (e as Error)?.message);
+    }
+
+    const tracks = out.slice(0, cap);
+    if (tracks.length) radioCache.set(key, { at: Date.now(), data: tracks });
+    return tracks;
+  });
 }
 
 /* ------------------------------ audio resolution ------------------------------ */
