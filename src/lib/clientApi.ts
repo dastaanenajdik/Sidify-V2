@@ -83,6 +83,12 @@ export const api = {
       j<SearchResults>(r)
     ),
 
+  /** YouTube Music "Up next" radio for a track — what YTM would play after it. */
+  radio: (videoId: string, limit = 12) =>
+    fetch(`/api/radio?video_id=${encodeURIComponent(videoId)}&limit=${limit}`).then((r) =>
+      j<{ tracks: Track[] }>(r)
+    ),
+
   artist: (id: string) =>
     fetch(`/api/artist/${id}`).then((r) => j<{ artist: Artist; songs: Track[]; albums: Album[] }>(r)),
 

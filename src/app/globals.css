@@ -232,6 +232,82 @@ input[type="range"].th-slider::-moz-range-track {
   background: transparent;
 }
 
+/* ------------------------- Nosved-style seek bar ------------------------- */
+/* Layered pill track (accent played over a translucent rail) with a white
+   vertical-pill thumb, exactly like the Nosved player: the rail squashes while
+   paused or scrubbing and the thumb narrows while dragging. */
+input[type="range"].nv-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--fill, 0%),
+    color-mix(in srgb, var(--text) 24%, transparent) var(--fill, 0%),
+    color-mix(in srgb, var(--text) 24%, transparent) 100%
+  );
+  outline: none;
+  cursor: pointer;
+  transition: height 0.18s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+input[type="range"].nv-slider:active,
+input[type="range"].nv-slider.is-paused {
+  height: 4px;
+}
+input[type="range"].nv-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 6px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  transition: width 0.16s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+input[type="range"].nv-slider:active::-webkit-slider-thumb {
+  width: 4px;
+}
+input[type="range"].nv-slider::-moz-range-thumb {
+  width: 6px;
+  height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  transition: width 0.16s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+input[type="range"].nv-slider:active::-moz-range-thumb {
+  width: 4px;
+}
+input[type="range"].nv-slider::-moz-range-track {
+  background: transparent;
+}
+
+/* ------------------------- Nosved-style glass chips ------------------------ */
+/* Fake glass: translucent white fill + 1px white hairline border, no backdrop
+   blur — reads clean over artwork and stays cheap to paint. */
+.nv-glass {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.nv-glass:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.nv-glass-active,
+.nv-glass-active:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+:root[data-theme="light"] .nv-glass {
+  background: rgba(15, 18, 40, 0.06);
+  border-color: rgba(15, 18, 40, 0.12);
+}
+:root[data-theme="light"] .nv-glass:hover {
+  background: rgba(15, 18, 40, 0.1);
+}
+
 /* vertical equalizer sliders */
 input[type="range"].v-slider {
   writing-mode: vertical-lr;
