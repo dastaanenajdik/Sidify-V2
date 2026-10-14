@@ -265,7 +265,7 @@ function TitleRow({ track }: { track: Track }) {
 function qualityLabel(downloaded: boolean, mode: string | null, quality: string, inRoom: boolean) {
   if (inRoom) return "In sync";
   if (downloaded) return "Offline";
-  if (mode === "iframe") return "YouTube";
+  if (mode === "iframe") return "Sidify";
   return quality === "high" ? "High Quality" : quality === "medium" ? "Standard" : "Data Saver";
 }
 

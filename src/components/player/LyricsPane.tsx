@@ -70,6 +70,11 @@ export default function LyricsPane({
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [timingOpen, setTimingOpen] = useState(false);
+  /** In-page translation (via /api/translate): translated lines for one view, never a new tab. */
+  // Scoped to a track id: a new song automatically starts from the original words.
+  const [translation, setTranslation] = useState<{ lines: string[]; target: string; kind: "synced" | "plain"; trackId: string } | null>(null);
+  const [showTranslated, setShowTranslated] = useState(false);
+  const [translating, setTranslating] = useState(false);
   const onArt = variant === "player";
   const fontSize = SIZES[dense ? "panel" : variant][size];
 
@@ -79,7 +84,46 @@ export default function LyricsPane({
     const text = lyrics?.trim() ? lyrics : lines.map((l) => l.text).join("\n");
     return text.split("\n");
   }, [lyrics, lines]);
-  const shareLines = synced ? lines.map((l) => l.text) : plainLines;
+  const viewKind: "synced" | "plain" = synced ? "synced" : "plain";
+  const activeTranslation = translation && translation.kind === viewKind && translation.trackId === track.id ? translation : null;
+  const showingTranslated = showTranslated && !!activeTranslation;
+  const displayLines = useMemo(
+    () =>
+      showingTranslated && activeTranslation
+        ? lines.map((l, i) => ({ ...l, text: activeTranslation.lines[i] ?? l.text }))
+        : lines,
+    [lines, showingTranslated, activeTranslation]
+  );
+  const displayPlainLines = showingTranslated && activeTranslation ? activeTranslation.lines : plainLines;
+  const shareLines = synced ? displayLines.map((l) => l.text) : displayPlainLines;
+
+  /** Translate the words on screen, right here — no new tab, timing preserved. */
+  const toggleTranslate = async () => {
+    if (translating) return;
+    const target = translateTarget();
+    if (activeTranslation && activeTranslation.target === target) {
+      setShowTranslated((v) => !v);
+      return;
+    }
+    const sourceLines = synced ? lines.map((l) => l.text) : plainLines;
+    if (!sourceLines.some((l) => l.trim())) return;
+    setTranslating(true);
+    try {
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lines: sourceLines, target }),
+      });
+      const data = (await res.json()) as { success?: boolean; lines?: string[]; message?: string };
+      if (!res.ok || !data.success || !Array.isArray(data.lines)) throw new Error(data.message || "translate failed");
+      setTranslation({ lines: data.lines, target, kind: viewKind, trackId: track.id });
+      setShowTranslated(true);
+    } catch {
+      useUi.getState().pushToast({ title: "Couldn't translate lyrics", desc: "Try again in a moment", kind: "warn" });
+    } finally {
+      setTranslating(false);
+    }
+  };
 
   const changeOffset = (delta: number) => {
     const next = Math.round((offset + delta) / 100) * 100;
@@ -109,7 +153,7 @@ export default function LyricsPane({
     <div className={cx("relative flex min-h-0 flex-col", className)}>
       {synced ? (
         <SyncedLyrics
-          lines={lines}
+          lines={displayLines}
           offset={offset}
           fontSize={fontSize}
           onArt={onArt}
@@ -165,7 +209,8 @@ export default function LyricsPane({
         ) : (
           <>
             <span className={cx("min-w-0 flex-1 truncate text-[11.5px]", onArt ? "text-white/40" : "text-fg-3")}>
-              {source ? `Lyrics via ${source}` : ""}
+              {source ? "Lyrics via Sidify" : ""}
+              {showingTranslated ? " · Translated by Sidify" : ""}
               {offset ? ` · ${offset > 0 ? "+" : ""}${(offset / 1000).toFixed(1)}s` : ""}
             </span>
             {hasSync && (

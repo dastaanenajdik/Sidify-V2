@@ -19,7 +19,11 @@ export default function RoomsPage() {
   const [hostOnly, setHostOnly] = useState(false);
   const [creating, setCreating] = useState(false);
   const [code, setCode] = useState("");
-  const [name, setName] = useState(profileName);
+  // Until the listener types here, the field follows the saved name — the
+  // first-visit gate may save it after this page has mounted.
+  const [typedName, setTypedName] = useState<string | null>(null);
+  const name = typedName ?? (profileName === "Siddharth" ? "" : profileName);
+  const setName = (v: string) => setTypedName(v);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

@@ -168,7 +168,7 @@ function ramp(node: AudioParam, to: number, secs: number) {
  * YouTube-iframe player instead, while the probe keeps running and caches its verdict for
  * every track after this one.
  */
-const PROBE_WAIT_MS = 2500;
+const PROBE_WAIT_MS = 900;
 
 async function probeNative(track: Track): Promise<boolean> {
   if (nativeCapable !== null && Date.now() - nativeProbeAt < 5 * 60_000) return nativeCapable;
@@ -295,7 +295,7 @@ async function playIframe(track: Track, seq: number, resumeMs: number) {
       return;
     }
     usePlayer.getState().set({ isPlaying: false, isLoading: false });
-    toast("Couldn't start the YouTube player");
+    toast("Couldn't start the Sidify player");
     return;
   }
   // `playVideo` waits for the player to boot, so a newer click may have taken over in
@@ -412,7 +412,9 @@ function wireYt() {
   ytController.setCallbacks({
     onEnded: () => void handleEnded(),
     onState: (playing) => {
-      if (isIframeMode()) P().set({ isPlaying: playing });
+      // PLAYING means the wait is over — drop the spinner at the same moment
+      // instead of whenever the next caller happened to clear it.
+      if (isIframeMode()) P().set(playing ? { isPlaying: true, isLoading: false } : { isPlaying: playing });
     },
     onError: () => handleTrackError(),
   });
@@ -429,7 +431,7 @@ function handleTrackError() {
   }
   errorSkips++;
   if (errorSkips > 8) {
-    toast("Several videos are unavailable right now", "Playback paused");
+    toast("Several songs are unavailable right now", "Playback paused");
     P().set({ isPlaying: false, isLoading: false });
     return;
   }
@@ -1317,6 +1319,16 @@ export function initEngine() {
   initialized = true;
   startLoop();
   armEngineUnlock();
+  // Warm the Sidify player at idle, long before the first tap: the player
+  // script + iframe boot used to be paid inside the first click, which is
+  // what made the first song feel slow. Creating the (paused) player needs
+  // no user gesture — only starting playback does.
+  const warmIdle = () => ytController.warm(currentTrack(P())?.videoId);
+  if (typeof window !== "undefined") {
+    const ric = (window as unknown as { requestIdleCallback?: (fn: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+    if (ric) ric(warmIdle, { timeout: 2500 });
+    else setTimeout(warmIdle, 1200);
+  }
   // Coming back to the tab: if the OS/iframe paused us mid-track, keep the transport honest.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;

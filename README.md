@@ -63,6 +63,23 @@ kept in the server's memory — fine for `npm run dev` or a single long-running 
 server, but **on serverless hosts (Vercel) set `DATABASE_URL`**, otherwise two requests
 can land on different instances and miss each other's room.
 
+How it works without any database setup (`src/lib/rooms/store.ts`): `roomStore()`
+picks Postgres when `DATABASE_URL` exists and otherwise an in-memory store — a
+`Map` kept on `globalThis` in the same Node process. Creating a room just inserts
+the room record under a random six-character code; joining is a lookup of that code
+(`POST /api/rooms/{code}/join`), and members poll `GET /api/rooms/{code}` about once
+a second (that poll is also the heartbeat and carries the server clock everyone
+syncs playback to). No signup, no extra service: the code *is* the address.
+
+So why does a code from one Sidify site connect on another Sidify site? The client
+always calls `/api/rooms/…` **relative to the site you are on**, so the code only
+resolves where the room record actually lives. It connects across two sites only
+when both sites share that store — either both deployments use the **same**
+`DATABASE_URL` (the same `listen_rooms` table), or both domains point at the
+**same** deployment/process (the same in-memory Map). If it joined, that sharing
+is why; a fully separate deployment with its own (or no) database would answer
+“No room with that code”.
+
 ---
 
 ## Deploy on Vercel

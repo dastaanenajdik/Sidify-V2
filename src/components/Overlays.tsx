@@ -189,7 +189,7 @@ function StatsSheet() {
   const p = usePlayer.getState();
   const rows: [string, string][] = st
     ? [
-        ["Engine", st.mode === "iframe" ? "YouTube embed" : st.mode === "native" ? "Native audio (Web Audio)" : "Idle"],
+        ["Engine", st.mode === "iframe" ? "Sidify player" : st.mode === "native" ? "Sidify audio" : "Idle"],
         ["Video ID", track?.videoId ?? "—"],
         ["Format", probe?.mime_type ? `${probe.mime_type}${probe.itag ? ` · itag ${probe.itag}` : ""}` : probe?.success === false ? "Unavailable" : "…"],
         ["Bitrate", probe?.bitrate ? `${Math.round(probe.bitrate / 1000)} kbps` : "—"],

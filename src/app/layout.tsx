@@ -29,6 +29,13 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning data-theme="dark">
+      <head>
+        {/* Warm the Sidify player + artwork hosts so the first song starts sooner. */}
+        <link rel="preconnect" href="https://www.youtube.com" />
+        <link rel="preconnect" href="https://www.google.com" />
+        <link rel="dns-prefetch" href="https://i.ytimg.com" />
+        <link rel="dns-prefetch" href="https://www.gstatic.com" />
+      </head>
       <body className={`${inter.variable} antialiased`}>
         <Providers>
           <AppShell>{children}</AppShell>

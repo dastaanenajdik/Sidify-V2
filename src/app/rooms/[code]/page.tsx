@@ -51,7 +51,11 @@ interface Preview {
 function JoinView({ code }: { code: string }) {
   const router = useRouter();
   const profileName = useSettings((s) => s.profileName);
-  const [name, setName] = useState(profileName);
+  // Until the listener types here, the field follows the saved name — the
+  // first-visit gate may save it after this page has mounted.
+  const [typedName, setTypedName] = useState<string | null>(null);
+  const name = typedName ?? (profileName === "Siddharth" ? "" : profileName);
+  const setName = (v: string) => setTypedName(v);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const preview = useQuery({

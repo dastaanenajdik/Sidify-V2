@@ -90,7 +90,7 @@ export default function SettingsPage() {
           <footer className="py-8 text-center">
             <LogoMark size={36} className="mx-auto" />
             <p className="mt-3 text-[13px] text-fg-2">
-              Made with <span className="text-playing">♥</span> by Siddharth IfallertzIa
+              Made with <span className="text-playing">♥</span> by Sidify
             </p>
             <p className="mt-1 text-[12px] text-fg-3">
               Sidify {APP_VERSION}
@@ -121,7 +121,10 @@ function Profile() {
         <div className="min-w-0 flex-1 space-y-2">
           <input
             defaultValue={s.profileName}
-            onBlur={(e) => s.set({ profileName: e.target.value.trim().slice(0, 24) })}
+            onBlur={(e) => {
+              const v = e.target.value.trim().slice(0, 24);
+              s.set(v ? { profileName: v, nameAsked: true } : { profileName: v });
+            }}
             placeholder="Your name"
             aria-label="Display name"
             className="field h-10 w-full text-[16px] font-semibold"
@@ -203,9 +206,9 @@ function Playback() {
         />
         <GroupRow
           icon={<Sparkles size={18} />}
-          title="Follow YouTube Music's radio"
-          subtitle="AutoPlay uses the exact songs YouTube Music would play next"
-          trailing={<Switch checked={s.ytRadio} onChange={(v) => s.set({ ytRadio: v })} label="YouTube Music radio" />}
+          title="Follow Sidify radio"
+          subtitle="AutoPlay uses the exact songs Sidify would play next"
+          trailing={<Switch checked={s.ytRadio} onChange={(v) => s.set({ ytRadio: v })} label="Sidify radio" />}
         />
         <GroupRow icon={<Repeat size={18} />} title="Gapless playback" subtitle="Preload the next song" trailing={<Switch checked={s.gapless} onChange={(v) => s.set({ gapless: v })} label="Gapless" />} />
         <GroupRow
@@ -564,7 +567,7 @@ function About() {
         <div className="space-y-3 text-[14px] leading-relaxed text-fg-2">
           {legal === "tos" ? (
             <>
-              <p>Sidify provides a clean music discovery and listening experience powered by YouTube. By using the app you agree to stream music responsibly and respect the rights of artists and labels.</p>
+              <p>Sidify provides a clean music discovery and listening experience powered by Sidify. By using the app you agree to stream music responsibly and respect the rights of artists and labels.</p>
               <p>Downloads are cached for personal offline listening inside your own browser storage only.</p>
               <p>Listen Together rooms are temporary: they hold only what&apos;s needed to keep everyone in sync and close by themselves.</p>
             </>

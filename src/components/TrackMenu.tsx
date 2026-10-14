@@ -123,7 +123,7 @@ export default function TrackMenu() {
             hidden: !t.videoId,
             onClick: async () => {
               try {
-                await copyText(`https://music.youtube.com/watch?v=${t.videoId}`);
+                await copyText(`${window.location.origin}/search?q=${encodeURIComponent(`${t.title} ${t.artist}`.trim())}`);
                 useUi.getState().pushToast({ title: "Link copied", desc: t.title, kind: "ok" });
               } catch {
                 useUi.getState().pushToast({ title: "Couldn't copy the link", kind: "warn" });
