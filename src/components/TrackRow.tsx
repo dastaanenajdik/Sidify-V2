@@ -1,159 +1,145 @@
 "use client";
 
-import { Check, Download, Heart, Loader2, ListMusic, MoreHorizontal } from "lucide-react";
+import { Heart, MoreHorizontal, X } from "lucide-react";
 import type { Track } from "@/lib/types";
-import { cx, formatTime, upscaleArtwork } from "@/lib/format";
+import { playContext } from "@/lib/audioEngine";
+import { useLiked } from "@/lib/library";
 import { usePlayer, currentTrack } from "@/store/player";
 import { useUi } from "@/store/ui";
-import { playContext } from "@/lib/audioEngine";
-import { useLiked, downloadTrackFlow } from "@/lib/library";
-import { LiveEq } from "./SidifyLogo";
+import { cx, formatTime } from "@/lib/format";
+import { Artwork } from "./ui";
+import { PlayingBars } from "./icons";
 
+/**
+ * One song in a list: 52px artwork (or the track number on album pages),
+ * title and artist, a hairline under the text, and the "…" menu.
+ */
 export default function TrackRow({
   tracks,
   index,
-  showArt = true,
-  showAlbum = true,
+  contextLabel = "",
   numbered = false,
-  contextLabel,
+  showArt,
+  subtitle,
+  onRemove,
+  removeLabel = "Remove",
+  onPlay,
 }: {
   tracks: Track[];
   index: number;
-  showArt?: boolean;
-  showAlbum?: boolean;
-  numbered?: boolean;
   contextLabel?: string;
+  numbered?: boolean;
+  showArt?: boolean;
+  subtitle?: string;
+  onRemove?: () => void;
+  removeLabel?: string;
+  /** Override the default "play this list from here". */
+  onPlay?: () => void;
 }) {
-  const track = tracks[index];
-  const isCurrent = usePlayer((s) => currentTrack(s)?.id === track.id);
+  const t = tracks[index];
+  const isCurrent = usePlayer((s) => currentTrack(s)?.id === t?.id);
   const isPlaying = usePlayer((s) => s.isPlaying);
-  const liked = usePlayer((s) => !!s.likedIds[track.id]);
-  const downloaded = usePlayer((s) => !!s.downloadedIds[track.id]);
-  const progress = useUi((s) => s.downloadProgress[track.id]);
+  const liked = usePlayer((s) => !!(t && s.likedIds[t.id]));
   const { toggle } = useLiked();
+  if (!t) return null;
+  const withArt = showArt ?? !numbered;
 
-  if (!track) return null;
-
-  const openMenu = (e: React.MouseEvent) => {
+  const play = () => (onPlay ? onPlay() : playContext(tracks, index, contextLabel));
+  const menu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    useUi.getState().openMenu({ track, x: e.clientX, y: e.clientY });
+    useUi.getState().openMenu({ track: t, x: e.clientX, y: e.clientY });
   };
 
   return (
     <div
-      onClick={() => playContext(tracks, index, contextLabel)}
-      onContextMenu={openMenu}
-      className={cx(
-        "hover-panel group grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xl px-3 py-2",
-        isCurrent && "bg-[var(--panel-strong)]"
-      )}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && playContext(tracks, index, contextLabel)}
+      onClick={play}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") play();
+      }}
+      onContextMenu={menu}
+      className={cx(
+        "group/row relative flex cursor-default items-center gap-3 rounded-[8px] px-2 transition-colors duration-100 select-none hover:bg-fill",
+        withArt ? "h-[64px]" : "h-[52px]"
+      )}
     >
-      {/* index / eq */}
-      <div className="grid w-7 place-items-center">
-        {isCurrent ? (
-          <LiveEq paused={!isPlaying} size={15} />
-        ) : (
-          <span className={cx("text-muted-2 text-[13px] tabular-nums", numbered ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
-            {numbered ? index + 1 : <ListMusic size={15} />}
-          </span>
-        )}
-      </div>
+      {numbered && (
+        <span className="grid w-7 shrink-0 place-items-center text-[15px] text-fg-2 tabular-nums">
+          {isCurrent ? <PlayingBars paused={!isPlaying} size={12} className="text-playing" /> : index + 1}
+        </span>
+      )}
+      {withArt && (
+        <span className="relative shrink-0">
+          <Artwork src={t.artwork} size={52} rounded="rounded-[6px]" className="h-[52px] w-[52px]" />
+          {isCurrent && !numbered && (
+            <span className="absolute inset-0 grid place-items-center rounded-[6px] bg-black/45 text-white">
+              <PlayingBars paused={!isPlaying} size={13} />
+            </span>
+          )}
+        </span>
+      )}
 
-      {/* art + names */}
-      <div className="flex min-w-0 items-center gap-3">
-        {showArt && (
-          <img
-            src={upscaleArtwork(track.artwork, 200)}
-            alt=""
-            loading="lazy"
-            draggable={false}
-            className="h-11 w-11 shrink-0 rounded-lg object-cover"
-          />
+      <span
+        className={cx(
+          "relative flex h-full min-w-0 flex-1 items-center gap-3",
+          // hairline under the text, not under the artwork
+          "after:pointer-events-none after:absolute after:right-0 after:bottom-0 after:left-0 after:h-px after:origin-bottom after:scale-y-50 after:bg-divider group-last/row:after:hidden"
         )}
-        <div className="min-w-0">
-          <div className={cx("truncate text-[14px] font-medium", isCurrent && "accent-text")}>{track.title}</div>
-          <div className="text-muted flex min-w-0 items-center gap-1.5 truncate text-[12.5px]">
-            {track.explicit && (
-              <span className="rounded-[4px] bg-[var(--panel-strong)] px-1 text-[9.5px] font-bold tracking-wide">E</span>
+      >
+        <span className="min-w-0 flex-1">
+          <span className={cx("block truncate text-[15px] leading-snug", isCurrent && "text-playing")}>{t.title}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[13px] leading-snug text-fg-2">
+            {t.explicit && (
+              <span className="grid h-[14px] min-w-[14px] shrink-0 place-items-center rounded-[3px] bg-fill-3 px-[3px] text-[9px] font-bold text-fg-2">
+                E
+              </span>
             )}
-            {downloaded && <Download size={11} className="accent-text shrink-0" />}
-            <span className="truncate">{track.artist}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* right cluster */}
-      <div className="flex items-center gap-1">
-        {showAlbum && track.album && (
-          <span className="text-muted mr-4 hidden w-40 truncate text-right text-[12.5px] xl:inline-block">
-            {track.album}
+            <span className="truncate">{subtitle ?? t.artist}</span>
           </span>
-        )}
+        </span>
+
         <button
-          aria-label="Like"
+          type="button"
+          aria-label={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}
           onClick={(e) => {
             e.stopPropagation();
-            void toggle(track);
+            void toggle(t);
           }}
           className={cx(
-            "grid h-8 w-8 place-items-center rounded-full transition-all",
-            liked ? "accent-text opacity-100" : "text-muted hover:text-[var(--text)] md:opacity-0 md:group-hover:opacity-100"
+            "hidden h-8 w-8 shrink-0 place-items-center rounded-full transition-opacity sm:grid",
+            liked ? "text-playing" : "text-fg-2 opacity-0 group-hover/row:opacity-100 hover:text-fg"
           )}
         >
           <Heart size={16} fill={liked ? "currentColor" : "none"} />
         </button>
-        <button
-          aria-label="Download"
-          onClick={(e) => {
-            e.stopPropagation();
-            void downloadTrackFlow(track);
-          }}
-          className={cx(
-            "relative grid h-8 w-8 place-items-center rounded-full transition-all",
-            downloaded
-              ? "accent-text"
-              : "text-muted hover:text-[var(--text)] md:opacity-0 md:group-hover:opacity-100",
-            progress != null && "opacity-100"
-          )}
-        >
-          {progress != null ? (
-            progress > 97 ? (
-              <Loader2 size={15} className="animate-spin" />
-            ) : (
-              <span className="text-[9px] font-bold tabular-nums">{progress}</span>
-            )
-          ) : downloaded ? (
-            <Check size={15} />
-          ) : (
-            <Download size={15} />
-          )}
-        </button>
-        <span className="flex items-center gap-1.5">
-          {/* YouTube Music rows get the HD badge; plain YouTube video results stay bare. */}
-          {track.source === "ytmusic" && (
-            <span
-              title="From YouTube Music"
-              className="accent-text rounded-[4px] border border-[var(--border)] bg-[var(--panel-strong)] px-1 py-px text-[9px] font-bold tracking-wider"
-            >
-              HD
-            </span>
-          )}
-          <span className="text-muted-2 w-10 text-right text-[12.5px] tabular-nums">
-            {track.durationMs > 0 ? formatTime(track.durationMs) : "--:--"}
-          </span>
+        <span className="hidden w-11 shrink-0 text-right text-[13px] text-fg-2 tabular-nums sm:block">
+          {t.durationMs ? formatTime(t.durationMs) : ""}
         </span>
+        {onRemove && (
+          <button
+            type="button"
+            aria-label={removeLabel}
+            title={removeLabel}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-fg-2 hover:bg-fill-2 hover:text-danger"
+          >
+            <X size={16} />
+          </button>
+        )}
         <button
-          aria-label="More options"
-          onClick={openMenu}
-          className="text-muted grid h-8 w-8 place-items-center rounded-full hover:text-[var(--text)] md:opacity-0 md:group-hover:opacity-100"
+          type="button"
+          aria-label="More"
+          onClick={menu}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-fg-2 hover:bg-fill-2 hover:text-fg"
         >
-          <MoreHorizontal size={17} />
+          <MoreHorizontal size={18} />
         </button>
-      </div>
+      </span>
     </div>
   );
 }

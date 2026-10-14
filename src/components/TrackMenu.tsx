@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -8,135 +8,215 @@ import {
   Disc3,
   Download,
   Heart,
+  Link2,
+  ListEnd,
   ListPlus,
-  ListVideo,
+  ListStart,
   Mic2,
-  Play,
-  Plus,
-  SkipForward,
+  Radio,
+  Trash2,
+  UserRound,
 } from "lucide-react";
 import { useUi } from "@/store/ui";
-import { usePlayer } from "@/store/player";
-import { useLiked, useBlocked, downloadTrackFlow } from "@/lib/library";
-import { addToQueueEnd, playNextInQueue, playTrackNow } from "@/lib/audioEngine";
+import { usePlayer, currentTrack } from "@/store/player";
+import { addToQueueEnd, playNextInQueue, removeFromQueue, startRadio } from "@/lib/audioEngine";
+import { downloadTrackFlow, useBlocked, useLiked } from "@/lib/library";
+import { copyText } from "@/lib/clipboard";
+import { useRoom } from "@/lib/rooms/client";
+import { cx } from "@/lib/format";
+import { Artwork } from "./ui";
 
-const W = 252;
-
+/**
+ * The "…" menu for a song. A popover next to the pointer on wide screens, a
+ * bottom sheet on phones.
+ */
 export default function TrackMenu() {
   const menu = useUi((s) => s.menu);
   const close = useUi((s) => s.closeMenu);
   const router = useRouter();
   const { toggle } = useLiked();
   const { block } = useBlocked();
-  const liked = usePlayer((s) => (menu ? !!s.likedIds[menu.track.id] : false));
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const inRoom = useRoom((s) => !!s.session);
+  const liked = usePlayer((s) => !!(menu && s.likedIds[menu.track.id]));
+  const isCurrent = usePlayer((s) => !!menu && currentTrack(s)?.id === menu.track.id);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [close]);
-
-  useLayoutEffect(() => {
     if (!menu) return;
-    const h = ref.current?.offsetHeight ?? 380;
-    const x = Math.min(menu.x, window.innerWidth - W - 12);
-    const y = menu.y + h > window.innerHeight ? Math.max(12, window.innerHeight - h - 12) : menu.y;
-    setPos({ x, y });
-  }, [menu]);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    const onScroll = () => close();
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [menu, close]);
 
-  if (!menu) return null;
-  const t = menu.track;
+  const t = menu?.track;
+  const go = (href: string) => {
+    close();
+    usePlayer.getState().set({ fullPlayerOpen: false });
+    router.push(href);
+  };
 
-  const items = [
-    { icon: Play, label: "Play now", fn: () => playTrackNow(t) },
-    { icon: SkipForward, label: "Play next", fn: () => { playNextInQueue(t); toast("Queued to play next"); } },
-    { icon: ListVideo, label: "Add to queue", fn: () => { addToQueueEnd(t); toast("Added to queue"); } },
-    { divider: true as const },
-    {
-      icon: Heart,
-      label: liked ? "Remove from Liked Songs" : "Save to Liked Songs",
-      accent: liked,
-      fn: () => void toggle(t),
-    },
-    { icon: Download, label: "Download offline", fn: () => void downloadTrackFlow(t) },
-    { icon: Plus, label: "Add to playlist", fn: () => useUi.getState().setAddToPlaylistTrack(t) },
-    { divider: true as const },
-    ...(t.albumId
-      ? [{ icon: Disc3, label: "Go to album", fn: () => router.push(`/album/${t.albumId}`) }]
-      : []),
-    ...(t.artistId
-      ? [{ icon: Mic2, label: "Go to artist", fn: () => router.push(`/artist/${t.artistId}`) }]
-      : []),
-    ...(t.artistId
-      ? [
+  type Item = { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean; hidden?: boolean };
+  const groups: Item[][] = t
+    ? ([
+        [
           {
-            icon: Ban,
-            label: "Don't play this artist",
-            danger: true,
-            fn: () => void block({ artistId: t.artistId!, name: t.artist }),
+            icon: <ListStart size={18} />,
+            label: inRoom ? "Play next in room" : "Play next",
+            hidden: isCurrent,
+            onClick: () => {
+              playNextInQueue(t);
+              if (!inRoom) useUi.getState().pushToast({ title: "Playing next", desc: t.title, kind: "ok" });
+            },
           },
-        ]
-      : []),
-  ];
+          {
+            icon: <ListEnd size={18} />,
+            label: inRoom ? "Add to room queue" : "Add to queue",
+            hidden: isCurrent,
+            onClick: () => {
+              addToQueueEnd(t);
+              if (!inRoom) useUi.getState().pushToast({ title: "Added to queue", desc: t.title, kind: "ok" });
+            },
+          },
+          { icon: <Radio size={18} />, label: "Start radio", onClick: () => void startRadio(t) },
+          {
+            icon: <Trash2 size={18} />,
+            label: "Remove from queue",
+            hidden: menu?.queueIndex === undefined,
+            onClick: () => menu?.queueIndex !== undefined && removeFromQueue(menu.queueIndex),
+          },
+        ],
+        [
+          { icon: <ListPlus size={18} />, label: "Add to playlist…", onClick: () => useUi.getState().setAddToPlaylistTrack(t) },
+          {
+            icon: <Heart size={18} fill={liked ? "currentColor" : "none"} />,
+            label: liked ? "Remove from Liked Songs" : "Love",
+            onClick: () => void toggle(t),
+          },
+          { icon: <Download size={18} />, label: "Download", onClick: () => void downloadTrackFlow(t) },
+        ],
+        [
+          {
+            icon: <Mic2 size={18} />,
+            label: "Lyrics",
+            hidden: !isCurrent,
+            onClick: () => usePlayer.getState().set({ fullPlayerOpen: true, npView: "lyrics" }),
+          },
+          {
+            icon: <UserRound size={18} />,
+            label: "Go to artist",
+            hidden: !t.artistId,
+            onClick: () => go(`/artist/${encodeURIComponent(t.artistId!)}`),
+          },
+          {
+            icon: <Disc3 size={18} />,
+            label: "Go to album",
+            hidden: !t.albumId,
+            onClick: () => go(`/album/${encodeURIComponent(t.albumId!)}`),
+          },
+          {
+            icon: <Link2 size={18} />,
+            label: "Copy song link",
+            hidden: !t.videoId,
+            onClick: async () => {
+              try {
+                await copyText(`https://music.youtube.com/watch?v=${t.videoId}`);
+                useUi.getState().pushToast({ title: "Link copied", desc: t.title, kind: "ok" });
+              } catch {
+                useUi.getState().pushToast({ title: "Couldn't copy the link", kind: "warn" });
+              }
+            },
+          },
+        ],
+        [
+          {
+            icon: <Ban size={18} />,
+            label: "Don't play this artist",
+            hidden: !t.artistId,
+            danger: true,
+            onClick: () => t.artistId && void block({ artistId: t.artistId, name: t.artist }),
+          },
+        ],
+      ] as Item[][]).map((g) => g.filter((i) => !i.hidden)).filter((g) => g.length)
+    : [];
 
-  function toast(title: string) {
-    useUi.getState().pushToast({ title, kind: "ok" });
-  }
+  // The menu only ever renders after a click, so the window is there to measure.
+  const phone = typeof window !== "undefined" && window.innerWidth < 640;
+  const items = groups.reduce((a, g) => a + g.length, 0);
+  const estHeight = 72 + groups.length * 9 + items * 40;
+  const pos =
+    menu && typeof window !== "undefined"
+      ? {
+          left: Math.max(8, Math.min(menu.x, window.innerWidth - 264 - 8)),
+          top: Math.max(8, Math.min(menu.y, window.innerHeight - estHeight - 8)),
+        }
+      : { left: 0, top: 0 };
+
+  const body = t && (
+    <>
+      <div className="flex items-center gap-3 px-3 pt-3 pb-2.5">
+        <Artwork src={t.artwork} size={44} rounded="rounded-[6px]" className="h-11 w-11" />
+        <div className="min-w-0">
+          <div className="truncate text-[14.5px] font-semibold">{t.title}</div>
+          <div className="truncate text-[12.5px] text-fg-2">{t.artist}</div>
+        </div>
+      </div>
+      {groups.map((g, gi) => (
+        <div key={gi} className="hairline-t py-1">
+          {g.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => {
+                close();
+                item.onClick();
+              }}
+              className={cx(
+                "flex h-10 w-full items-center gap-3 px-3.5 text-left text-[14px] transition-colors hover:bg-fill-2",
+                item.danger ? "text-danger" : "text-fg"
+              )}
+            >
+              <span className={item.danger ? "" : "text-fg-2"}>{item.icon}</span>
+              <span className="truncate">{item.label}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+    </>
+  );
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-[80]" onClick={close} onContextMenu={(e) => { e.preventDefault(); close(); }}>
-        <motion.div
-          ref={ref}
-          initial={{ opacity: 0, scale: 0.92, y: -6 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          transition={{ duration: 0.14 }}
-          className="glass-strong absolute rounded-2xl p-1.5"
-          style={{ left: pos.x, top: pos.y, width: W, boxShadow: "0 24px 60px -12px var(--shadow)" }}
-        >
-          <div className="mb-1 flex items-center gap-3 rounded-xl bg-[var(--panel)] p-2.5">
-            <img src={t.artwork} alt="" className="h-10 w-10 rounded-lg object-cover" />
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-semibold">{t.title}</div>
-              <div className="text-muted truncate text-[11.5px]">{t.artist}</div>
-            </div>
-          </div>
-          {items.map((it, i) =>
-            "divider" in it && it.divider ? (
-              <div key={i} className="mx-2 my-1 h-px bg-[var(--border-soft)]" />
-            ) : (
-              <button
-                key={i}
-                onClick={() => {
-                  (it as { fn: () => void }).fn();
-                  close();
-                }}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13px] transition-colors hover:bg-[var(--panel-strong)] ${
-                  (it as { danger?: boolean }).danger
-                    ? "text-red-400"
-                    : (it as { accent?: boolean }).accent
-                      ? "accent-text"
-                      : "text-[var(--text)]"
-                }`}
-              >
-                {(it as { icon: typeof Play }).icon && (
-                  <span className="text-muted">
-                    {(() => {
-                      const Icon = (it as { icon: typeof Play }).icon;
-                      return <Icon size={16} />;
-                    })()}
-                  </span>
-                )}
-                <span className="flex-1">{(it as { label: string }).label}</span>
-                {(it as { label: string }).label === "Add to playlist" && <ListPlus size={14} className="text-muted-2" />}
-              </button>
-            )
+      {menu && (
+        <motion.div className="fixed inset-0 z-[140]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
+          <div className={cx("absolute inset-0", phone ? "bg-black/50" : "")} onClick={close} onContextMenu={(e) => (e.preventDefault(), close())} />
+          {phone ? (
+            <motion.div
+              initial={{ y: 60 }}
+              animate={{ y: 0 }}
+              exit={{ y: 80 }}
+              transition={{ type: "spring", damping: 32, stiffness: 380 }}
+              className="menu-glass absolute inset-x-2 bottom-2 max-h-[80dvh] overflow-y-auto rounded-[20px] pb-safe"
+            >
+              {body}
+            </motion.div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.12 }}
+              className="menu-glass absolute w-[264px] origin-top-left overflow-hidden rounded-[14px]"
+              style={{ left: pos.left, top: pos.top }}
+            >
+              {body}
+            </motion.div>
           )}
         </motion.div>
-      </div>
+      )}
     </AnimatePresence>
   );
 }

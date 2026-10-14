@@ -47,3 +47,15 @@ export const blockedArtists = pgTable("blocked_artists", {
   name: text("name").notNull(),
   blockedAt: timestamp("blocked_at", { mode: "date" }).notNull().defaultNow(),
 });
+
+/**
+ * Listen Together rooms. One row per live room; the whole room (members,
+ * queue, playback clock) is a JSON document updated under a row lock. Rows
+ * delete themselves once a room is empty or old (see src/lib/rooms).
+ */
+export const listenRooms = pgTable("listen_rooms", {
+  code: text("code").primaryKey(),
+  data: jsonb("data").notNull(),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
+});

@@ -48,6 +48,11 @@ export async function GET(req: NextRequest) {
       thumbnail: resolved.thumbnail,
       duration: resolved.duration,
       audio_url: `/api/stream?video_id=${videoId}&play=1`,
+      itag: resolved.itag ?? null,
+      mime_type: resolved.mimeType ?? null,
+      content_length: resolved.contentLength ?? null,
+      bitrate:
+        resolved.contentLength && resolved.duration ? Math.round((resolved.contentLength * 8) / resolved.duration) : null,
     });
   }
 

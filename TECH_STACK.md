@@ -6,6 +6,46 @@
 
 ---
 
+## 0. Sidify 2.0 — redesign (latest)
+
+> Is section ke neeche ka purana text pehle wale UI ko describe karta hai (neon accent, deluxe backdrop,
+> update/instructions popups). 2.0 me UI shuru se dobara bana hai — neeche wahi likha hai jo badla.
+
+**UI system** — `src/app/globals.css` (tokens: black page, frosted glass chrome, white primary, red sirf brand +
+"now playing" ke liye; dark + light theme; `desk:` breakpoint = 980px). Primitives `src/components/ui.tsx`
+(Artwork, IconButton, Button, Switch, Range, Chips, Sheet, Shelf, Group/GroupRow, PageTitle, SectionHeader),
+glyphs `src/components/icons.tsx`, logo `src/components/Logo.tsx` (sirf **S** — red squircle, white S).
+
+**Shell** — `src/components/shell/`: `AppShell` (layout + page ambience), `Sidebar` (search, nav, playlists),
+`TopBar` (desktop player: transport + LCD + volume + lyrics/queue/room toggles), `SidePanel` (right column:
+lyrics / queue), `MobileChrome` (floating glass tab bar + pill mini player).
+
+**Player** — `src/components/player/`: `NowPlaying` (full screen, artwork-mesh backdrop via
+`MeshBackdrop.tsx` + `lib/palette.ts` → `/api/art` same-origin proxy), `LyricsPane` (Apple-style timed lyrics,
+wipe, blur fall-off, timing offset `lib/lyricsPrefs.ts`, share card), `QueueList` (sections: Now playing / Next
+in queue / Next from … / AutoPlay, drag reorder), `PlaybackSheet` (video mode, speed, sleep, EQ, stats).
+
+**Engine additions** (`src/lib/audioEngine.ts`) — queue tiers (`usePlayer.tiers`: user / autoplay), "Add to
+queue" user-block ke end me, `ensureAutoplayBuffer()` (queue khatam hone se pehle 2 similar songs line up),
+`startRadio()`, `jumpTo()`, `setAutoplay()`, `clearUserQueue()`, play log (`lib/playLog.ts` → Replay,
+`lib/replay.ts`), `engineStats()` (stats for nerds) aur Listen Together bridge (`lib/rooms/bridge.ts`).
+
+**Listen Together** — `src/lib/rooms/logic.ts` (pure room model + saari state transitions, `tests/rooms.test.cjs`),
+`store.ts` (Postgres `listen_rooms` row-lock transaction, warna in-memory), `server.ts` (AutoPlay fill via
+`ytRadioNext`), routes `src/app/api/rooms/**` (create / poll+heartbeat / join / control / leave),
+client `lib/rooms/client.ts` (~1s poll, clock offset fastest round-trip se, drift correction 120ms on control /
+1.2s × 2 strikes + 6s cooldown, start anchor +350ms), pages `src/app/rooms/**`.
+
+**Removed** — `UpdatePopups` (what's-new + background-playback guide popups), deluxe backdrop
+(`public/art/*`, `lib/backdrop.ts`, `store/backdrop.ts`), home APK banner, accent picker. `/app` aur `/get`
+reh gaye (naye design me).
+
+**Hydration** — persisted zustand stores (`sidify-settings`, `sidify-player`, `sidify-room`) `skipHydration`
+ke saath hain; `Providers → StoreHydration` mount ke baad rehydrate karta hai, isliye SSR HTML aur pehla
+client render hamesha match karte hain.
+
+---
+
 ## 1. One-line summary
 
 Sidify ek **YouTube-powered music streaming PWA** hai. Isme Spotify/Apple/JioSaavn ka **koi official API nahi** hai —

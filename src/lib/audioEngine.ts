@@ -1,6 +1,6 @@
 "use client";
 
-import { usePlayer, currentTrack } from "@/store/player";
+import { usePlayer, currentTrack, type QueueTier } from "@/store/player";
 import { useSettings, effectiveGains, EQ_BANDS } from "@/store/settings";
 import { useUi } from "@/store/ui";
 import type { Track } from "./types";
@@ -8,7 +8,8 @@ import { offlineObjectUrl } from "./offlineDb";
 import { api } from "./clientApi";
 import { emitRefresh } from "./refreshBus";
 import { ytController } from "./ytPlayer";
-import { inferMood } from "./backdrop";
+import { roomBridge } from "./rooms/bridge";
+import { addListened, flushPlayLog, logPlay } from "./playLog";
 
 /* ------------------------------------------------------------------ */
 /* Sidify transport engine.                                             */
@@ -44,6 +45,11 @@ let nativeCapable: boolean | null = null;
 let nativeProbeAt = 0;
 let errorSkips = 0;
 let ytWired = false;
+/** The last play() was refused by the browser's autoplay policy (needs a tap). */
+let lastPlayBlocked = false;
+/** Track that failed to load while in a room — the room client won't retry it. */
+let roomFailedId: string | null = null;
+let lastListenAt = 0;
 const recentRecorded = new Map<string, number>();
 const playHistory: number[] = [];
 
@@ -249,6 +255,7 @@ export async function playIndex(i: number, opts?: { resumeMs?: number }) {
   }
   fading = false;
   unlockEngine();
+  if (roomFailedId && roomFailedId !== track.id) roomFailedId = null;
 
   usePlayer.getState().set({
     index: i,
@@ -342,6 +349,7 @@ async function playNative(track: Track, i: number, seq: number, resumeMs: number
     // (A rejected play() from the autoplay policy is NOT retried - the iframe would be
     // blocked by exactly the same rule.)
     const name = (err as { name?: string } | null)?.name;
+    if (name === "NotAllowedError") lastPlayBlocked = true;
     if (!local && track.videoId && name !== "NotAllowedError" && name !== "AbortError") {
       nativeCapable = false;
       nativeProbeAt = Date.now();
@@ -353,6 +361,7 @@ async function playNative(track: Track, i: number, seq: number, resumeMs: number
     return;
   }
   if (seq !== playSeq) return;
+  lastPlayBlocked = false;
   playHistory.push(i);
   if (playHistory.length > 40) playHistory.shift();
   errorSkips = 0;
@@ -411,6 +420,13 @@ function wireYt() {
 
 function handleTrackError() {
   const s = P();
+  if (roomBridge()) {
+    // Everyone else may well be able to play it — don't skip the room over it.
+    roomFailedId = currentTrack(s)?.id ?? null;
+    P().set({ isPlaying: false, isLoading: false });
+    toast("This song can't play on this device", "You'll rejoin with the next one", "info");
+    return;
+  }
   errorSkips++;
   if (errorSkips > 8) {
     toast("Several videos are unavailable right now", "Playback paused");
@@ -436,14 +452,24 @@ export function playContext(tracks: Track[], startIndex: number, label = "") {
   unlockEngine();
   const filtered = filterBlocked(tracks);
   if (!filtered.length) return;
-  const target = Math.min(startIndex, filtered.length - 1);
+  const target = Math.max(0, Math.min(startIndex, filtered.length - 1));
+  const rb = roomBridge();
+  if (rb) {
+    rb.playContext(filtered, target, label);
+    return;
+  }
   preloadedId = null;
-  usePlayer.getState().set({ queue: filtered, contextLabel: label, resumeFromMs: 0 });
+  usePlayer.getState().set({ queue: filtered, tiers: {}, contextLabel: label, resumeFromMs: 0 });
   void playIndex(target);
 }
 
 export function playTrackNow(track: Track) {
   unlockEngine();
+  const rb = roomBridge();
+  if (rb) {
+    rb.playContext([track], 0, "Single track");
+    return;
+  }
   const s = P();
   const existing = s.queue.findIndex((t) => t.id === track.id);
   if (existing >= 0) {
@@ -453,25 +479,78 @@ export function playTrackNow(track: Track) {
   const insertAt = Math.max(0, s.index + 1);
   const queue = [...s.queue];
   queue.splice(insertAt, 0, track);
-  usePlayer.getState().set({ queue, contextLabel: "Single track", resumeFromMs: 0 });
+  usePlayer.getState().set({ queue, contextLabel: s.contextLabel || "Single track", resumeFromMs: 0 });
   void playIndex(insertAt);
 }
 
-export function playNextInQueue(track: Track) {
-  const s = P();
-  const queue = s.queue.filter((t) => t.id !== track.id);
-  queue.splice(Math.max(0, s.index + 1), 0, track);
-  usePlayer.getState().set({ queue });
+/** Start a song radio: the track now, then what YouTube Music would play after it. */
+export async function startRadio(track: Track) {
+  unlockEngine();
+  const label = `${track.title} Radio`;
+  if (roomBridge() || !track.videoId) {
+    playContext([track], 0, label);
+    return;
+  }
+  playContext([track], 0, label);
+  try {
+    const res = await api.radio(track.videoId, 25);
+    if (currentTrack(P())?.id !== track.id) return;
+    const existing = new Set(P().queue.map((t) => t.id));
+    const fresh = filterBlocked(res?.tracks ?? []).filter((t) => !existing.has(t.id));
+    if (fresh.length) usePlayer.getState().set({ queue: [...P().queue, ...fresh] });
+  } catch {
+    toast("Couldn't start the radio", "Similar songs will still follow via AutoPlay", "info");
+  }
 }
 
-export function addToQueueEnd(track: Track) {
+function withTier(id: string, tier: QueueTier | null) {
+  const tiers = { ...P().tiers };
+  if (tier) tiers[id] = tier;
+  else delete tiers[id];
+  return tiers;
+}
+
+export function playNextInQueue(track: Track) {
+  const rb = roomBridge();
+  if (rb) {
+    rb.queueAdd(track, "next");
+    return;
+  }
   const s = P();
-  if (s.queue.some((t) => t.id === track.id)) return;
-  usePlayer.getState().set({ queue: [...s.queue, track] });
+  const cur = currentTrack(s);
+  if (cur?.id === track.id) return;
+  const queue = s.queue.filter((t) => t.id !== track.id);
+  const curIdx = cur ? queue.findIndex((t) => t.id === cur.id) : -1;
+  queue.splice(Math.max(0, curIdx + 1), 0, track);
+  usePlayer.getState().set({ queue, index: curIdx < 0 ? s.index : curIdx, tiers: withTier(track.id, "user") });
+  if (s.index < 0) void playIndex(0);
+}
+
+/** "Add to queue": after everything else the listener queued, before the rest of the album. */
+export function addToQueueEnd(track: Track) {
+  const rb = roomBridge();
+  if (rb) {
+    rb.queueAdd(track, "end");
+    return;
+  }
+  const s = P();
+  const cur = currentTrack(s);
+  if (cur?.id === track.id) return;
+  const queue = s.queue.filter((t) => t.id !== track.id);
+  const curIdx = cur ? queue.findIndex((t) => t.id === cur.id) : -1;
+  let at = curIdx + 1;
+  while (at < queue.length && s.tiers[queue[at].id] === "user") at++;
+  queue.splice(Math.max(0, at), 0, track);
+  usePlayer.getState().set({ queue, index: curIdx < 0 ? s.index : curIdx, tiers: withTier(track.id, "user") });
   if (s.index < 0) void playIndex(0);
 }
 
 export function moveInQueue(from: number, to: number) {
+  const rb = roomBridge();
+  if (rb) {
+    rb.queueMove(from, to);
+    return;
+  }
   const s = P();
   if (from === to || from < 0 || to < 0 || from >= s.queue.length || to >= s.queue.length) return;
   const queue = [...s.queue];
@@ -485,59 +564,151 @@ export function moveInQueue(from: number, to: number) {
 }
 
 export function removeFromQueue(i: number) {
+  const rb = roomBridge();
+  if (rb) {
+    rb.queueRemove(i);
+    return;
+  }
   const s = P();
   if (i < 0 || i >= s.queue.length || i === s.index) return;
   const queue = s.queue.filter((_, idx) => idx !== i);
   const index = i < s.index ? s.index - 1 : s.index;
-  usePlayer.getState().set({ queue, index });
+  usePlayer.getState().set({ queue, index, tiers: withTier(s.queue[i].id, null) });
+}
+
+/** Drops everything after the current track that the listener queued themselves. */
+export function clearUserQueue() {
+  const rb = roomBridge();
+  if (rb) {
+    rb.queueClear();
+    return;
+  }
+  const s = P();
+  const keep = s.queue.filter((t, i) => i <= s.index || s.tiers[t.id] !== "user");
+  const tiers = Object.fromEntries(Object.entries(s.tiers).filter(([, v]) => v !== "user"));
+  usePlayer.getState().set({ queue: keep, tiers });
 }
 
 export function setQueue(next: Track[], index: number) {
   usePlayer.getState().set({ queue: next, index });
 }
 
-export async function togglePlay() {
-  unlockEngine();
+/** Jump to a row of the queue. */
+export function jumpTo(i: number) {
+  const rb = roomBridge();
+  if (rb) {
+    rb.jump(i);
+    return;
+  }
+  if (i === P().index) return;
+  void playIndex(i);
+}
+
+/** AutoPlay on/off — the ∞ in the queue. Off drops the similar songs it lined up. */
+export function setAutoplay(on: boolean) {
+  const rb = roomBridge();
+  if (rb) {
+    rb.setAutoplay(on);
+    return;
+  }
+  useSettings.getState().set({ autoplay: on });
+  if (on) {
+    void ensureAutoplayBuffer();
+    return;
+  }
+  const s = P();
+  const queue = s.queue.filter((t, i) => i <= s.index || s.tiers[t.id] !== "autoplay");
+  const tiers = Object.fromEntries(Object.entries(s.tiers).filter(([, v]) => v !== "autoplay"));
+  usePlayer.getState().set({ queue, tiers });
+}
+
+/** What the transport is really doing (the store can lag a frame). */
+function actuallyPlaying(): boolean {
+  if (isIframeMode()) return ytController.isPlaying();
+  if (!actx) return false;
+  const deck = decks[active];
+  return !!deck?.trackId && !deck.el.paused;
+}
+
+/**
+ * Play or pause without asking the room. Resolves false when the browser
+ * refused to start audio (autoplay policy) so the caller can ask for a tap.
+ */
+async function setPlayingLocal(play: boolean): Promise<boolean> {
   const s = P();
   const track = currentTrack(s);
-  if (!track) return;
+  if (!track) return false;
 
   if (isIframeMode()) {
-    if (ytController.isPlaying()) {
+    if (!play) {
       ytController.pause();
       P().set({ isPlaying: false });
       saveSession();
-    } else {
-      if (ytController.currentVideoId !== track.videoId) {
-        await playIndex(s.index, { resumeMs: s.resumeFromMs || s.positionMs });
-        usePlayer.getState().set({ resumeFromMs: 0 });
-        return;
-      }
-      ytController.resume();
-      P().set({ isPlaying: true });
+      return true;
     }
-    return;
+    if (ytController.currentVideoId !== track.videoId) {
+      await playIndex(s.index, { resumeMs: s.resumeFromMs || s.positionMs });
+      usePlayer.getState().set({ resumeFromMs: 0 });
+      return P().isPlaying;
+    }
+    ytController.resume();
+    P().set({ isPlaying: true });
+    return true;
   }
 
   ensureCtx();
   const deck = decks[active];
   if (deck.trackId !== track.id) {
+    if (!play) {
+      P().set({ isPlaying: false });
+      return true;
+    }
+    lastPlayBlocked = false;
     await playIndex(s.index, { resumeMs: s.resumeFromMs || s.positionMs });
     usePlayer.getState().set({ resumeFromMs: 0 });
+    return !lastPlayBlocked;
+  }
+  if (play) {
+    try {
+      await actx!.resume();
+      await deck.el.play();
+      lastPlayBlocked = false;
+      P().set({ isPlaying: true });
+      return true;
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === "NotAllowedError") lastPlayBlocked = true;
+      P().set({ isPlaying: false });
+      return false;
+    }
+  }
+  deck.el.pause();
+  P().set({ isPlaying: false });
+  saveSession();
+  return true;
+}
+
+export async function togglePlay() {
+  unlockEngine();
+  const s = P();
+  if (!currentTrack(s)) return;
+  const rb = roomBridge();
+  if (rb) {
+    rb.setPlaying(!(s.isPlaying || actuallyPlaying()));
     return;
   }
-  if (deck.el.paused) {
-    await actx!.resume();
-    await deck.el.play().catch(() => {});
-    P().set({ isPlaying: true });
-  } else {
-    deck.el.pause();
-    P().set({ isPlaying: false });
-    saveSession();
-  }
+  await setPlayingLocal(!actuallyPlaying());
 }
 
 export async function next(manual = true) {
+  const rb = roomBridge();
+  if (rb && manual) {
+    rb.next();
+    return;
+  }
+  await nextLocal();
+}
+
+async function nextLocal() {
   const s = P();
   if (!s.queue.length || fading) return;
   let ni = nextIndex(s.index);
@@ -561,6 +732,11 @@ export async function next(manual = true) {
 export async function prev() {
   const s = P();
   if (!s.queue.length) return;
+  const rb = roomBridge();
+  if (rb) {
+    rb.prev();
+    return;
+  }
   if (isIframeMode()) {
     if (ytController.getTime() > 4) {
       ytController.seekTo(0);
@@ -577,17 +753,77 @@ export async function prev() {
 }
 
 export function seekTo(ms: number) {
+  const rb = roomBridge();
+  if (rb) {
+    rb.seek(ms);
+    return;
+  }
+  seekLocal(ms);
+}
+
+function seekLocal(ms: number) {
   if (isIframeMode()) {
     ytController.seekTo(ms / 1000);
     P().set({ positionMs: ms });
     return;
   }
-  if (!actx) return;
+  if (!actx) {
+    P().set({ positionMs: ms, resumeFromMs: ms });
+    return;
+  }
   const deck = decks[active];
-  if (deck.el.seekable.length === 0 && deck.el.readyState < 2) return;
+  if (!deck.trackId || (deck.el.seekable.length === 0 && deck.el.readyState < 2)) {
+    P().set({ positionMs: ms, resumeFromMs: ms });
+    return;
+  }
   deck.el.currentTime = Math.max(0, ms / 1000);
   P().set({ positionMs: ms });
 }
+
+/** Precise playback position, read from the player itself. */
+export function currentPositionMs(): number {
+  if (isIframeMode()) return ytController.getTime() * 1000;
+  if (actx && decks[active]?.trackId) return decks[active].el.currentTime * 1000;
+  return P().positionMs;
+}
+
+/** Point the transport at a queue row without starting it (room joins, paused rooms). */
+function loadPausedLocal(i: number, positionMs: number) {
+  const track = P().queue[i];
+  if (!track) return;
+  ++playSeq;
+  stopDecks();
+  ytController.pause();
+  usePlayer.getState().set({
+    index: i,
+    positionMs,
+    resumeFromMs: positionMs,
+    durationMs: track.durationMs,
+    isPlaying: false,
+    isLoading: false,
+  });
+}
+
+/**
+ * The engine's own hands, for the Listen Together client to apply the room's
+ * state with. Nothing here goes back through the room.
+ */
+export const engineLocal = {
+  playIndex: (i: number, resumeMs = 0) => playIndex(i, { resumeMs }),
+  setPlaying: setPlayingLocal,
+  seek: seekLocal,
+  loadPaused: loadPausedLocal,
+  isPlaying: actuallyPlaying,
+  position: currentPositionMs,
+  playBlocked: () => lastPlayBlocked,
+  failedTrackId: () => roomFailedId,
+  stop: () => {
+    ++playSeq;
+    stopDecks();
+    ytController.pause();
+    usePlayer.getState().set({ isPlaying: false, isLoading: false });
+  },
+};
 
 export function setVolume(v: number) {
   P().set({ volume: Math.min(1, Math.max(0, v)) });
@@ -634,6 +870,17 @@ async function handleEnded() {
 async function runEndOfTrack() {
   const s = P();
   endedAt = Date.now();
+  const rb = roomBridge();
+  if (rb && s.sleepMode === "eot") {
+    clearSleepTimer();
+    rb.sleep();
+    return;
+  }
+  if (rb) {
+    const cur = currentTrack(s);
+    if (cur) rb.ended(cur);
+    return;
+  }
   if (s.sleepMode === "eot") {
     clearSleepTimer();
     if (isIframeMode()) {
@@ -657,7 +904,7 @@ async function runEndOfTrack() {
     }
     return;
   }
-  await next(false);
+  await nextLocal();
 }
 
 function stopAtEnd() {
@@ -677,6 +924,7 @@ let watchdog: ReturnType<typeof setInterval> | null = null;
 function startWatchdog() {
   if (watchdog) return;
   watchdog = setInterval(() => {
+    tickListen();
     const s = P();
     if (!s.isPlaying || s.isLoading || fading || !s.queue.length || endingBusy) return;
     if (Date.now() - endedAt < 2000) return;
@@ -690,6 +938,17 @@ function startWatchdog() {
   }, 2500);
 }
 
+/** Accumulates heard time onto the play log (wall clock, capped per tick). */
+function tickListen() {
+  const now = Date.now();
+  const s = P();
+  const cur = currentTrack(s);
+  if (lastListenAt && cur && s.isPlaying && !s.isLoading) {
+    addListened(cur.id, Math.min(65_000, now - lastListenAt) * (s.speed || 1));
+  }
+  lastListenAt = now;
+}
+
 export function startLoop() {
   if (rafId) return;
   startWatchdog();
@@ -700,6 +959,7 @@ export function startLoop() {
     if (isIframeMode()) {
       if (now - lastTick > 240) {
         lastTick = now;
+        tickListen();
         const t = ytController.getTime();
         const dur = ytController.getDuration();
         P().set({
@@ -717,8 +977,11 @@ export function startLoop() {
     const dur = deck.el.duration || 0;
     if (now - lastTick > 220) {
       lastTick = now;
+      tickListen();
       P().set({ positionMs: t * 1000, durationMs: dur ? dur * 1000 : P().durationMs });
     }
+    // In a room the room decides what comes next — no local crossfade or preloading.
+    if (roomBridge()) return;
     const { crossfadeSecs, gapless } = S();
     const s = P();
     const remaining = dur - t;
@@ -739,7 +1002,7 @@ export function startLoop() {
 }
 
 async function preloadNextSoon() {
-  if (isIframeMode()) return;
+  if (isIframeMode() || roomBridge()) return;
   const s = P();
   const ni = nextIndex();
   if (ni === null) return;
@@ -819,8 +1082,43 @@ function appendFresh(candidates: Track[], cur: Track, max = 10): boolean {
     .filter((t) => t.id !== cur.id && !existing.has(t.id))
     .slice(0, max);
   if (!fresh.length) return false;
-  usePlayer.getState().set({ queue: [...usePlayer.getState().queue, ...fresh] });
+  const tiers = { ...usePlayer.getState().tiers };
+  for (const t of fresh) tiers[t.id] = "autoplay";
+  usePlayer.getState().set({ queue: [...usePlayer.getState().queue, ...fresh], tiers });
   return true;
+}
+
+let autoplayBusy = false;
+let autoplayTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Keeps a couple of AutoPlay songs lined up behind the queue, so "what plays
+ * after this one" is always visible — and starts instantly — instead of being
+ * fetched only once the last song has already ended.
+ */
+async function ensureAutoplayBuffer() {
+  if (roomBridge() || autoplayBusy) return;
+  const s = P();
+  if (!S().autoplay || s.repeat === "all" || s.index < 0) return;
+  if (s.queue.length - s.index - 1 >= 2) return;
+  autoplayBusy = true;
+  P().set({ autoplayLoading: true });
+  try {
+    await appendSimilar();
+  } catch {
+    /* next() will try again at the end of the track */
+  } finally {
+    autoplayBusy = false;
+    P().set({ autoplayLoading: false });
+  }
+}
+
+function scheduleAutoplayBuffer() {
+  if (autoplayTimer) clearTimeout(autoplayTimer);
+  autoplayTimer = setTimeout(() => {
+    autoplayTimer = null;
+    void ensureAutoplayBuffer();
+  }, 1800);
 }
 
 /**
@@ -929,6 +1227,12 @@ export function setSleepTimer(minutes: number | "eot") {
   const endsAt = Date.now() + minutes * 60_000;
   P().set({ sleepMode: "timer", sleepEndsAt: endsAt });
   sleepTimeout = setTimeout(() => {
+    const rb = roomBridge();
+    if (rb) {
+      clearSleepTimer();
+      rb.sleep();
+      return;
+    }
     if (isIframeMode()) {
       ytController.pause();
       P().set({ isPlaying: false });
@@ -961,17 +1265,13 @@ function artworkList(track: Track): MediaImage[] {
 }
 
 function updateMediaSession(track: Track) {
-  // Mood drives the deluxe backdrop tint. Set it before the guards below so it also
-  // works when Media Session controls are disabled or unsupported.
-  useUi.getState().setMood(inferMood([track.title, track.artist, track.album].filter(Boolean).join(" ")));
-
   if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
   if (!S().mediaControls) return;
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title,
       artist: track.artist,
-      album: "Sidify",
+      album: track.album || "Sidify",
       artwork: artworkList(track),
     });
     navigator.mediaSession.setActionHandler("play", () => void togglePlay());
@@ -998,8 +1298,10 @@ let recentTimer: ReturnType<typeof setTimeout> | null = null;
 function recordRecent(track: Track) {
   const now = Date.now();
   const last = recentRecorded.get(track.id);
+  scheduleAutoplayBuffer();
   if (last && now - last < 30_000) return;
   recentRecorded.set(track.id, now);
+  logPlay(track);
   void api.pushRecent(track);
   if (recentTimer) clearTimeout(recentTimer);
   recentTimer = setTimeout(() => {
@@ -1025,12 +1327,48 @@ export function initEngine() {
   usePlayer.subscribe((state, prevState) => {
     if (state.volume !== prevState.volume || state.speed !== prevState.speed) applySettings();
   });
-  window.addEventListener("beforeunload", saveSession);
+  window.addEventListener("beforeunload", () => {
+    saveSession();
+    flushPlayLog();
+  });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") saveSession();
+    if (document.visibilityState === "hidden") {
+      saveSession();
+      flushPlayLog();
+    }
+  });
+  // Repeat-all / autoplay changes can open a gap behind the current song.
+  useSettings.subscribe((st, prevSt) => {
+    if (st.autoplay && !prevSt.autoplay) void ensureAutoplayBuffer();
   });
 }
 
 export function isEngineReady() {
   return !!actx;
+}
+
+/** Numbers for the "Stats for nerds" sheet. */
+export function engineStats() {
+  const deck = decks[active];
+  let bufferedAhead = 0;
+  if (deck?.trackId) {
+    const t = deck.el.currentTime;
+    for (let i = 0; i < deck.el.buffered.length; i++) {
+      if (deck.el.buffered.start(i) <= t + 0.25 && deck.el.buffered.end(i) >= t) bufferedAhead = deck.el.buffered.end(i) - t;
+    }
+  }
+  return {
+    mode: P().engineMode,
+    sampleRate: actx?.sampleRate ?? null,
+    contextState: actx?.state ?? "not started",
+    baseLatency: actx?.baseLatency ?? null,
+    bufferedAhead,
+    readyState: deck?.el.readyState ?? 0,
+    networkState: deck?.el.networkState ?? 0,
+    deck: active,
+    crossfading: fading,
+    nativeCapable,
+    iframeState: ytController.getPlayerState(),
+    gain: master?.gain.value ?? null,
+  };
 }

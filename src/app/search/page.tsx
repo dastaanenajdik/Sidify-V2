@@ -1,31 +1,21 @@
 "use client";
 
+import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, Clock, Mic, Search as SearchIcon, TrendingUp, X } from "lucide-react";
+import { Clock, Play, X } from "lucide-react";
 import { api } from "@/lib/clientApi";
 import { useSettings } from "@/store/settings";
 import { playContext } from "@/lib/audioEngine";
+import { MOODS } from "@/lib/explore";
 import TrackRow from "@/components/TrackRow";
-import { AlbumCard, ArtistCard } from "@/components/cards";
-import type { Track } from "@/lib/types";
+import { AlbumCard, ArtistCard, MoodCard } from "@/components/cards";
+import { Artwork, Chips, EmptyState, SectionHeader, Shelf, Skeleton } from "@/components/ui";
+import { SearchGlyph } from "@/components/icons";
+import type { Album, Artist, Track } from "@/lib/types";
 import { cx } from "@/lib/format";
-
-const CATEGORY_TILES = [
-  { name: "Top Hits", q: "top hits", g: "from-rose-500 to-red-700" },
-  { name: "Bollywood", q: "bollywood hits", g: "from-amber-400 to-orange-600" },
-  { name: "K-Pop", q: "kpop", g: "from-violet-400 to-purple-700" },
-  { name: "Hip-Hop", q: "hip hop", g: "from-slate-500 to-zinc-800" },
-  { name: "EDM", q: "edm festival", g: "from-cyan-400 to-blue-600" },
-  { name: "Indie", q: "indie pop", g: "from-emerald-400 to-teal-700" },
-  { name: "Jazz", q: "jazz classics", g: "from-yellow-400 to-amber-700" },
-  { name: "Punjabi", q: "punjabi hits", g: "from-lime-400 to-green-700" },
-  { name: "Rock", q: "rock anthems", g: "from-red-500 to-rose-800" },
-  { name: "90s Throwback", q: "90s hits", g: "from-fuchsia-400 to-pink-700" },
-  { name: "Acoustic", q: "acoustic covers", g: "from-sky-400 to-indigo-600" },
-  { name: "Sad Hours", q: "sad songs", g: "from-blue-500 to-slate-700" },
-];
+import { useMounted } from "@/lib/useMounted";
 
 const HISTORY_KEY = "sidify-search-history";
 
@@ -36,21 +26,26 @@ function loadHistory(): string[] {
     return [];
   }
 }
+function saveHistory(list: string[]) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 10)));
+  } catch {
+    /* ignore */
+  }
+}
 function pushHistory(term: string) {
   const clean = term.trim();
   if (!clean) return;
-  try {
-    const next = [clean, ...loadHistory().filter((t) => t.toLowerCase() !== clean.toLowerCase())].slice(0, 8);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
-  } catch {}
+  saveHistory([clean, ...loadHistory().filter((t) => t.toLowerCase() !== clean.toLowerCase())]);
 }
 
-const TABS = [
-  { id: "all", label: "All" },
+type Tab = "all" | "songs" | "albums" | "artists";
+const TABS: { id: Tab; label: string }[] = [
+  { id: "all", label: "Top results" },
   { id: "songs", label: "Songs" },
   { id: "albums", label: "Albums" },
   { id: "artists", label: "Artists" },
-] as const;
+];
 
 function SearchInner() {
   const params = useSearchParams();
@@ -60,36 +55,29 @@ function SearchInner() {
   const initial = params.get("q") ?? "";
   const [q, setQ] = useState(initial);
   const [debounced, setDebounced] = useState(initial);
-  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("all");
-  const [focused, setFocused] = useState(false);
-  const [history, setHistory] = useState<string[]>([]);
+  const [tab, setTab] = useState<Tab>("all");
+  const mounted = useMounted();
+  const [historyState, setHistory] = useState<string[] | null>(null);
+  const history = historyState ?? (mounted ? loadHistory() : []);
   const inputRef = useRef<HTMLInputElement>(null);
   /**
-   * Query string we last wrote into the URL ourselves.
-   *
-   * The old code pushed `q.trim()` to the router and then copied the URL back into the
-   * input on every param change. Because the debounce fires ~300 ms *after* a keystroke,
-   * typing "arijit " pushed "arijit", the echo came back without the space, and the sync
-   * effect wiped the space the user had just typed. Keeping the raw value in the URL and
-   * ignoring our own echo keeps spaces (and everything else) intact.
+   * The query we last wrote into the URL ourselves. Keeping the raw value in the
+   * URL and ignoring our own echo keeps typed spaces intact (the debounced echo
+   * used to come back trimmed and wipe the space just typed).
    */
   const pushedRef = useRef<string>(initial);
   /** True between a keystroke and the moment its URL update has been written. */
   const editingRef = useRef(false);
-
   const term = useMemo(() => debounced.trim(), [debounced]);
 
   useEffect(() => {
-    setHistory(loadHistory());
-    inputRef.current?.focus();
+    if (window.innerWidth < 980) inputRef.current?.focus();
   }, []);
 
-  // Adopt queries that come from elsewhere (links, category tiles, back/forward) —
-  // never our own echo, and never while the user is mid-word.
+  // Adopt queries that come from elsewhere (sidebar field, links, back/forward).
   useEffect(() => {
     const pQ = params.get("q") ?? "";
     const mine = pushedRef.current;
-    // Our own value coming back, possibly normalised by the router (trimmed / re-encoded).
     const isEcho = pQ === mine || (pQ.length <= mine.length && pQ.trim() === mine.trim());
     if (isEcho || editingRef.current) return;
     pushedRef.current = pQ;
@@ -97,9 +85,9 @@ function SearchInner() {
     setDebounced(pQ);
   }, [params]);
 
-  // Debounced URL sync. Raw value (spaces included) goes into the URL, search itself
-  // always runs on the trimmed term.
+  // Debounced URL sync from the in-page field.
   useEffect(() => {
+    if (!editingRef.current) return;
     const t = setTimeout(() => {
       setDebounced(q);
       pushedRef.current = q;
@@ -109,17 +97,27 @@ function SearchInner() {
     return () => clearTimeout(t);
   }, [q, router]);
 
-  const { data, isFetching } = useQuery({
+  // Remember a search once its results have been looked at for a moment.
+  useEffect(() => {
+    if (!term) return;
+    const t = setTimeout(() => {
+      pushHistory(term);
+      setHistory(loadHistory());
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [term]);
+
+  const { data, isFetching, isError } = useQuery({
     queryKey: ["search", term, tab, region],
-    queryFn: () => api.search(term, tab, region, tab === "songs" ? 30 : 22),
+    queryFn: () => api.search(term, tab, region, tab === "songs" ? 30 : 24),
     enabled: !!term,
     staleTime: 60_000,
   });
 
-  const vis = (arr: Track[]) => (ef ? arr.filter((t) => !t.explicit) : arr);
-  const songs = vis(data?.songs ?? []);
+  const songs = (data?.songs ?? []).filter((t) => !ef || !t.explicit);
   const albums = data?.albums ?? [];
   const artists = data?.artists ?? [];
+  const label = `Results for “${term}”`;
 
   const submit = (value: string) => {
     const clean = value.trim();
@@ -132,27 +130,27 @@ function SearchInner() {
     editingRef.current = false;
     router.replace(`/search?q=${encodeURIComponent(clean)}`, { scroll: false });
     inputRef.current?.blur();
-    setFocused(false);
   };
 
-  const suggestions = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return [];
-    return history.filter((h) => h.toLowerCase().includes(needle) && h.toLowerCase() !== needle).slice(0, 5);
-  }, [q, history]);
-
   return (
-    <div className="mx-auto max-w-[1280px] px-4 pt-6 md:px-7">
-      {/* search bar */}
-      <div className="relative z-20 mx-auto max-w-2xl">
-        <div
-          className={cx(
-            "glass-strong flex items-center gap-3 rounded-2xl px-4 py-3.5 transition-shadow",
-            focused && "ring-1 ring-[var(--accent)]"
+    <div className="fade-up">
+      <div className="px-4 pt-2 desk:px-8 desk:pt-7">
+        <h1 className="t-display truncate desk:t-headline">
+          {term ? (
+            <>
+              <span className="desk:hidden">Search</span>
+              <span className="hidden desk:inline">{term}</span>
+            </>
+          ) : (
+            "Search"
           )}
-          style={focused ? { boxShadow: "0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent), 0 20px 60px -20px var(--glow)" } : undefined}
-        >
-          <SearchIcon size={19} className={cx("shrink-0", isFetching ? "accent-text animate-pulse" : "text-muted")} />
+        </h1>
+      </div>
+
+      {/* phone field (desktop uses the sidebar's) */}
+      <div className="sticky top-0 z-10 bg-bg/80 px-4 pt-3 pb-3 backdrop-blur-xl desk:hidden">
+        <div className="relative">
+          <SearchGlyph size={16} className={cx("pointer-events-none absolute top-1/2 left-3 -translate-y-1/2", isFetching ? "text-fg" : "text-fg-2")} />
           <input
             ref={inputRef}
             value={q}
@@ -160,194 +158,226 @@ function SearchInner() {
               editingRef.current = true;
               setQ(e.target.value);
             }}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setTimeout(() => setFocused(false), 160)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit(q);
-              if (e.key === "Escape") setFocused(false);
-            }}
-            name="q"
-            type="text"
+            onKeyDown={(e) => e.key === "Enter" && submit(q)}
+            type="search"
             inputMode="search"
             enterKeyHint="search"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="none"
             spellCheck={false}
-            placeholder="Songs, artists, albums…"
-            className="min-w-0 flex-1 bg-transparent text-[15.5px] font-medium outline-none placeholder:text-muted-2"
+            placeholder="Artists, songs, lyrics and more"
             aria-label="Search music"
+            className="field h-10 w-full rounded-[10px] pr-9 pl-9 text-[16px]"
           />
           {q && (
-            <button aria-label="Clear" onClick={() => { setQ(""); inputRef.current?.focus(); }} className="text-muted hover:text-[var(--text)]">
-              <X size={17} />
+            <button
+              type="button"
+              aria-label="Clear"
+              onClick={() => {
+                editingRef.current = true;
+                setQ("");
+                inputRef.current?.focus();
+              }}
+              className="absolute top-1/2 right-2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-full bg-fill-3 text-fg-2"
+            >
+              <X size={13} />
             </button>
           )}
-          <button
-            aria-label="Voice search"
-            onClick={() => alert("Voice search is available on the Sidify mobile app.")}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-full accent-bg text-black transition-transform hover:scale-105"
-            title="Voice search"
-          >
-            <Mic size={16} />
-          </button>
         </div>
+      </div>
 
-        {/* live suggestions */}
-        {focused && q.trim() && (
-          <div className="glass-strong absolute top-full right-0 left-0 z-30 mt-2 overflow-hidden rounded-2xl p-1.5">
-            <button
-              onMouseDown={(e) => {
-                e.preventDefault();
-                submit(q);
-              }}
-              className="hover-panel flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13.5px] font-semibold"
-            >
-              <SearchIcon size={15} className="accent-text shrink-0" />
-              <span className="truncate">
-                Search for <span className="accent-text">“{q.trim()}”</span>
-              </span>
-              <ArrowUpRight size={14} className="text-muted-2 ml-auto shrink-0" />
-            </button>
-            {suggestions.map((s) => (
-              <button
-                key={s}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  submit(s);
-                }}
-                className="hover-panel flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[13px]"
+      {term ? (
+        <>
+          <Chips className="mt-1 mb-5 px-4 desk:mt-3 desk:px-8" value={tab} options={TABS} onChange={setTab} />
+          {isFetching && !data ? (
+            <ResultsSkeleton />
+          ) : isError ? (
+            <EmptyState title="Search isn't responding" desc="Check your connection and try again." />
+          ) : songs.length + albums.length + artists.length === 0 ? (
+            <EmptyState icon={<SearchGlyph size={26} />} title={`No results for “${term}”`} desc="Check the spelling, or try fewer words." />
+          ) : tab === "all" ? (
+            <AllResults songs={songs} albums={albums} artists={artists} label={label} />
+          ) : tab === "songs" ? (
+            <div className="px-2 desk:px-6">
+              {songs.map((t, i) => (
+                <TrackRow key={t.id} tracks={songs} index={i} contextLabel={label} />
+              ))}
+            </div>
+          ) : tab === "albums" ? (
+            <div className="grid grid-cols-2 gap-x-3.5 gap-y-6 px-4 sm:grid-cols-3 desk:px-8 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+              {albums.map((a) => (
+                <AlbumCard key={a.id} album={a} className="!w-auto" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-x-3.5 gap-y-6 px-4 sm:grid-cols-3 desk:px-8 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+              {artists.map((a) => (
+                <ArtistCard key={a.id} artist={a} className="!w-auto" />
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <Browse
+          history={history}
+          onPick={submit}
+          onRemove={(h) => {
+            const next = history.filter((x) => x !== h);
+            saveHistory(next);
+            setHistory(next);
+          }}
+          onClear={() => {
+            saveHistory([]);
+            setHistory([]);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AllResults({ songs, albums, artists, label }: { songs: Track[]; albums: Album[]; artists: Artist[]; label: string }) {
+  const top = artists[0] && (!songs[0] || songs[0].artist.toLowerCase() === artists[0].name.toLowerCase()) ? { kind: "artist" as const, artist: artists[0] } : songs[0] ? { kind: "song" as const, track: songs[0] } : null;
+  return (
+    <div className="space-y-9">
+      <div className="grid grid-cols-1 gap-6 px-4 desk:px-8 xl:grid-cols-[minmax(300px,420px)_1fr]">
+        {top && (
+          <section>
+            <h2 className="t-section mb-3">Top result</h2>
+            {top.kind === "artist" ? (
+              <Link
+                href={`/artist/${encodeURIComponent(top.artist.id)}`}
+                className="group flex items-center gap-5 rounded-[18px] bg-raised p-5 ring-1 ring-edge transition-colors hover:bg-raised-2"
               >
-                <Clock size={14} className="text-muted-2 shrink-0" />
-                <span className="text-muted truncate">{s}</span>
-              </button>
-            ))}
-            {isFetching && !data && <div className="text-muted-2 px-3 py-2 text-[11.5px]">Typing… live results appear instantly</div>}
-          </div>
+                <Artwork src={top.artist.artwork} size={110} round className="h-[110px] w-[110px] shrink-0" />
+                <div className="min-w-0">
+                  <div className="truncate text-[24px] font-bold tracking-[-0.4px]">{top.artist.name}</div>
+                  <div className="text-[14px] text-fg-2">Artist</div>
+                </div>
+              </Link>
+            ) : (
+              <div className="group relative flex items-center gap-5 rounded-[18px] bg-raised p-5 ring-1 ring-edge">
+                <Artwork src={top.track.artwork} size={110} rounded="rounded-[10px]" className="h-[110px] w-[110px] shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="line-clamp-2 text-[22px] leading-tight font-bold tracking-[-0.4px]">{top.track.title}</div>
+                  <div className="mt-1 truncate text-[14px] text-fg-2">Song · {top.track.artist}</div>
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Play ${top.track.title}`}
+                  onClick={() => playContext(songs, 0, label)}
+                  className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary text-on-primary transition-transform hover:scale-105"
+                >
+                  <Play size={20} fill="currentColor" className="ml-0.5" />
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+        {songs.length > 0 && (
+          <section className="min-w-0">
+            <h2 className="t-section mb-1.5">Songs</h2>
+            <div className="-mx-2">
+              {songs.slice(0, 5).map((t, i) => (
+                <TrackRow key={t.id} tracks={songs} index={i} contextLabel={label} />
+              ))}
+            </div>
+          </section>
         )}
       </div>
 
-      {/* tabs */}
-      {term && (
-        <div className="mt-5 flex gap-2">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={cx(
-                "rounded-full border px-4 py-1.5 text-[12.5px] font-semibold transition-all",
-                tab === t.id ? "accent-bg border-transparent text-black" : "border-[var(--border)] text-muted hover:text-[var(--text)]"
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      {artists.length > 0 && (
+        <section>
+          <SectionHeader title="Artists" />
+          <Shelf>
+            {artists.slice(0, 12).map((a) => (
+              <ArtistCard key={a.id} artist={a} />
+            ))}
+          </Shelf>
+        </section>
       )}
 
-      {/* empty state */}
-      {!term && (
-        <div className="mt-7">
-          {history.length > 0 && (
-            <div className="mb-7">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="font-display text-[18px] font-bold">Recent searches</h2>
+      {albums.length > 0 && (
+        <section>
+          <SectionHeader title="Albums" />
+          <Shelf>
+            {albums.slice(0, 14).map((a) => (
+              <AlbumCard key={a.id} album={a} />
+            ))}
+          </Shelf>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function Browse({
+  history,
+  onPick,
+  onRemove,
+  onClear,
+}: {
+  history: string[];
+  onPick: (q: string) => void;
+  onRemove: (q: string) => void;
+  onClear: () => void;
+}) {
+  const covers = useQuery({ queryKey: ["explore"], queryFn: api.explore, staleTime: 6 * 60 * 60_000 });
+  return (
+    <div className="mt-2 space-y-9">
+      {history.length > 0 && (
+        <section className="px-4 desk:px-8">
+          <div className="mb-1 flex items-center justify-between">
+            <h2 className="t-section">Recently searched</h2>
+            <button type="button" onClick={onClear} className="text-[14px] font-semibold text-playing hover:opacity-80">
+              Clear
+            </button>
+          </div>
+          <div className="max-w-[640px]">
+            {history.map((h) => (
+              <div key={h} className="group flex h-12 items-center gap-3 shadow-[inset_0_-0.5px_0_var(--hairline)]">
+                <Clock size={17} className="shrink-0 text-fg-2" />
+                <button type="button" onClick={() => onPick(h)} className="min-w-0 flex-1 truncate text-left text-[15px]">
+                  {h}
+                </button>
                 <button
-                  onClick={() => {
-                    localStorage.removeItem(HISTORY_KEY);
-                    setHistory([]);
-                  }}
-                  className="text-muted text-[12px] font-semibold uppercase tracking-wider hover:accent-text"
+                  type="button"
+                  aria-label={`Remove ${h}`}
+                  onClick={() => onRemove(h)}
+                  className="grid h-8 w-8 place-items-center rounded-full text-fg-2 hover:bg-fill hover:text-fg"
                 >
-                  Clear
+                  <X size={15} />
                 </button>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {history.map((h) => (
-                  <button
-                    key={h}
-                    onClick={() => submit(h)}
-                    className="glass flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[13px] text-muted transition-colors hover:text-[var(--text)]"
-                  >
-                    <Clock size={13} /> {h}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <h2 className="font-display mb-3 text-[18px] font-bold">Browse categories</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {CATEGORY_TILES.map((c) => (
-              <button
-                key={c.name}
-                onClick={() => submit(c.q)}
-                className={`relative h-[110px] overflow-hidden rounded-2xl bg-gradient-to-br ${c.g} p-4 text-left transition-transform hover:scale-[1.03] active:scale-95`}
-              >
-                <span className="font-display text-[16px] font-bold text-white drop-shadow">{c.name}</span>
-                <span className="absolute -right-5 -bottom-6 h-20 w-20 rotate-[22deg] rounded-2xl bg-white/15" />
-              </button>
             ))}
           </div>
-        </div>
+        </section>
       )}
-
-      {/* results */}
-      {term && data && (
-        <div className="mt-6 space-y-9">
-          {(tab === "all" || tab === "songs") && songs.length > 0 && (
-            <section>
-              <div className="mb-2 flex items-center gap-2">
-                <TrendingUp size={16} className="accent-text" />
-                <h2 className="font-display text-[18px] font-bold">Songs</h2>
-              </div>
-              <div className="grid grid-cols-1 gap-x-6 xl:grid-cols-2">
-                {(tab === "songs" ? songs : songs.slice(0, 6)).map((_, i) => (
-                  <TrackRow
-                    key={songs[i].id}
-                    tracks={songs}
-                    index={i}
-                    contextLabel={`Results for “${term}”`}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {(tab === "all" || tab === "artists") && artists.length > 0 && (
-            <section>
-              <h2 className="font-display mb-2 text-[18px] font-bold">Artists</h2>
-              <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 lg:grid-cols-6">
-                {(tab === "artists" ? artists : artists.slice(0, 6)).map((a) => (
-                  <ArtistCard key={a.id} artist={a} />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {(tab === "all" || tab === "albums") && albums.length > 0 && (
-            <section>
-              <h2 className="font-display mb-2 text-[18px] font-bold">Albums</h2>
-              <div className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
-                {(tab === "albums" ? albums : albums.slice(0, 6)).map((a) => (
-                  <AlbumCard key={a.id} album={a} />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {songs.length + albums.length + artists.length === 0 && (
-            <p className="text-muted py-16 text-center text-sm">No results for “{term}”. Try a different search.</p>
-          )}
-        </div>
-      )}
-
-      {term && isFetching && !data && (
-        <div className="mt-6 space-y-2">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="shimmer h-14 rounded-xl" />
+      <section>
+        <SectionHeader title="Browse categories" />
+        <div className="grid grid-cols-2 gap-3 px-4 sm:grid-cols-3 desk:px-8 lg:grid-cols-4 2xl:grid-cols-5">
+          {MOODS.map((m) => (
+            <MoodCard key={m.slug} title={m.title} color={m.color} artwork={covers.data?.covers[m.slug]} href={`/explore/${m.slug}`} />
           ))}
         </div>
-      )}
+      </section>
+    </div>
+  );
+}
+
+function ResultsSkeleton() {
+  return (
+    <div className="space-y-2 px-4 desk:px-8">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3">
+          <Skeleton className="h-[52px] w-[52px] shrink-0 rounded-[6px]" />
+          <div className="flex-1 space-y-1.5">
+            <Skeleton className="h-3.5 w-2/5 rounded" />
+            <Skeleton className="h-3 w-1/4 rounded" />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -356,8 +386,8 @@ export default function SearchPage() {
   return (
     <Suspense
       fallback={
-        <div className="mx-auto max-w-2xl px-4 pt-8">
-          <div className="shimmer h-14 rounded-2xl" />
+        <div className="px-4 pt-4 desk:px-8">
+          <Skeleton className="h-10 w-full rounded-[10px]" />
         </div>
       }
     >

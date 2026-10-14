@@ -1,162 +1,147 @@
 "use client";
 
 import { use, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ListMusic, Pencil, Plus, Search, Shuffle, Trash2, X } from "lucide-react";
+import { Check, ListMusic, Pencil, Pin, Trash2, X } from "lucide-react";
 import { api } from "@/lib/clientApi";
 import { usePlaylists } from "@/lib/library";
 import { playContext } from "@/lib/audioEngine";
-import { totalDuration, upscaleArtwork } from "@/lib/format";
+import { useSettings } from "@/store/settings";
+import { shuffled, totalDuration } from "@/lib/format";
 import TrackRow from "@/components/TrackRow";
-import { PlayButton } from "@/components/controls";
+import CollectionHeader, { CollectionSkeleton, HeaderAction } from "@/components/CollectionHeader";
+import { Button, ButtonLink, EmptyState, Sheet } from "@/components/ui";
 
 export default function PlaylistPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
-  const { data: playlist, isLoading } = useQuery({
-    queryKey: ["playlist", id],
-    queryFn: () => api.playlist(id),
-    staleTime: 10_000,
-  });
-  const { rename, remove } = usePlaylists();
+  const { data: playlist, isLoading } = useQuery({ queryKey: ["playlist", id], queryFn: () => api.playlist(id), staleTime: 10_000 });
+  const { rename, remove, removeTrack } = usePlaylists();
+  const pinned = useSettings((s) => s.pinnedPlaylists);
+  const setSettings = useSettings((s) => s.set);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  if (isLoading || !playlist) {
-    return (
-      <div className="mx-auto max-w-[1280px] space-y-3 px-4 pt-8 md:px-7">
-        <div className="shimmer h-56 rounded-[28px]" />
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="shimmer h-12 rounded-xl" />
-        ))}
-      </div>
-    );
+  if (isLoading) return <CollectionSkeleton />;
+  if (!playlist) {
+    return <EmptyState title="Playlist not found" desc="It may have been deleted." action={<ButtonLink href="/library">Back to Library</ButtonLink>} />;
   }
 
   const tracks = playlist.tracks;
-  const arts = tracks.slice(0, 4).map((t) => t.artwork);
-
+  const isPinned = pinned.includes(playlist.id);
   const saveName = async () => {
-    if (name.trim()) await rename(playlist.id, name.trim());
+    if (name.trim() && name.trim() !== playlist.name) await rename(playlist.id, name.trim());
     setEditing(false);
   };
 
   return (
-    <div className="mx-auto max-w-[1280px] px-4 pb-8 md:px-7">
-      <div className="relative -mx-4 mb-6 overflow-hidden md:-mx-7">
-        <div className="absolute inset-0">
-          {arts[0] && (
-            <img src={upscaleArtwork(arts[0], 600)} alt="" className="h-full w-full scale-150 object-cover blur-[100px] opacity-50 saturate-150" />
-          )}
-          <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, transparent, var(--bg) 95%)" }} />
-        </div>
-        <div className="relative flex flex-col items-start gap-6 px-4 pt-14 pb-6 sm:flex-row sm:items-end md:px-7">
-          <div className="h-44 w-44 shrink-0 overflow-hidden rounded-2xl shadow-2xl md:h-52 md:w-52">
-            {arts.length >= 4 ? (
-              <div className="grid h-full w-full grid-cols-2 grid-rows-2">
-                {arts.map((a, i) => (
-                  <img key={i} src={a} alt="" className="h-full w-full object-cover" />
-                ))}
-              </div>
-            ) : arts[0] ? (
-              <img src={upscaleArtwork(arts[0], 500)} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <div className="grid h-full w-full place-items-center bg-[var(--panel-strong)]">
-                <ListMusic size={44} className="text-muted-2" />
-              </div>
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-muted mb-1 text-[11px] font-bold tracking-[0.22em] uppercase">Playlist</div>
-            {editing ? (
-              <div className="flex items-center gap-2">
-                <input
-                  autoFocus
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && void saveName()}
-                  className="glass w-full max-w-md rounded-xl px-4 py-2 text-[24px] font-bold outline-none md:text-[34px]"
-                  maxLength={80}
-                />
-                <button aria-label="Save name" onClick={() => void saveName()} className="accent-text grid h-10 w-10 place-items-center rounded-full">
-                  <Check size={20} />
-                </button>
-                <button aria-label="Cancel" onClick={() => setEditing(false)} className="text-muted grid h-10 w-10 place-items-center rounded-full">
-                  <X size={20} />
-                </button>
-              </div>
-            ) : (
-              <h1 className="font-display flex items-center gap-3 text-[30px] leading-tight font-extrabold tracking-tight md:text-[42px]">
-                <span className="truncate">{playlist.name}</span>
-                <button
-                  aria-label="Rename playlist"
-                  onClick={() => {
-                    setName(playlist.name);
-                    setEditing(true);
-                  }}
-                  className="text-muted-2 shrink-0 transition-colors hover:text-[var(--text)]"
-                >
-                  <Pencil size={18} />
-                </button>
-              </h1>
-            )}
-            <p className="text-muted mt-2 text-[13px]">
-              {tracks.length} songs{tracks.length > 0 ? ` · ${totalDuration(tracks)}` : ""}
-            </p>
-            <div className="mt-5 flex items-center gap-3">
-              {tracks.length > 0 && (
-                <>
-                  <PlayButton size={52} onClick={() => playContext(tracks, 0, playlist.name)} label="Play playlist" />
-                  <button
-                    onClick={() => {
-                      playContext(tracks, Math.floor(Math.random() * tracks.length), `${playlist.name} · Shuffle`);
-                      import("@/store/player").then(({ usePlayer }) => usePlayer.getState().set({ shuffle: true }));
-                    }}
-                    className="glass grid h-11 w-11 place-items-center rounded-full text-muted hover:text-[var(--text)]"
-                    aria-label="Shuffle play"
-                  >
-                    <Shuffle size={17} />
-                  </button>
-                </>
-              )}
-              <button
-                onClick={async () => {
-                  await remove(playlist.id);
-                  router.push("/library");
-                }}
-                className="glass grid h-11 w-11 place-items-center rounded-full text-muted transition-colors hover:text-red-400"
-                aria-label="Delete playlist"
-              >
-                <Trash2 size={17} />
-              </button>
+    <div className="fade-up">
+      <CollectionHeader
+        arts={tracks.slice(0, 4).map((t) => t.artwork)}
+        cover={
+          tracks.length ? undefined : (
+            <div className="grid h-full w-full place-items-center bg-gradient-to-br from-zinc-600 to-zinc-800 text-white/80">
+              <ListMusic size={64} strokeWidth={1.4} />
             </div>
-          </div>
-        </div>
-      </div>
+          )
+        }
+        eyebrow="Playlist"
+        title={
+          editing ? (
+            <span className="inline-flex max-w-full items-center gap-2">
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void saveName();
+                  if (e.key === "Escape") setEditing(false);
+                }}
+                maxLength={80}
+                aria-label="Playlist name"
+                className="min-w-0 flex-1 rounded-[10px] bg-white/15 px-3 py-1 text-[0.8em] font-bold text-white outline-none"
+              />
+              <button type="button" aria-label="Save" onClick={() => void saveName()} className="grid h-9 w-9 place-items-center rounded-full bg-white/15">
+                <Check size={18} />
+              </button>
+              <button type="button" aria-label="Cancel" onClick={() => setEditing(false)} className="grid h-9 w-9 place-items-center rounded-full bg-white/15">
+                <X size={18} />
+              </button>
+            </span>
+          ) : (
+            playlist.name
+          )
+        }
+        meta={`${tracks.length} song${tracks.length === 1 ? "" : "s"}${tracks.length ? ` · ${totalDuration(tracks)}` : ""}`}
+        disabled={!tracks.length}
+        onPlay={() => playContext(tracks, 0, playlist.name)}
+        onShuffle={() => playContext(shuffled(tracks), 0, playlist.name)}
+        action={
+          <>
+            <HeaderAction
+              label="Rename"
+              onClick={() => {
+                setName(playlist.name);
+                setEditing(true);
+              }}
+            >
+              <Pencil size={17} />
+            </HeaderAction>
+            <HeaderAction
+              label={isPinned ? "Unpin" : "Pin to the top of Library"}
+              active={isPinned}
+              onClick={() => setSettings({ pinnedPlaylists: isPinned ? pinned.filter((x) => x !== playlist.id) : [playlist.id, ...pinned] })}
+            >
+              <Pin size={17} />
+            </HeaderAction>
+            <HeaderAction label="Delete playlist" onClick={() => setConfirmDelete(true)}>
+              <Trash2 size={17} />
+            </HeaderAction>
+          </>
+        }
+      />
 
       {tracks.length === 0 ? (
-        <div className="glass mx-auto mt-8 flex max-w-md flex-col items-center rounded-3xl px-8 py-14 text-center">
-          <ListMusic size={32} className="text-muted mb-4" />
-          <h3 className="font-display text-[18px] font-bold">This playlist is empty</h3>
-          <p className="text-muted mt-2 text-[13.5px]">
-            Open any song&apos;s menu and choose “Add to playlist”, or pick songs from search.
-          </p>
-          <Link
-            href="/search"
-            className="mt-5 inline-flex items-center gap-2 rounded-full accent-bg px-5 py-2.5 text-[13px] font-bold text-black"
-          >
-            <Plus size={15} /> Add songs <Search size={14} className="opacity-70" />
-          </Link>
-        </div>
+        <EmptyState
+          icon={<ListMusic size={28} />}
+          title="This playlist is empty"
+          desc="Open any song's menu and choose “Add to playlist…”."
+          action={<ButtonLink href="/search">Find songs</ButtonLink>}
+        />
       ) : (
-        <div>
-          {tracks.map((_, i) => (
-            <TrackRow key={tracks[i].id} tracks={tracks} index={i} numbered contextLabel={playlist.name} />
+        <div className="px-2 desk:px-6">
+          {tracks.map((t, i) => (
+            <TrackRow
+              key={t.id}
+              tracks={tracks}
+              index={i}
+              contextLabel={playlist.name}
+              onRemove={() => void removeTrack(playlist.id, t.id)}
+              removeLabel="Remove from playlist"
+            />
           ))}
         </div>
       )}
+
+      <Sheet open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete playlist?" subtitle={`“${playlist.name}” will be removed from your library.`} width={400}>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            onClick={async () => {
+              await remove(playlist.id);
+              setSettings({ pinnedPlaylists: pinned.filter((x) => x !== playlist.id) });
+              router.push("/library");
+            }}
+          >
+            Delete
+          </Button>
+        </div>
+      </Sheet>
     </div>
   );
 }

@@ -4,45 +4,42 @@ import { ReactNode, useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
+import { usePlayer } from "@/store/player";
 import { initEngine, restoreSession, togglePlay, next, prev, applySettings } from "@/lib/audioEngine";
 import { useLiked, useDownloads, useBlocked } from "@/lib/library";
-import { DELUXE_ART } from "@/lib/backdrop";
+import { resumeRoom, useRoom } from "@/lib/rooms/client";
 import { registerServiceWorker, armNextAutoReload } from "@/lib/pwa";
-import MiniPlayer from "./MiniPlayer";
-import FullPlayer from "./FullPlayer";
+import NowPlaying from "./player/NowPlaying";
 import BackGuard from "./BackGuard";
 import TrackMenu from "./TrackMenu";
 import Toasts from "./Toasts";
-import { GlobalModals } from "./Modals";
-import UpdatePopups from "./UpdatePopups";
-import { MobileNav } from "./Sidebar";
+import { GlobalModals } from "./Overlays";
 
-function hexToRgba(hex: string, alpha: number): string {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+/**
+ * Persisted stores load from localStorage here, right after hydration, so the
+ * server render and the first client render agree. Runs before every other
+ * effect in the tree (it is the first child).
+ */
+function StoreHydration() {
+  useEffect(() => {
+    void useSettings.persist.rehydrate();
+    void usePlayer.persist.rehydrate();
+    void useRoom.persist.rehydrate();
+  }, []);
+  return null;
 }
 
 function ThemeApplier() {
   const theme = useSettings((s) => s.theme);
-  const accent = useSettings((s) => s.accent);
 
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty("--accent", accent);
-    root.style.setProperty("--glow", hexToRgba(accent, 0.35));
     const apply = () => {
       const mode =
-        theme === "system"
-          ? window.matchMedia("(prefers-color-scheme: light)").matches
-            ? "light"
-            : "dark"
-          : theme;
+        theme === "system" ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme;
       root.dataset.theme = mode;
       const meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) meta.setAttribute("content", mode === "light" ? "#f3f4f9" : "#06060a");
+      if (meta) meta.setAttribute("content", mode === "light" ? "#ffffff" : "#000000");
     };
     apply();
     if (theme === "system") {
@@ -50,15 +47,15 @@ function ThemeApplier() {
       mq.addEventListener("change", apply);
       return () => mq.removeEventListener("change", apply);
     }
-  }, [theme, accent]);
+  }, [theme]);
 
   return null;
 }
 
-/** Global image fallback chain + PWA wiring — zero visual changes. */
+/** Global image fallback chain + PWA wiring. */
 function PlatformBootstrap() {
   useEffect(() => {
-    // Thumbnail fallback: maxres -> hq -> mq -> default -> local placeholder
+    // Thumbnail fallback: maxres -> sd -> hq -> mq -> default -> app icon
     const onErr = (e: Event) => {
       const img = e.target as HTMLImageElement;
       if (!(img instanceof HTMLImageElement) || img.dataset.fbkDone) return;
@@ -83,19 +80,8 @@ function PlatformBootstrap() {
     };
     document.addEventListener("error", onErr, true);
 
-    // PWA shell + silent update checks (see src/lib/pwa.ts). A new deploy therefore reaches
-    // installed clients on their next visit instead of waiting for all tabs to be closed.
     const unregisterPwa = registerServiceWorker();
     const disarmAutoReload = armNextAutoReload();
-
-    // Warm the deluxe artwork so the first crossfade never waits on the network.
-    if (window.matchMedia("(min-width: 768px)").matches) {
-      DELUXE_ART.slice(0, 4).forEach((art) => {
-        const img = new Image();
-        img.decoding = "async";
-        img.src = art.src;
-      });
-    }
 
     const bip = (e: Event) => {
       e.preventDefault();
@@ -125,10 +111,12 @@ function EngineBootstrap() {
     initEngine();
     restoreSession();
     applySettings();
+    resumeRoom();
 
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.code === "Space") {
         e.preventDefault();
         void togglePlay();
@@ -138,6 +126,12 @@ function EngineBootstrap() {
       } else if (e.shiftKey && e.code === "ArrowLeft") {
         e.preventDefault();
         void prev();
+      } else if (e.key === "l" || e.key === "L") {
+        if (window.innerWidth >= 980 && !usePlayer.getState().fullPlayerOpen) useUi.getState().toggleSidePanel("lyrics");
+        else usePlayer.getState().set({ fullPlayerOpen: true, npView: usePlayer.getState().npView === "lyrics" ? "art" : "lyrics" });
+      } else if (e.key === "q" || e.key === "Q") {
+        if (window.innerWidth >= 980 && !usePlayer.getState().fullPlayerOpen) useUi.getState().toggleSidePanel("queue");
+        else usePlayer.getState().set({ fullPlayerOpen: true, npView: usePlayer.getState().npView === "queue" ? "art" : "queue" });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -166,19 +160,17 @@ export default function Providers({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={client}>
+      <StoreHydration />
       <ThemeApplier />
       <EngineBootstrap />
       <PlatformBootstrap />
       <DataSync />
       {children}
-      <MiniPlayer />
-      <FullPlayer />
+      <NowPlaying />
       <BackGuard />
       <TrackMenu />
       <GlobalModals />
-      <UpdatePopups />
       <Toasts />
-      <MobileNav />
     </QueryClientProvider>
   );
 }

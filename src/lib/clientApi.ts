@@ -89,6 +89,9 @@ export const api = {
       j<{ tracks: Track[] }>(r)
     ),
 
+  /** A cover for every Explore mood / genre tile. */
+  explore: () => fetch("/api/explore").then((r) => j<{ covers: Record<string, string> }>(r)),
+
   artist: (id: string) =>
     fetch(`/api/artist/${id}`).then((r) => j<{ artist: Artist; songs: Track[]; albums: Album[] }>(r)),
 
