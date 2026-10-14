@@ -5,15 +5,7 @@ import { persist } from "zustand/middleware";
 
 export type ThemeMode = "dark" | "light" | "system";
 export type Quality = "low" | "medium" | "high";
-
-export const ACCENTS = [
-  { id: "neon", name: "Neon Green", value: "#00E676" },
-  { id: "violet", name: "Electric Violet", value: "#8B5CF6" },
-  { id: "cyan", name: "Cyan Pulse", value: "#22D3EE" },
-  { id: "pink", name: "Hot Pink", value: "#F472B6" },
-  { id: "orange", name: "Sunset Orange", value: "#FB923C" },
-  { id: "blue", name: "Royal Blue", value: "#3B82F6" },
-];
+export type LyricsSize = "s" | "m" | "l";
 
 export const EQ_PRESETS: Record<string, { label: string; gains: number[] }> = {
   flat: { label: "Flat", gains: [0, 0, 0, 0, 0] },
@@ -39,7 +31,6 @@ export const REGIONS = [
 
 interface SettingsState {
   theme: ThemeMode;
-  accent: string;
   language: string;
   region: string;
 
@@ -47,6 +38,7 @@ interface SettingsState {
   mobileQuality: Quality;
   crossfadeSecs: number;
   gapless: boolean;
+  /** Keep similar music playing after the queue runs out (the ∞ in the queue). */
   autoplay: boolean;
   /** Autoplay follows YouTube Music's own "Up next" queue instead of keyword guesses. */
   ytRadio: boolean;
@@ -67,8 +59,18 @@ interface SettingsState {
 
   explicitFilter: boolean;
 
-  /** Rotating "deluxe" artwork backdrop behind the whole app. */
-  deluxeBackdrop: boolean;
+  /** Tint the player and pages with colours sampled from the artwork. */
+  dynamicColor: boolean;
+  /** Calmer motion: no artwork breathing, no lyric blur, no drifting backdrop. */
+  reduceMotion: boolean;
+
+  /** Open lyrics in the timed (karaoke) view whenever timestamps exist. */
+  lyricsSynced: boolean;
+  lyricsSize: LyricsSize;
+
+  /** Playlist ids pinned to the front of the Library. */
+  pinnedPlaylists: number[];
+  libraryLayout: "grid" | "list";
 
   profileName: string;
   profileEmail: string;
@@ -80,17 +82,16 @@ export const useSettings = create<SettingsState>()(
   persist(
     (set) => ({
       theme: "dark",
-      accent: "#00E676",
       language: "en",
       region: "US",
 
       wifiQuality: "high",
       mobileQuality: "medium",
-    crossfadeSecs: 0,
-    gapless: true,
-    autoplay: true,
-    ytRadio: true,
-    rememberPosition: true,
+      crossfadeSecs: 0,
+      gapless: true,
+      autoplay: true,
+      ytRadio: true,
+      rememberPosition: true,
 
       eqPreset: "flat",
       eqGains: [0, 0, 0, 0, 0],
@@ -107,14 +108,23 @@ export const useSettings = create<SettingsState>()(
 
       explicitFilter: false,
 
-      deluxeBackdrop: true,
+      dynamicColor: true,
+      reduceMotion: false,
+
+      lyricsSynced: true,
+      lyricsSize: "m",
+
+      pinnedPlaylists: [],
+      libraryLayout: "grid",
 
       profileName: "Siddharth",
       profileEmail: "",
 
       set: (p) => set(p),
     }),
-    { name: "sidify-settings" }
+    // Rehydrated by <StoreHydration/> after mount, so the first client render
+    // matches the server's (defaults) and hydration never mismatches.
+    { name: "sidify-settings", skipHydration: true }
   )
 );
 

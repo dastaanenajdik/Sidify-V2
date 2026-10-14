@@ -2,12 +2,12 @@
  * Network-first for navigations, cache-first for static assets.
  * Live search/stream API responses are never cached. */
 
-/* v3: bumped after the backdrop/z-index fix in 1.1.0. Any client still holding the old
+/* v6: the 2.0 redesign (new shell, icons and player). Any client still holding the old
  * app shell must drop it, so both cache names move forward and activate() deletes the
  * previous ones. Installed PWAs pick this up at most one reload after the deploy thanks to
  * `src/lib/pwa.ts` (updateViaCache: none + controllerchange reload). */
-const SHELL_CACHE = "sidify-shell-v5";
-const STATIC_CACHE = "sidify-static-v5";
+const SHELL_CACHE = "sidify-shell-v6";
+const STATIC_CACHE = "sidify-static-v6";
 
 const APP_SHELL = [
   "./",

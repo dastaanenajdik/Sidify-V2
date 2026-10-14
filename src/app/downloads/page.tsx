@@ -1,137 +1,120 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Download, HardDrive, Trash2, X } from "lucide-react";
-import { useDownloads } from "@/lib/library";
+import { Download, HardDrive, Play, X } from "lucide-react";
+import { DOWNLOADS_ENABLED, useDownloads } from "@/lib/library";
 import { playContext } from "@/lib/audioEngine";
-import { usePlayer } from "@/store/player";
+import { usePlayer, currentTrack } from "@/store/player";
 import { useSettings } from "@/store/settings";
-import { cx, formatBytes, formatTime, upscaleArtwork } from "@/lib/format";
-import { LiveEq } from "@/components/SidifyLogo";
-import { currentTrack } from "@/store/player";
+import { cx, formatBytes, formatTime } from "@/lib/format";
+import { Artwork, Button, EmptyState, IconButton, PageTitle } from "@/components/ui";
+import { PlayingBars } from "@/components/icons";
 
-const QUALITY_META: Record<string, { label: string; kbps: string; cls: string }> = {
-  low: { label: "Low", kbps: "96 kbps", cls: "text-amber-400" },
-  medium: { label: "Medium", kbps: "160 kbps", cls: "text-sky-400" },
-  high: { label: "High", kbps: "320 kbps", cls: "accent-text" },
-};
+const QUALITY: Record<string, string> = { low: "Data saver", medium: "Standard", high: "High" };
 
 export default function DownloadsPage() {
   const { data, remove, clear } = useDownloads();
-  const downloadQuality = useSettings((s) => s.downloadQuality);
+  const quality = useSettings((s) => s.downloadQuality);
   const rows = data?.downloads ?? [];
   const tracks = rows.map((r) => r.track);
-  const totalSize = rows.reduce((a, r) => a + (r.sizeBytes || 0), 0);
+  const total = rows.reduce((a, r) => a + (r.sizeBytes || 0), 0);
   const playingId = usePlayer((s) => currentTrack(s)?.id);
   const isPlaying = usePlayer((s) => s.isPlaying);
-
   const [estimate, setEstimate] = useState<{ usage: number; quota: number } | null>(null);
-  useEffect(() => {
-    if (navigator.storage?.estimate) {
-      navigator.storage.estimate().then((e) => setEstimate({ usage: e.usage || 0, quota: e.quota || 0 })).catch(() => {});
-    }
-  }, [rows.length]);
 
-  const pct = estimate && estimate.quota ? Math.min(100, (estimate.usage / estimate.quota) * 100) : 0;
+  useEffect(() => {
+    navigator.storage?.estimate?.().then((e) => setEstimate({ usage: e.usage || 0, quota: e.quota || 0 })).catch(() => {});
+  }, [rows.length]);
+  const pct = estimate?.quota ? Math.min(100, (estimate.usage / estimate.quota) * 100) : 0;
 
   return (
-    <div className="mx-auto max-w-[1100px] px-4 pt-6 md:px-7">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-display text-[30px] font-extrabold tracking-tight md:text-[36px]">Downloads</h1>
-          <p className="text-muted mt-1 text-[13.5px]">
-            Real offline audio stored in this browser · default quality{" "}
-            <span className="font-semibold text-[var(--text)]">{QUALITY_META[downloadQuality]?.label}</span> (change in Settings)
-          </p>
-        </div>
-        {rows.length > 0 && (
-          <button
-            onClick={() => void clear()}
-            className="flex items-center gap-2 rounded-full border border-red-500/40 px-4 py-2 text-[12.5px] font-bold text-red-400 transition-colors hover:bg-red-500/10"
-          >
-            <Trash2 size={14} /> Clear all
-          </button>
-        )}
-      </div>
+    <div className="fade-up">
+      <PageTitle
+        trailing={
+          rows.length ? (
+            <>
+              <Button size="sm" variant="secondary" onClick={() => playContext(tracks, 0, "Downloads")}>
+                <Play size={14} fill="currentColor" /> Play
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => void clear()}>
+                Delete all
+              </Button>
+            </>
+          ) : null
+        }
+      >
+        Downloads
+      </PageTitle>
 
-      {/* storage meter */}
-      <div className="glass mb-8 rounded-3xl p-5">
+      <div className="mx-4 mb-6 max-w-[760px] rounded-[16px] bg-raised p-4 ring-1 ring-edge desk:mx-8">
         <div className="mb-3 flex items-center gap-3">
-          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--panel-strong)]">
-            <HardDrive size={20} className="accent-text" />
-          </span>
-          <div className="flex-1">
-            <div className="text-[14.5px] font-bold">Offline storage</div>
-            <div className="text-muted text-[12.5px]">
-              {rows.length} songs · {formatBytes(totalSize)} of music
-              {estimate ? ` · browser using ${formatBytes(estimate.usage)} of ${formatBytes(estimate.quota)}` : ""}
+          <HardDrive size={20} className="text-fg-2" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[15px] font-semibold">On this device</div>
+            <div className="text-[12.5px] text-fg-2">
+              {rows.length} song{rows.length === 1 ? "" : "s"} · {formatBytes(total)}
+              {estimate ? ` · browser storage ${formatBytes(estimate.usage)} of ${formatBytes(estimate.quota)}` : ""} · quality {QUALITY[quality]}
             </div>
           </div>
-          <span className="accent-text text-[13px] font-bold tabular-nums">{estimate ? `${pct.toFixed(1)}%` : ""}</span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-[var(--panel-strong)]">
-          <div
-            className="h-full rounded-full transition-all duration-700"
-            style={{ width: `${Math.max(pct, rows.length ? 2 : 0)}%`, background: "linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, white))", boxShadow: "0 0 12px var(--glow)" }}
-          />
+        <div className="h-1.5 overflow-hidden rounded-full bg-fill-2">
+          <div className="h-full rounded-full bg-fg/80 transition-all duration-700" style={{ width: `${Math.max(pct, rows.length ? 2 : 0)}%` }} />
         </div>
       </div>
 
       {rows.length === 0 ? (
-        <div className="glass mx-auto mt-8 flex max-w-md flex-col items-center rounded-3xl px-8 py-14 text-center">
-          <div className="mb-4 grid h-16 w-16 place-items-center rounded-full bg-[var(--panel-strong)] text-muted">
-            <Download size={28} />
-          </div>
-          <h3 className="font-display text-[18px] font-bold">No downloads yet</h3>
-          <p className="text-muted mt-2 text-[13.5px] leading-6">
-            Tap the download icon on any track — the audio file is saved locally and plays instantly, even with bad network.
-          </p>
-        </div>
+        <EmptyState
+          icon={<Download size={28} />}
+          title={DOWNLOADS_ENABLED ? "No downloads yet" : "Downloads are coming soon"}
+          desc={
+            DOWNLOADS_ENABLED
+              ? "Choose “Download” from any song's menu — it plays from this device, even offline."
+              : "Saving songs for offline listening is being finished. Everything else works as usual."
+          }
+        />
       ) : (
-        <div className="space-y-1">
+        <div className="px-2 desk:px-6">
           {rows.map((r, i) => {
             const t = r.track;
             const active = playingId === t.id;
-            const q = QUALITY_META[r.quality] || QUALITY_META.high;
             return (
               <div
                 key={r.trackId}
+                role="button"
+                tabIndex={0}
                 onClick={() => playContext(tracks, i, "Downloads")}
-                className={cx("hover-panel group grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xl px-3 py-2.5", active && "bg-[var(--panel-strong)]")}
+                className="group flex h-[64px] cursor-default items-center gap-3 rounded-[8px] px-2 hover:bg-fill"
               >
-                <div className="relative">
-                  <img src={upscaleArtwork(t.artwork, 200)} alt="" loading="lazy" className="h-12 w-12 rounded-lg object-cover" />
-                  <span className="absolute -right-1.5 -bottom-1.5 grid h-5 w-5 place-items-center rounded-full accent-bg text-black">
-                    <Check size={11} strokeWidth={3.5} />
-                  </span>
-                </div>
-                <div className="min-w-0">
-                  <div className={cx("flex items-center gap-2 truncate text-[14px] font-semibold", active && "accent-text")}>
-                    {active && isPlaying && <LiveEq size={12} />}
-                    <span className="truncate">{t.title}</span>
-                  </div>
-                  <div className="text-muted truncate text-[12.5px]">
-                    {t.artist} · {formatTime(t.durationMs)}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right">
-                    <span className={cx("rounded-md bg-[var(--panel)] px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase", q.cls)}>
-                      {q.label}
+                <span className="relative shrink-0">
+                  <Artwork src={t.artwork} size={52} rounded="rounded-[6px]" className="h-[52px] w-[52px]" />
+                  {active && (
+                    <span className="absolute inset-0 grid place-items-center rounded-[6px] bg-black/45 text-white">
+                      <PlayingBars paused={!isPlaying} />
                     </span>
-                    <div className="text-muted-2 mt-1 text-[11px] tabular-nums">{formatBytes(r.sizeBytes)}</div>
-                  </div>
-                  <button
-                    aria-label="Remove download"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void remove(r.trackId);
-                    }}
-                    className="text-muted grid h-9 w-9 place-items-center rounded-full opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-400"
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className={cx("block truncate text-[15px]", active && "text-playing")}>{t.title}</span>
+                  <span className="block truncate text-[13px] text-fg-2">
+                    {t.artist} · {formatTime(t.durationMs)}
+                  </span>
+                </span>
+                <span className="text-right text-[12px] text-fg-2 tabular-nums">
+                  {QUALITY[r.quality] ?? r.quality}
+                  <br />
+                  {formatBytes(r.sizeBytes)}
+                </span>
+                <IconButton
+                  label="Remove download"
+                  size={32}
+                  className="text-fg-2 opacity-100 desk:opacity-0 desk:group-hover:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void remove(r.trackId);
+                  }}
+                >
+                  <X size={16} />
+                </IconButton>
               </div>
             );
           })}

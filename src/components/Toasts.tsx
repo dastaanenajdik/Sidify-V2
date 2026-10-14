@@ -1,55 +1,50 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
+import { AlertCircle, CheckCircle2, Info } from "lucide-react";
 import { useUi } from "@/store/ui";
+import { usePlayer } from "@/store/player";
+import { cx } from "@/lib/format";
 
+/** Small glass pills, bottom-centre (above the phone chrome). */
 export default function Toasts() {
   const toasts = useUi((s) => s.toasts);
+  const dismiss = useUi((s) => s.dismissToast);
+  const hasPlayer = usePlayer((s) => s.index >= 0 && !s.fullPlayerOpen);
   return (
-    <div className="pointer-events-none fixed bottom-44 left-1/2 z-[100] flex w-full max-w-sm -translate-x-1/2 flex-col items-center gap-2 px-4 md:bottom-28">
-      <AnimatePresence>
+    <div
+      className={cx(
+        "pointer-events-none fixed inset-x-0 z-[150] flex flex-col items-center gap-2 px-4 desk:bottom-6",
+        hasPlayer ? "bottom-[calc(150px+env(safe-area-inset-bottom,0px))]" : "bottom-[calc(88px+env(safe-area-inset-bottom,0px))]"
+      )}
+      aria-live="polite"
+    >
+      <AnimatePresence initial={false}>
         {toasts.map((t) => (
-          <motion.div
+          <motion.button
             key={t.id}
+            type="button"
             layout
-            initial={{ opacity: 0, y: 18, scale: 0.94 }}
+            initial={{ opacity: 0, y: 14, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.96 }}
-            transition={{ type: "spring", damping: 26, stiffness: 380 }}
-            className="glass-strong pointer-events-auto flex w-auto max-w-full items-center gap-2.5 rounded-full py-2.5 pr-5 pl-3.5"
-            style={{ boxShadow: "0 16px 44px -10px var(--shadow)" }}
+            exit={{ opacity: 0, y: 8, scale: 0.97 }}
+            transition={{ type: "spring", damping: 30, stiffness: 420 }}
+            onClick={() => dismiss(t.id)}
+            className="menu-glass pointer-events-auto flex max-w-[420px] items-center gap-3 rounded-full py-2.5 pr-5 pl-3.5 text-left"
           >
-            {t.kind === "warn" ? (
-              <AlertTriangle size={17} className="shrink-0 text-amber-400" />
-            ) : t.kind === "info" ? (
-              <Info size={17} className="shrink-0 text-sky-400" />
-            ) : (
-              <CheckCircle2 size={17} className="accent-text shrink-0" />
-            )}
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-semibold">{t.title}</div>
-              {t.desc && <div className="text-muted truncate text-[11.5px]">{t.desc}</div>}
-            </div>
-            {t.pct !== undefined && (
-              <span className="relative h-6 w-6 shrink-0" aria-hidden>
-                <svg viewBox="0 0 36 36" className="h-6 w-6 -rotate-90">
-                  <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeOpacity="0.16" strokeWidth="5" />
-                  <circle
-                    cx="18"
-                    cy="18"
-                    r="15"
-                    fill="none"
-                    stroke="var(--accent)"
-                    strokeWidth="5"
-                    strokeLinecap="round"
-                    strokeDasharray={`${(Math.max(0, Math.min(100, t.pct)) / 100) * 94.2} 94.2`}
-                    style={{ transition: "stroke-dasharray 240ms linear" }}
-                  />
-                </svg>
+            <span className={cx("shrink-0", t.kind === "warn" ? "text-danger" : t.kind === "ok" ? "text-fg" : "text-fg-2")}>
+              {t.kind === "warn" ? <AlertCircle size={18} /> : t.kind === "ok" ? <CheckCircle2 size={18} /> : <Info size={18} />}
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-[13.5px] leading-tight font-semibold">{t.title}</span>
+              {t.desc && <span className="block truncate text-[12px] leading-tight text-fg-2">{t.desc}</span>}
+            </span>
+            {typeof t.pct === "number" && (
+              <span className="ml-1 h-1 w-12 shrink-0 overflow-hidden rounded-full bg-fill-2">
+                <span className="block h-full bg-fg" style={{ width: `${t.pct}%` }} />
               </span>
             )}
-          </motion.div>
+          </motion.button>
         ))}
       </AnimatePresence>
     </div>

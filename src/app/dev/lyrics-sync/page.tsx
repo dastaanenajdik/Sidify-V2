@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, FlaskConical, Gauge, Pause, Play, RotateCcw } from "lucide-react";
+import { ChevronLeft, FlaskConical, Pause, Play, RotateCcw } from "lucide-react";
 import { parseLrc } from "@/lib/lyrics";
 import { useSmoothPosition } from "@/lib/lyricsClient";
 import { usePlayer } from "@/store/player";
-import LyricsView, { LyricsModeToggle, type LyricsMode } from "@/components/LyricsView";
-import SeekBar from "@/components/SeekBar";
+import { SyncedLyrics } from "@/components/player/LyricsPane";
+import MeshBackdrop from "@/components/MeshBackdrop";
+import { Chips, IconButton, Range } from "@/components/ui";
+import { formatTime } from "@/lib/format";
 import { DEMO_LRC, DEMO_TRACK } from "./demoTrack";
 
 /* ------------------------------------------------------------------ */
@@ -16,7 +18,7 @@ import { DEMO_LRC, DEMO_TRACK } from "./demoTrack";
 /*  Nothing here talks to YouTube: the media clock in the player store  */
 /*  is driven by a timer instead, so the exact code path that lights up */
 /*  lines during real playback (useSmoothPosition → activeLineIndex →   */
-/*  LyricsView) can be inspected without a stream.                     */
+/*  SyncedLyrics) can be inspected without a stream.                   */
 /*                                                                     */
 /*  Not linked from the app shell. Remove with:                        */
 /*    rm -r src/app/dev                                                */
@@ -29,7 +31,6 @@ export default function LyricsSyncDevPage() {
   const set = usePlayer((s) => s.set);
   const isPlaying = usePlayer((s) => s.isPlaying);
   const positionMs = useSmoothPosition();
-  const [mode, setMode] = useState<LyricsMode>("synced");
   const [speed, setSpeedValue] = useState(1);
   const posRef = useRef(0);
 
@@ -46,6 +47,7 @@ export default function LyricsSyncDevPage() {
   // Simulated media clock: same store fields the audio engine writes.
   useEffect(() => {
     const id = setInterval(() => {
+      if (!usePlayer.getState().isPlaying) return;
       const nextValue = Math.min(DEMO_TRACK.durationMs, posRef.current + 250 * speed);
       posRef.current = nextValue;
       set({ positionMs: nextValue });
@@ -59,121 +61,65 @@ export default function LyricsSyncDevPage() {
     set({ isPlaying: playing, positionMs: posRef.current });
   };
 
-  const seekBy = (deltaMs: number) => {
-    const value = Math.max(0, Math.min(DEMO_TRACK.durationMs, posRef.current + deltaMs));
-    posRef.current = value;
-    set({ positionMs: value });
-  };
-
-  const changeSpeed = (value: number) => {
-    setSpeedValue(value);
-    set({ speed: value });
-  };
-
   return (
-    <div className="mx-auto w-full max-w-[1200px] px-4 pt-6 pb-28 md:px-7">
+    <div className="mx-auto w-full max-w-[1100px] px-4 pt-4 desk:px-8 desk:pt-7">
       <div className="mb-5 flex items-center gap-3">
-        <Link href="/library?tab=lyrics" className="text-muted glass grid h-10 w-10 place-items-center rounded-full hover:text-[var(--text)]" aria-label="Back to library">
+        <Link href="/library/lyrics" className="grid h-9 w-9 place-items-center rounded-full bg-fill hover:bg-fill-2" aria-label="Back">
           <ChevronLeft size={18} />
         </Link>
         <div>
-          <h1 className="font-display text-[24px] font-extrabold tracking-tight md:text-[28px]">
-            <FlaskConical size={20} className="accent-text mr-2 inline-block align-[-3px]" />
-            Lyrics sync playground
+          <h1 className="t-title flex items-center gap-2">
+            <FlaskConical size={18} className="text-playing" /> Lyrics sync playground
           </h1>
-          <p className="text-muted text-[13px]">
-            Dev-only page — playback is simulated, so the synced view can be checked without streaming a song.
-          </p>
+          <p className="text-[13px] text-fg-2">Dev-only — playback is simulated, so the synced view can be checked without streaming.</p>
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-        {/* transport */}
-        <div className="glass h-fit rounded-3xl p-5">
-          <div className="flex items-center gap-4">
-            <div
-              className="grid h-20 w-20 shrink-0 place-items-center rounded-2xl"
-              style={{ background: "linear-gradient(135deg, var(--accent), #7c3aed 70%)" }}
-            >
-              <Play size={26} className="translate-x-[2px] text-black" fill="currentColor" strokeWidth={0} />
-            </div>
-            <div className="min-w-0">
-              <div className="text-[10.5px] font-bold tracking-[0.2em] uppercase text-muted">Demo track</div>
-              <div className="font-display truncate text-[17px] font-bold">{DEMO_TRACK.title}</div>
-              <div className="text-muted truncate text-[13px]">{DEMO_TRACK.artist}</div>
-            </div>
-          </div>
-
-          <div className="mt-5">
-            <SeekBar />
-          </div>
-
-          <div className="mt-2 flex items-center justify-between">
-            <button onClick={() => seekBy(-10_000)} className="text-muted grid h-10 w-10 place-items-center rounded-full hover:bg-[var(--panel)] hover:text-[var(--text)]" aria-label="Back 10 seconds">
-              <RotateCcw size={17} />
-            </button>
-            <button
-              onClick={toggle}
-              className="accent-bg grid h-14 w-14 place-items-center rounded-full text-black transition-transform hover:scale-105"
-              aria-label={isPlaying ? "Pause" : "Play"}
-              style={{ boxShadow: "0 14px 34px -10px var(--glow)" }}
-            >
-              {isPlaying ? <Pause size={22} fill="currentColor" strokeWidth={0} /> : <Play size={22} fill="currentColor" strokeWidth={0} className="translate-x-[2px]" />}
-            </button>
-            <div className="relative">
-              <Gauge size={15} className="text-muted-2 pointer-events-none absolute top-1/2 left-2 -translate-y-1/2" />
-              <select
-                value={speed}
-                onChange={(event) => changeSpeed(Number(event.target.value))}
-                aria-label="Playback speed"
-                className="glass text-muted h-10 cursor-pointer rounded-full pr-3 pl-7 text-[12px] font-semibold outline-none"
-              >
-                {SPEEDS.map((value) => (
-                  <option key={value} value={value}>
-                    {value}x
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="mt-5 space-y-2 border-t border-[var(--border-soft)] pt-4">
-            <button
-              onClick={() => seekBy(-5_000)}
-              className="hover-panel w-full rounded-xl px-3 py-2 text-left text-[12.5px] font-semibold"
-            >
-              ↺ 5 s — check that the highlight re-syncs after a seek
-            </button>
-            <button
-              onClick={() => seekBy(30_000)}
-              className="hover-panel w-full rounded-xl px-3 py-2 text-left text-[12.5px] font-semibold"
-            >
-              ↻ 30 s — long jump (auto-scroll snaps instead of gliding)
-            </button>
-            <p className="text-muted-2 px-1 pt-1 text-[11.5px] leading-5">
-              Try: scroll away while it plays → the <span className="accent-text font-semibold">Current line</span> pill appears;
-              tap a lyric line → the clock seeks there; change speed → the clock follows media time, not wall time.
-            </p>
-          </div>
+      <div className="relative h-[62vh] min-h-[380px] overflow-hidden rounded-[18px] text-white">
+        <MeshBackdrop palette={["#3a1c71", "#d76d77", "#2b5876", "#ffaf7b"]} />
+        <div className="relative flex h-full flex-col px-6 py-4">
+          <SyncedLyrics lines={lines} offset={0} fontSize={30} onArt reduce={false} selecting={false} picked={[]} onPick={() => {}} />
         </div>
+      </div>
 
-        {/* lyrics */}
-        <div className="glass overflow-hidden rounded-3xl">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] px-5 py-3">
-            <div className="min-w-0">
-              <div className="accent-text text-[10px] font-bold tracking-[0.2em] uppercase">{lines.length} timed lines</div>
-              <div className="font-display truncate text-[16px] font-bold">Lyrics</div>
-            </div>
-            <LyricsModeToggle mode={mode} syncedAvailable={lines.length >= 2} onChange={setMode} />
-          </div>
-          <LyricsView
-            lyrics={lines.map((l) => l.text).join("\n")}
-            lines={lines}
-            mode={mode}
-            positionMs={positionMs}
-            source="demo fixture"
-            className="h-[62vh] min-h-[380px]"
-            listClassName="px-6"
+      <div className="mt-4 space-y-3">
+        <Range
+          label="Seek"
+          value={positionMs}
+          max={DEMO_TRACK.durationMs}
+          step={250}
+          onChange={(v) => {
+            posRef.current = v;
+            set({ positionMs: v });
+          }}
+        />
+        <div className="flex flex-wrap items-center gap-3">
+          <IconButton label={isPlaying ? "Pause" : "Play"} tone="fill" size={40} onClick={toggle}>
+            {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+          </IconButton>
+          <IconButton
+            label="Restart"
+            tone="fill"
+            size={40}
+            onClick={() => {
+              posRef.current = 0;
+              set({ positionMs: 0 });
+            }}
+          >
+            <RotateCcw size={17} />
+          </IconButton>
+          <span className="text-[13px] text-fg-2 tabular-nums">
+            {formatTime(positionMs)} / {formatTime(DEMO_TRACK.durationMs)}
+          </span>
+          <Chips
+            className="ml-auto"
+            size="sm"
+            value={String(speed)}
+            options={SPEEDS.map((v) => ({ id: String(v), label: `${v}×` }))}
+            onChange={(v) => {
+              setSpeedValue(Number(v));
+              set({ speed: Number(v) });
+            }}
           />
         </div>
       </div>

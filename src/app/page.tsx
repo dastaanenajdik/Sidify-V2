@@ -1,240 +1,302 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Sparkles } from "lucide-react";
-import { useSettings } from "@/store/settings";
+import { RefreshCw, Settings } from "lucide-react";
 import { api } from "@/lib/clientApi";
+import { playContext, startRadio } from "@/lib/audioEngine";
+import { useLiked } from "@/lib/library";
+import { useSettings } from "@/store/settings";
+import { usePlayer, currentTrack } from "@/store/player";
+import { readPlayLog, entryTrack } from "@/lib/playLog";
+import { greeting, shuffled, uniqueTracks } from "@/lib/format";
 import type { Track } from "@/lib/types";
-import { upscaleArtwork } from "@/lib/format";
-import { playContext } from "@/lib/audioEngine";
-import Section from "@/components/Section";
-import TrackRow from "@/components/TrackRow";
-import { AlbumCard, ArtistCard, SongTile } from "@/components/cards";
-import { AppPromoBanner } from "@/components/AppPromo";
-import SidifyLogo from "@/components/SidifyLogo";
-
-const MOODS = [
-  { name: "Pop", q: "pop hits", g: "from-fuchsia-500 to-purple-700" },
-  { name: "Lo-Fi", q: "lofi beats", g: "from-teal-400 to-emerald-600" },
-  { name: "Workout", q: "workout edm", g: "from-orange-500 to-red-600" },
-  { name: "Chill", q: "chill vibes", g: "from-sky-400 to-blue-600" },
-  { name: "Classical", q: "classical piano", g: "from-amber-300 to-yellow-600" },
-  { name: "Party", q: "party dance", g: "from-pink-500 to-rose-600" },
-  { name: "Focus", q: "deep focus instrumental", g: "from-indigo-400 to-violet-700" },
-  { name: "Romance", q: "romantic songs", g: "from-rose-400 to-pink-700" },
-];
-
-function greeting(): string {
-  const h = new Date().getHours();
-  if (h < 5) return "Late night vibes";
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  if (h < 21) return "Good evening";
-  return "Good night";
-}
+import { AlbumCard, ArtistCard, HeroCard, QuickPicks, SongCard } from "@/components/cards";
+import { Button, EmptyState, SectionHeader, Shelf, Skeleton } from "@/components/ui";
+import { LogoMark } from "@/components/Logo";
+import { PeopleGlyph } from "@/components/icons";
+import { useRoomSummary } from "@/lib/rooms/client";
+import { useMounted } from "@/lib/useMounted";
 
 export default function HomePage() {
   const region = useSettings((s) => s.region);
-  const ef = useSettings((s) => s.explicitFilter);
   const name = useSettings((s) => s.profileName);
-  const { data, isLoading } = useQuery({
-    queryKey: ["home", region],
-    queryFn: () => api.home(region),
-    staleTime: 5 * 60_000,
-  });
+  const ef = useSettings((s) => s.explicitFilter);
+  const home = useQuery({ queryKey: ["home", region], queryFn: () => api.home(region), staleTime: 5 * 60_000 });
+  const recentQ = useQuery({ queryKey: ["recent"], queryFn: api.recent, staleTime: 30_000 });
+  const { data: likedData } = useLiked();
+  const playing = usePlayer((s) => currentTrack(s));
 
-  const vis = (arr: Track[]) => (ef ? arr.filter((t) => !t.explicit) : arr);
-  const trending = vis(data?.trending ?? []);
-  const recommended = vis(data?.recommended ?? []);
-  const recent = vis(data?.recentlyPlayed ?? []);
+  const clean = (list: Track[] | undefined) => (ef ? (list ?? []).filter((t) => !t.explicit) : (list ?? []));
+  const recent = uniqueTracks(clean(recentQ.data?.tracks ?? home.data?.recentlyPlayed)).slice(0, 20);
+  const liked = clean(likedData?.tracks);
+  const seed = playing ?? recent[0] ?? null;
+
+  // What YouTube Music would play after your latest song — the heart of the recommendations.
+  const radio = useQuery({
+    queryKey: ["radio", seed?.videoId],
+    queryFn: () => api.radio(seed!.videoId!, 24),
+    enabled: !!seed?.videoId,
+    staleTime: 15 * 60_000,
+  });
+  const becauseTracks = clean(radio.data?.tracks).filter((t) => t.id !== seed?.id);
+
+  const topArtist = useMemo(() => {
+    const counts = new Map<string, { n: number; track: Track }>();
+    for (const e of readPlayLog().slice(-400)) {
+      const key = e.a;
+      const cur = counts.get(key);
+      counts.set(key, { n: (cur?.n ?? 0) + 1, track: entryTrack(e) });
+    }
+    return [...counts.values()].sort((a, b) => b.n - a.n)[0]?.track ?? null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recent.length]);
+
+  const trending = clean(home.data?.trending);
+  const recommended = clean(home.data?.recommended);
+  const quick = (becauseTracks.length >= 8 ? becauseTracks : uniqueTracks([...becauseTracks, ...recommended, ...trending])).slice(0, 16);
+  const loading = home.isLoading && !home.data;
+  const failed = home.isError && !home.data;
+
+  const mix = () => {
+    const pool = uniqueTracks(shuffled([...liked.slice(0, 40), ...recent.slice(0, 20), ...becauseTracks.slice(0, 15)]));
+    if (pool.length) playContext(pool, 0, "Your Mix");
+  };
 
   return (
-    <div className="mx-auto max-w-[1280px] px-4 pt-5 md:px-7 md:pt-7">
-      {/* ANDROID APP PROMO — the unmissable one, first thing on the page */}
-      <AppPromoBanner />
+    <div className="fade-up pb-4">
+      <Header name={name} />
 
-      {/* HERO — sits directly on the rotating deluxe artwork */}
-      <div className="glass relative mb-7 overflow-hidden rounded-[28px] p-6 pb-16 md:p-9">
-        <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(120deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%)" }} />
-        <div className="pointer-events-none absolute -top-24 -right-16 h-72 w-72 rounded-full blur-3xl" style={{ background: "radial-gradient(closest-side, var(--glow), transparent)" }} />
-        <div className="pointer-events-none absolute -bottom-28 left-1/4 h-64 w-64 rounded-full bg-violet-600/20 blur-3xl" />
-        <div className="relative">
-          <div className="mb-5 flex items-center gap-2.5">
-            <SidifyLogo size={30} />
-            <span className="text-muted text-[11px] font-bold tracking-[0.28em] uppercase">Sidify · Stream beyond limits</span>
+      {/* top picks */}
+      <section className="mb-9">
+        {loading ? (
+          <div className="flex gap-3.5 overflow-hidden px-4 desk:px-8">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="aspect-[0.92] w-[min(70vw,320px)] shrink-0 rounded-[18px] desk:w-[300px]" />
+            ))}
           </div>
-          <h1 className="font-display max-w-xl text-[30px] leading-[1.08] font-extrabold tracking-tight md:text-[44px]">
-            {greeting()}
-            {name ? `, ${name.split(" ")[0]}` : ""}.<br />
-            <span className="accent-text text-glow">Your universe of sound</span> awaits.
-          </h1>
-          <p className="text-muted mt-3 max-w-md text-[14px] leading-6">
-            Instant search, offline downloads, a real-time studio equalizer and buttery crossfade — all in one neon playground.
-          </p>
-          <div className="mt-6 flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => trending.length && playContext(trending, 0, "Trending Now")}
-              className="ring-focus flex items-center gap-2 rounded-full accent-bg px-5 py-2.5 text-[13.5px] font-bold text-black transition-transform hover:scale-[1.03] active:scale-95"
-              style={{ boxShadow: "0 12px 34px -8px var(--glow)" }}
-            >
-              <Sparkles size={16} /> Play today&apos;s mix
-            </button>
-            <Link
-              href="/search"
-              className="glass flex items-center gap-2 rounded-full px-5 py-2.5 text-[13.5px] font-semibold transition-transform hover:scale-[1.03]"
-            >
-              Explore music <ArrowRight size={15} />
-            </Link>
-          </div>
-        </div>
-
-
-      </div>
-
-      {/* QUICK PICKS */}
-      {isLoading ? (
-        <GridSkeleton />
-      ) : (
-        recommended.length > 0 && (
-          <div className="mb-8">
-            <h2 className="font-display mb-3 px-1 text-[19px] font-bold tracking-tight md:text-[21px]">
-              {data?.basedOnArtist ? `More like ${data.basedOnArtist}` : "Made for you"}
-            </h2>
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
-              {recommended.slice(0, 6).map((t, i) => (
-                <SongTile key={t.id} track={t} onPlay={() => playContext(recommended, i, "Made for you")} />
+        ) : (
+          <>
+            <SectionHeader title="Top picks for you" />
+            <Shelf>
+              {(liked.length > 0 || recent.length > 0) && (
+                <HeroCard
+                  eyebrow="Made for you"
+                  title="Your Mix"
+                  subtitle="Songs you love, and more like them"
+                  artwork={liked[0]?.artwork || recent[0]?.artwork}
+                  onClick={mix}
+                />
+              )}
+              {seed && (
+                <HeroCard
+                  eyebrow="Because you listened to"
+                  title={seed.title}
+                  subtitle={`${seed.artist} · Song radio`}
+                  artwork={seed.artwork}
+                  onClick={() => void startRadio(seed)}
+                />
+              )}
+              {topArtist && topArtist.artist !== seed?.artist && (
+                <HeroCard
+                  eyebrow="Your top artist"
+                  title={`${topArtist.artist} Radio`}
+                  subtitle="Their songs and similar music"
+                  artwork={topArtist.artwork}
+                  onClick={() => void startRadio(topArtist)}
+                />
+              )}
+              {trending.length > 0 && (
+                <HeroCard
+                  eyebrow="Trending"
+                  title="Today's Hits"
+                  subtitle={trending
+                    .slice(0, 3)
+                    .map((t) => t.artist)
+                    .join(", ")}
+                  artwork={trending[0].artwork}
+                  onClick={() => playContext(trending, 0, "Today's Hits")}
+                />
+              )}
+              {(home.data?.newReleases ?? []).slice(0, 2).map((a) => (
+                <HeroCard key={a.id} eyebrow="New music" title={a.title} subtitle={a.artist} artwork={a.artwork} href={`/album/${encodeURIComponent(a.id)}`} />
               ))}
-            </div>
-          </div>
-        )
+            </Shelf>
+          </>
+        )}
+      </section>
+
+      {failed && (
+        <EmptyState
+          icon={<RefreshCw size={26} />}
+          title="Can't reach the music service"
+          desc="Your library still works. Try again in a moment."
+          action={
+            <Button variant="secondary" onClick={() => void home.refetch()}>
+              Try again
+            </Button>
+          }
+        />
       )}
 
-      {/* MOODS */}
-      <div className="mb-8">
-        <h2 className="font-display mb-3 px-1 text-[19px] font-bold tracking-tight md:text-[21px]">Mood & genres</h2>
-        <div className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
-          {MOODS.map((m) => (
-            <Link
-              key={m.name}
-              href={`/search?q=${encodeURIComponent(m.q)}`}
-              className={`relative h-[86px] w-[132px] shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br ${m.g} p-3.5 transition-transform hover:scale-[1.04] active:scale-95`}
-            >
-              <span className="font-display text-[15px] font-bold text-white drop-shadow">{m.name}</span>
-              <span className="absolute -right-4 -bottom-5 h-16 w-16 rotate-[20deg] rounded-xl bg-white/15" />
-            </Link>
+      {quick.length > 0 && (
+        <section className="mb-9">
+          <SectionHeader title="Quick picks" subtitle={seed ? `Inspired by ${seed.title}` : "Start here"} />
+          <QuickPicks tracks={quick} label="Quick picks" />
+        </section>
+      )}
+
+      {recent.length > 0 && (
+        <section className="mb-9">
+          <SectionHeader title="Recently played" href="/library/history" />
+          <Shelf>
+            {recent.map((t, i) => (
+              <SongCard key={t.id} tracks={recent} index={i} label="Recently played" />
+            ))}
+          </Shelf>
+        </section>
+      )}
+
+      <RoomInvite />
+
+      {recommended.length > 0 && (
+        <section className="mb-9">
+          <SectionHeader title={home.data?.basedOnArtist ? `More from ${home.data.basedOnArtist}` : "Recommended for you"} />
+          <Shelf>
+            {recommended.map((t, i) => (
+              <SongCard key={t.id} tracks={recommended} index={i} label={home.data?.basedOnArtist ? `More from ${home.data.basedOnArtist}` : "Recommended"} />
+            ))}
+          </Shelf>
+        </section>
+      )}
+
+      {(home.data?.newReleases?.length ?? 0) > 0 && (
+        <section className="mb-9">
+          <SectionHeader title="New releases" href="/explore" />
+          <Shelf>
+            {home.data!.newReleases.map((a) => (
+              <AlbumCard key={a.id} album={a} />
+            ))}
+          </Shelf>
+        </section>
+      )}
+
+      {trending.length > 0 && (
+        <section className="mb-9">
+          <SectionHeader title="Trending now" />
+          <Shelf>
+            {trending.map((t, i) => (
+              <SongCard key={t.id} tracks={trending} index={i} label="Trending now" />
+            ))}
+          </Shelf>
+        </section>
+      )}
+
+      {(home.data?.topArtists?.length ?? 0) > 0 && (
+        <section className="mb-9">
+          <SectionHeader title="Artists to follow" />
+          <Shelf>
+            {home.data!.topArtists.map((a) => (
+              <ArtistCard key={a.id} artist={a} />
+            ))}
+          </Shelf>
+        </section>
+      )}
+
+      {liked.length > 0 && (
+        <section className="mb-9">
+          <SectionHeader title="From your Liked Songs" href="/library/liked" />
+          <Shelf>
+            {liked.slice(0, 20).map((t, i) => (
+              <SongCard key={t.id} tracks={liked} index={i} label="Liked Songs" />
+            ))}
+          </Shelf>
+        </section>
+      )}
+
+      {loading && (
+        <div className="space-y-9 px-4 desk:px-8">
+          {Array.from({ length: 2 }).map((_, k) => (
+            <div key={k}>
+              <Skeleton className="mb-3 h-6 w-44 rounded-md" />
+              <div className="flex gap-3.5 overflow-hidden">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="w-[148px] shrink-0 desk:w-[168px]">
+                    <Skeleton className="aspect-square w-full rounded-[12px]" />
+                    <Skeleton className="mt-2 h-3.5 w-4/5 rounded" />
+                    <Skeleton className="mt-1.5 h-3 w-3/5 rounded" />
+                  </div>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
-      </div>
-
-      {/* TRENDING */}
-      {trending.length > 0 && (
-        <div className="mb-8">
-          <Section
-            title="Trending now"
-            subtitle="The most-played tracks this week"
-            action={
-              <Link href={`/search?q=top hits`} className="text-muted text-[12px] font-semibold uppercase tracking-wider hover:accent-text">
-                Show all
-              </Link>
-            }
-          >
-            {trending.slice(0, 10).map((t, i) => (
-              <TrackCard key={t.id} tracks={trending} index={i} />
-            ))}
-          </Section>
-        </div>
-      )}
-
-      {/* NEW RELEASES */}
-      {(data?.newReleases?.length ?? 0) > 0 && (
-        <div className="mb-8">
-          <Section title="New releases" subtitle="Fresh albums & singles">
-            {data!.newReleases.map((a) => (
-              <div key={a.id} className="w-[168px] shrink-0 snap-start md:w-[186px]">
-                <AlbumCard album={a} />
-              </div>
-            ))}
-          </Section>
-        </div>
-      )}
-
-      {/* TOP ARTISTS */}
-      {(data?.topArtists?.length ?? 0) > 0 && (
-        <div className="mb-8">
-          <Section title="Top artists" subtitle="Commanding the charts right now">
-            {data!.topArtists.map((a) => (
-              <div key={a.id} className="w-[150px] shrink-0 snap-start md:w-[168px]">
-                <ArtistCard artist={a} />
-              </div>
-            ))}
-          </Section>
-        </div>
-      )}
-
-      {/* RECOMMENDED LIST */}
-      {recommended.length > 6 && (
-        <div className="mb-8">
-          <h2 className="font-display mb-3 px-1 text-[19px] font-bold tracking-tight md:text-[21px]">Recommended for you</h2>
-          <div className="grid grid-cols-1 gap-x-6 xl:grid-cols-2">
-            {recommended.slice(6, 14).map((_, i) => (
-              <TrackRow key={recommended[i + 6].id} tracks={recommended} index={i + 6} contextLabel="Recommended" />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* RECENTLY PLAYED */}
-      {recent.length > 0 && (
-        <div className="mb-8">
-          <Section title="Recently played" subtitle="Jump back in">
-            {recent.slice(0, 8).map((t, i) => (
-              <div key={t.id} className="w-[290px] shrink-0 snap-start">
-                <SongTile track={t} onPlay={() => playContext(recent, i, "Recently played")} />
-              </div>
-            ))}
-          </Section>
-        </div>
       )}
     </div>
   );
 }
 
-function TrackCard({ tracks, index }: { tracks: Track[]; index: number }) {
-  const t = tracks[index];
+function Header({ name }: { name: string }) {
+  const room = useRoomSummary();
+  // Time of day is the visitor's, not the server's.
+  const mounted = useMounted();
   return (
-    <button
-      onClick={() => playContext(tracks, index, "Trending now")}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        import("@/store/ui").then(({ useUi }) => useUi.getState().openMenu({ track: t, x: e.clientX, y: e.clientY }));
-      }}
-      className="hover-panel group w-[168px] shrink-0 snap-start rounded-2xl border border-transparent p-3 text-left md:w-[186px]"
-    >
-      <div className="relative mb-3 aspect-square overflow-hidden rounded-xl">
-        <img
-          src={upscaleArtwork(t.artwork, 400)}
-          alt={t.title}
-          loading="lazy"
-          draggable={false}
-          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.05]"
+    <div className="flex items-end justify-between gap-3 px-4 pt-3 pb-4 desk:px-8 desk:pt-8">
+      <div className="min-w-0">
+        <div className="mb-1 flex items-center gap-2 desk:hidden">
+          <LogoMark size={22} />
+          <span className="text-[13px] font-semibold text-fg-2">Sidify</span>
+        </div>
+        <h1 className="t-display truncate desk:t-headline">
+          <span className="desk:hidden">Home</span>
+          <span className="hidden desk:inline">
+            {mounted ? greeting() : "Welcome back"}
+            {name ? `, ${name.split(" ")[0]}` : ""}
+          </span>
+        </h1>
+      </div>
+      <div className="flex shrink-0 items-center gap-2 pb-1 desk:hidden">
+        <Link
+          href={room.code ? `/rooms/${room.code}` : "/rooms"}
+          aria-label="Listen Together"
+          className={room.inRoom ? "flex h-9 items-center gap-1 rounded-full bg-brand px-3 text-white" : "grid h-9 w-9 place-items-center rounded-full bg-fill"}
+        >
+          <PeopleGlyph size={18} />
+          {room.inRoom && <span className="text-[12px] font-bold">{room.count}</span>}
+        </Link>
+        <Link href="/settings" aria-label="Settings" className="grid h-9 w-9 place-items-center rounded-full bg-fill">
+          <Settings size={18} />
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function RoomInvite() {
+  const room = useRoomSummary();
+  if (room.inRoom) return null;
+  return (
+    <section className="mb-9 px-4 desk:px-8">
+      <Link
+        href="/rooms"
+        className="group relative flex items-center gap-4 overflow-hidden rounded-[18px] bg-raised p-5 ring-1 ring-edge transition-colors hover:bg-raised-2"
+      >
+        <div
+          className="pointer-events-none absolute -top-16 -right-10 h-48 w-48 rounded-full opacity-60 blur-3xl"
+          style={{ background: "radial-gradient(closest-side, #fa2d48, transparent)" }}
         />
-        <span className="absolute top-2 left-2 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-bold text-white backdrop-blur">
-          #{index + 1}
+        <span className="relative grid h-14 w-14 shrink-0 place-items-center rounded-full bg-brand text-white">
+          <PeopleGlyph size={28} />
         </span>
-      </div>
-      <div className="truncate text-[14px] font-semibold">{t.title}</div>
-      <div className="text-muted truncate text-[12.5px]">{t.artist}</div>
-    </button>
-  );
-}
-
-function GridSkeleton() {
-  return (
-    <div className="mb-8 grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="shimmer h-14 rounded-xl" />
-      ))}
-    </div>
+        <span className="relative min-w-0 flex-1">
+          <span className="block text-[17px] font-bold tracking-[-0.2px]">Listen together</span>
+          <span className="block text-[13.5px] leading-snug text-fg-2">Start a room, share the code, and everyone hears the same song at the same moment.</span>
+        </span>
+        <span className="relative hidden h-9 shrink-0 items-center rounded-full bg-primary px-4 text-[13px] font-semibold text-on-primary sm:inline-flex">
+          Start a room
+        </span>
+      </Link>
+    </section>
   );
 }
