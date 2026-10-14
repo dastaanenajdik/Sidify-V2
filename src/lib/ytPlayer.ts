@@ -26,11 +26,35 @@ export interface YtCallbacks {
 const YT_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
 let apiPromise: Promise<any> | null = null;
+let preconnected = false;
+
+/**
+ * Warm the network path to the player hosts ahead of the script itself.
+ * DNS + TLS to these hosts used to be paid inside the first tap; doing it
+ * at idle makes the first song start noticeably sooner. Idempotent.
+ */
+export function preconnectPlayerHosts() {
+  if (typeof document === "undefined" || preconnected) return;
+  preconnected = true;
+  for (const [rel, href, cross] of [
+    ["preconnect", "https://www.youtube.com", false],
+    ["preconnect", "https://www.google.com", false],
+    ["dns-prefetch", "https://i.ytimg.com", false],
+    ["dns-prefetch", "https://www.gstatic.com", false],
+  ] as const) {
+    const link = document.createElement("link");
+    link.rel = rel;
+    link.href = href;
+    if (cross) link.crossOrigin = "anonymous";
+    document.head.appendChild(link);
+  }
+}
 
 export function loadYouTubeApi(): Promise<any> {
   if (typeof window === "undefined") return Promise.reject(new Error("ssr"));
   if (window.YT?.Player) return Promise.resolve(window.YT);
   if (apiPromise) return apiPromise;
+  preconnectPlayerHosts();
   apiPromise = new Promise((resolve, reject) => {
     const prev = window.onYouTubeIframeAPIReady;
     window.onYouTubeIframeAPIReady = () => {
@@ -39,9 +63,10 @@ export function loadYouTubeApi(): Promise<any> {
     };
     const tag = document.createElement("script");
     tag.src = "https://www.youtube.com/iframe_api";
+    tag.async = true;
     tag.onerror = () => {
       apiPromise = null;
-      reject(new Error("Failed to load YouTube player API"));
+      reject(new Error("Failed to load Sidify player"));
     };
     document.head.appendChild(tag);
   });

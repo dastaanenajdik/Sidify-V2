@@ -74,6 +74,8 @@ interface SettingsState {
 
   profileName: string;
   profileEmail: string;
+  /** True once the first-visit "what's your name?" gate has been answered (or skipped with a name already saved). */
+  nameAsked: boolean;
 
   set: (p: Partial<SettingsState>) => void;
 }
@@ -117,8 +119,9 @@ export const useSettings = create<SettingsState>()(
       pinnedPlaylists: [],
       libraryLayout: "grid",
 
-      profileName: "Siddharth",
+      profileName: "",
       profileEmail: "",
+      nameAsked: false,
 
       set: (p) => set(p),
     }),

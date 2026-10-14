@@ -8,7 +8,7 @@
 
 export const ANDROID_APP = {
   /** Marketing name shown to users. */
-  name: "IfallMusic",
+  name: "Sidify",
   /** What we call it on this site. */
   siteName: "Sidify app",
   version: "2.7.0",
@@ -21,7 +21,7 @@ export const ANDROID_APP = {
   fileName: "app-release.apk",
   platform: "Android",
   price: "Free",
-  author: "Siddharth · ifallertzia",
+  author: "Sidify",
   /**
    * Tagged asset URL for the current release. The download button, the QR code and
    * the `/get` short link all read this, so bump `version` / `tag` / `apkUrl`
@@ -74,7 +74,7 @@ export const APP_FEATURES: AppFeature[] = [
   {
     icon: "download",
     title: "Offline downloads",
-    desc: "Songs save to Download/IfallMusic with a private offline copy, and the player shows live progress and percentage next to the Like button.",
+    desc: "Songs save to Download/Sidify with a private offline copy, and the player shows live progress and percentage next to the Like button.",
   },
   {
     icon: "mic-vocal",
@@ -185,7 +185,7 @@ export const APP_FAQ: Faq[] = [
   },
   {
     q: "Which Android versions work?",
-    a: "Modern Android phones and tablets. If the installer says “App not installed”, uninstall any older Sidify / Saxify build first and try again.",
+    a: "Modern Android phones and tablets. If the installer says “App not installed”, uninstall any older Sidify build first and try again.",
   },
   {
     q: "Do I still need this website after installing?",

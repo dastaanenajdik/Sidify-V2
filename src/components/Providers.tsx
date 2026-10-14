@@ -9,6 +9,7 @@ import { initEngine, restoreSession, togglePlay, next, prev, applySettings } fro
 import { useLiked, useDownloads, useBlocked } from "@/lib/library";
 import { resumeRoom, useRoom } from "@/lib/rooms/client";
 import { registerServiceWorker, armNextAutoReload } from "@/lib/pwa";
+import NameGate from "./NameGate";
 import NowPlaying from "./player/NowPlaying";
 import BackGuard from "./BackGuard";
 import TrackMenu from "./TrackMenu";
@@ -166,6 +167,7 @@ export default function Providers({ children }: { children: ReactNode }) {
       <PlatformBootstrap />
       <DataSync />
       {children}
+      <NameGate />
       <NowPlaying />
       <BackGuard />
       <TrackMenu />
