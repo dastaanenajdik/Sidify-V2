@@ -17,7 +17,11 @@
   --raised: #1c1c1e;
   --raised-2: #2c2c2e;
   --glass: rgba(24, 24, 27, 0.74);
-  --bar: rgba(32, 32, 40, 0.46);
+  --bar: rgba(28, 28, 34, 0.34);
+  --bar-strong: rgba(28, 28, 34, 0.52);
+  --liquid-highlight: rgba(255, 255, 255, 0.22);
+  --liquid-border: rgba(255, 255, 255, 0.14);
+  --liquid-inner: rgba(255, 255, 255, 0.08);
   --edge: rgba(255, 255, 255, 0.1);
   --divider: #2c2c2e;
   --hairline: rgba(255, 255, 255, 0.08);
@@ -57,7 +61,11 @@
   --raised: #f2f2f7;
   --raised-2: #e5e5ea;
   --glass: rgba(246, 246, 248, 0.8);
-  --bar: rgba(250, 250, 252, 0.82);
+  --bar: rgba(255, 255, 255, 0.56);
+  --bar-strong: rgba(255, 255, 255, 0.72);
+  --liquid-highlight: rgba(255, 255, 255, 0.58);
+  --liquid-border: rgba(255, 255, 255, 0.62);
+  --liquid-inner: rgba(0, 0, 0, 0.06);
   --edge: rgba(0, 0, 0, 0.09);
   --divider: #e5e5ea;
   --hairline: rgba(0, 0, 0, 0.08);
@@ -259,24 +267,165 @@ img {
   backdrop-filter: blur(30px) saturate(1.7);
 }
 
+/* ── Liquid Glass — iOS 26 inspired ──────────────────────────────────────
+   Translucent, refracted lens: high blur + saturate, multi-layer
+   specular highlights, hairline stroke, deep floating shadow.
+   Meant for the two floating phone pills: mini-player + tab bar.
+   Inspired by Apple's 2025 Liquid Glass — blur(50) + specular lens.
+   ──────────────────────────────────────────────────────────────────────── */
+
 @utility bar-glass {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04) 42%, rgba(255, 255, 255, 0.02) 68%, rgba(255, 255, 255, 0.08)),
+    radial-gradient(120% 180% at 14% 0%, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.10) 28%, rgba(255, 255, 255, 0.03) 52%, transparent 70%),
+    radial-gradient(118% 145% at 86% 100%, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.02) 32%, transparent 58%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.05) 44%, rgba(255, 255, 255, 0.015) 68%, rgba(255, 255, 255, 0.07) 100%),
     var(--bar);
-  -webkit-backdrop-filter: blur(44px) saturate(2.1) brightness(1.12);
-  backdrop-filter: blur(44px) saturate(2.1) brightness(1.12);
+  -webkit-backdrop-filter: blur(52px) saturate(2.25) brightness(1.16) contrast(1.04);
+  backdrop-filter: blur(52px) saturate(2.25) brightness(1.16) contrast(1.04);
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
-    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.05),
-    inset 0 0 0 0.5px var(--edge),
-    0 18px 48px -12px var(--shadow),
-    0 4px 16px -6px var(--shadow);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.26),
+    inset 0 0.5px 0 0 rgba(255, 255, 255, 0.32),
+    inset 0 -0.75px 0 0 rgba(255, 255, 255, 0.05),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.09),
+    0 16px 48px -14px var(--shadow),
+    0 8px 20px -10px var(--shadow),
+    0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+/* specular lens stroke — the liquid edge highlight */
+.bar-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 0.5px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.38) 0%, rgba(255, 255, 255, 0.14) 22%, rgba(255, 255, 255, 0.04) 40%, transparent 62%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.95;
+}
+
+/* inner top glow — soft refracted sheen */
+.bar-glass::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background:
+    radial-gradient(140% 92% at 50% 0%, rgba(255, 255, 255, 0.20) 0%, rgba(255, 255, 255, 0.06) 38%, transparent 60%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, transparent 42%);
+  opacity: 0.60;
+  pointer-events: none;
+}
+
+/* Light theme: brighter stroke, softer blur, lifted shadow */
+[data-theme="light"] .bar-glass {
+  background:
+    radial-gradient(130% 170% at 16% 0%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.58) 28%, rgba(255, 255, 255, 0.18) 54%, transparent 74%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(255, 255, 255, 0.44) 48%, rgba(255, 255, 255, 0.26) 100%),
+    var(--bar);
+  -webkit-backdrop-filter: blur(44px) saturate(1.85) brightness(1.08);
+  backdrop-filter: blur(44px) saturate(1.85) brightness(1.08);
+  border-color: rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.94),
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.06),
+    inset 0 -0.5px 0 0 rgba(0, 0, 0, 0.04),
+    0 14px 36px -12px rgba(0, 0, 0, 0.16),
+    0 4px 12px -8px rgba(0, 0, 0, 0.10);
+}
+[data-theme="light"] .bar-glass::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.36) 28%, transparent 58%);
+  opacity: 1;
+}
+[data-theme="light"] .bar-glass::after {
+  background: radial-gradient(140% 90% at 50% 0%, rgba(255, 255, 255, 0.72) 0%, transparent 58%);
+  opacity: 0.9;
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .bar-glass {
     background: var(--raised);
   }
+}
+
+/* ── Liquid moving sheen (fluid shimmer that sweeps across the lens) ──── */
+@utility liquid-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+.liquid-sheen::after {
+  content: "";
+  position: absolute;
+  inset: -40% -20%;
+  background: linear-gradient(100deg, transparent 36%, rgba(255, 255, 255, 0.18) 50%, transparent 64%);
+  transform: translateX(-55%) skewX(-14deg);
+  animation: liquid-sweep 4.2s ease-in-out infinite;
+  mix-blend-mode: overlay;
+  opacity: 0.85;
+}
+[data-theme="light"] .liquid-sheen::after {
+  background: linear-gradient(100deg, transparent 36%, rgba(255, 255, 255, 0.92) 50%, transparent 64%);
+  opacity: 0.55;
+  mix-blend-mode: soft-light;
+}
+@keyframes liquid-sweep {
+  0% { transform: translateX(-58%) skewX(-14deg); opacity: 0; }
+  18% { opacity: 1; }
+  52% { opacity: 0.7; }
+  100% { transform: translateX(58%) skewX(-14deg); opacity: 0; }
+}
+
+/* subtle lens refraction distortion on the very edge (chromatic hint) */
+@utility liquid-edge {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(120, 180, 255, 0.035) 0%, transparent 18%, transparent 82%, rgba(255, 140, 120, 0.035) 100%);
+  opacity: 0.9;
+}
+
+/* pill that marks the selected tab — also liquid */
+@utility pill-glass {
+  background: rgba(255, 255, 255, 0.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  border: 0.5px solid rgba(255, 255, 255, 0.10);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    0 2px 10px -4px rgba(0, 0, 0, 0.28);
+}
+[data-theme="light"] .pill-glass {
+  background: rgba(0, 0, 0, 0.07);
+  border-color: rgba(0, 0, 0, 0.06);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.72),
+    0 2px 8px -4px rgba(0, 0, 0, 0.12);
+}
+
+/* gentle float for the two pills so they feel suspended in liquid */
+@keyframes liquid-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-0.5px); }
+}
+@utility liquid-float {
+  animation: liquid-float 5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .liquid-float { animation: none; }
+  .liquid-sheen::after { animation: none; opacity: 0; }
 }
 
 @utility menu-glass {
