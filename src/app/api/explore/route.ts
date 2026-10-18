@@ -16,7 +16,11 @@ let running: Promise<Record<string, string>> | null = null;
 
 async function build(): Promise<Record<string, string>> {
   const covers: Record<string, string> = {};
-  const queue = [...MOODS];
+  // Tiles with bundled artwork don't need a catalogue lookup.
+  const queue = MOODS.filter((m) => {
+    if (m.art) covers[m.slug] = m.art;
+    return !m.art;
+  });
   const worker = async () => {
     for (let m = queue.shift(); m; m = queue.shift()) {
       try {

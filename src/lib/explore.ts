@@ -7,6 +7,8 @@ export interface Mood {
   /** What we ask the catalogue for. */
   q: string;
   kind: "mood" | "genre";
+  /** Optional static artwork for the tile (a /public path). Skips the cover lookup. */
+  art?: string;
 }
 
 export const MOODS: Mood[] = [
@@ -29,6 +31,8 @@ export const MOODS: Mood[] = [
   { slug: "dance", title: "Dance & Electronic", color: "#5aa0c8", q: "edm dance hits", kind: "genre" },
   { slug: "k-pop", title: "K-Pop", color: "#b88ad0", q: "kpop hits", kind: "genre" },
   { slug: "lofi", title: "Lo-Fi", color: "#8a9a7a", q: "lofi beats", kind: "genre" },
+  { slug: "phonk-funk", title: "Phonk & Funk", color: "#a85a9a", q: "phonk funk", kind: "genre", art: "/covers/phonk-funk.jpg" },
+  { slug: "bgm", title: "BGM", color: "#6a9ab0", q: "background music", kind: "genre" },
   { slug: "jazz", title: "Jazz", color: "#c0a060", q: "jazz classics", kind: "genre" },
   { slug: "classical", title: "Classical", color: "#a09080", q: "classical music", kind: "genre" },
   { slug: "90s", title: "90s Throwback", color: "#c08aa0", q: "90s hits", kind: "genre" },
