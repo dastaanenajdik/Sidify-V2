@@ -23,7 +23,7 @@ const TABS = [
   { href: "/rooms", label: "Together", icon: PeopleGlyph, match: (p: string) => p.startsWith("/rooms") },
 ];
 
-/** Phones: the floating glass tab bar. Selection is carried by a soft white pill. */
+/** Phones: the floating glass tab bar — liquid iOS 26 lens */
 export function MobileNav() {
   const pathname = usePathname() || "/";
   const room = useRoomSummary();
@@ -32,7 +32,14 @@ export function MobileNav() {
       aria-label="Main"
       className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-[calc(10px+env(safe-area-inset-bottom,0px))] desk:hidden"
     >
-      <div className="bar-glass flex h-[62px] w-full max-w-[440px] items-center justify-between rounded-full px-1.5">
+      <div className="bar-glass liquid-float flex h-[64px] w-full max-w-[440px] items-center justify-between rounded-full px-1.5">
+        {/* liquid lens layers */}
+        <span aria-hidden className="liquid-edge" />
+        <span aria-hidden className="liquid-sheen" />
+        {/* hairline specular — ultra-thin top highlight like iOS */}
+        <span aria-hidden className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/45 to-transparent opacity-90" />
+        <span aria-hidden className="pointer-events-none absolute inset-x-6 top-px h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+
         {TABS.map((t) => {
           const on = t.match(pathname);
           const href = t.href === "/rooms" && room.code ? `/rooms/${room.code}` : t.href;
@@ -50,7 +57,7 @@ export function MobileNav() {
               {on && (
                 <motion.span
                   layoutId="tab-pill"
-                  className="absolute inset-0 rounded-full bg-fill-3"
+                  className="pill-glass absolute inset-0 rounded-full"
                   transition={{ type: "spring", damping: 30, stiffness: 420 }}
                 />
               )}
@@ -71,7 +78,7 @@ export function MobileNav() {
   );
 }
 
-/** Phones: the floating pill mini player, just above the tab bar. */
+/** Phones: the floating pill mini player, just above the tab bar — liquid iOS 26 lens */
 export function MiniPlayer() {
   const track = usePlayer((s) => currentTrack(s));
   const isPlaying = usePlayer((s) => s.isPlaying);
@@ -84,21 +91,36 @@ export function MiniPlayer() {
   const pct = durationMs ? Math.min(100, (positionMs / durationMs) * 100) : 0;
 
   return (
-    <div className="fixed inset-x-0 z-40 flex justify-center px-3 bottom-[calc(80px+env(safe-area-inset-bottom,0px))] desk:hidden">
+    <div className="fixed inset-x-0 z-40 flex justify-center px-3 bottom-[calc(82px+env(safe-area-inset-bottom,0px))] desk:hidden">
       <motion.div
         initial={{ y: 16, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="bar-glass relative flex h-[58px] w-full max-w-[440px] items-center gap-3 overflow-hidden rounded-[18px] pr-1.5 pl-2"
+        className="bar-glass liquid-float relative flex h-[58px] w-full max-w-[440px] items-center gap-3 overflow-hidden rounded-[18px] pr-1.5 pl-2"
       >
+        {/* liquid lens layers inside the pill */}
+        <span aria-hidden className="liquid-edge rounded-[inherit]" />
+        <span aria-hidden className="liquid-sheen rounded-[inherit]" />
+        {/* extra top specular for the pill — makes it feel like a fluid droplet */}
+        <span aria-hidden className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+        {/* subtle inner lens glow */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 rounded-[inherit] opacity-60"
+          style={{
+            background:
+              "radial-gradient(120% 80% at 30% 0%, rgba(255,255,255,0.10) 0%, transparent 52%), radial-gradient(90% 120% at 90% 100%, rgba(255,255,255,0.05) 0%, transparent 46%)",
+          }}
+        />
+
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          className="relative flex min-w-0 flex-1 items-center gap-3 text-left"
           onClick={() => usePlayer.getState().set({ fullPlayerOpen: true })}
           aria-label="Open Now Playing"
         >
-          <Artwork src={track.artwork} size={42} rounded="rounded-[9px]" className="h-[42px] w-[42px] shadow-md" />
+          <Artwork src={track.artwork} size={42} rounded="rounded-[10px]" className="h-[42px] w-[42px] shadow-md ring-1 ring-white/10" />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14.5px] leading-tight font-semibold">{track.title}</span>
+            <span className="block truncate text-[14.5px] leading-tight font-semibold tracking-[-0.1px]">{track.title}</span>
             <span className="flex items-center gap-1.5 truncate text-[12.5px] leading-tight text-fg-2">
               {room.inRoom && (
                 <span className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-playing">
@@ -113,7 +135,7 @@ export function MiniPlayer() {
           type="button"
           aria-label={isPlaying ? "Pause" : "Play"}
           onClick={() => void togglePlay()}
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full active:scale-90"
+          className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/[0.08] backdrop-blur-md ring-1 ring-white/10 active:scale-90 hover:bg-white/[0.12] transition-colors"
         >
           {isPlaying ? <PauseGlyph size={24} /> : <PlayGlyph size={24} />}
         </button>
@@ -121,12 +143,18 @@ export function MiniPlayer() {
           type="button"
           aria-label="Next"
           onClick={() => void next(true)}
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full active:scale-90"
+          className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full active:scale-90 hover:bg-white/[0.06] transition-colors"
         >
           <ForwardGlyph size={22} />
         </button>
-        <div className="absolute right-4 bottom-0 left-4 h-[2px] overflow-hidden rounded-full bg-fill-2">
-          <div className={cx("h-full bg-fg/70", isLoading && "animate-pulse")} style={{ width: `${pct}%` }} />
+        {/* thin liquid progress — inside the glass, bottom edge */}
+        <div className="pointer-events-none absolute right-4 bottom-0 left-4 h-[2px] overflow-hidden rounded-full bg-white/[0.10]">
+          <div
+            className={cx("h-full rounded-full bg-white/80 shadow-[0_0_8px_rgba(255,255,255,0.45)]", isLoading && "animate-pulse")}
+            style={{ width: `${pct}%` }}
+          />
+          {/* tiny glow head on the progress */}
+          <div className="absolute top-0 h-full w-3 rounded-full bg-white blur-[2px] opacity-70" style={{ left: `calc(${pct}% - 6px)` }} />
         </div>
       </motion.div>
     </div>
