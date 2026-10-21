@@ -20,6 +20,7 @@ Drizzle ORM + PostgreSQL · `youtubei.js` (InnerTube extraction) · PWA service 
 | **Up next & AutoPlay** | Queue in sections — *Now playing*, *Next in queue*, *Next from …* and *AutoPlay* — with drag to reorder. AutoPlay lines up similar songs (YouTube Music's own radio) *before* the queue runs out, so what plays next is always visible. "Start radio" from any song. |
 | **Listen Together** | Rooms with a six-character code (no I/L/O), invite link and QR. Up to 5 people (host can raise it to 10), host-only control, remove members, host hand-over, shared queue, room AutoPlay, activity log. Devices share one server clock (round-trip-corrected) and correct drift, so playback stays aligned. |
 | **Recommendations** | Home: Top picks (your mix, song radio from your last play, top-artist radio), Quick picks, Recently played, New releases, Trending, From your likes. Explore: new releases, charts and mood / genre tiles. |
+| **Movies & Series** | `/movies` and `/series`: featured backdrop hero, trending / new / top-rated / popular shelves, genre · year · language · sort filters, search, poster cards with a local watchlist. Detail pages carry official trailers, seasons and episodes, "more like this" and — only when authorized — an in-site player. Ships with a clearly marked demo catalogue until a licensed provider is configured. |
 | **Replay** | Minutes listened, top songs, top artists, streak and listening hours — counted on the device, shown as wallet-style cards. |
 | **Library** | Likes, playlists (pin to the top, grid / list), history and downloads are server-backed **and** locally mirrored, so nothing is lost when the API or DB is unavailable. |
 | **PWA** | Installable, app-shell caching and media-session (lock-screen) controls. |
@@ -109,6 +110,81 @@ Environment variables:
 | `DATABASE_URL` | runtime, optional | Likes, playlists, downloads, listening history, Listen Together rooms, `/api/health` |
 | `LRCLIB_BASE` | optional | Self-hosted lyrics mirror (defaults to `https://lrclib.net`) |
 | `LYRICS_OVH_BASE` | optional | Secondary lyrics provider (defaults to `https://api.lyrics.ovh`) |
+| `MEDIA_PROVIDER` | optional | `auto` (default) · `demo` · `tmdb` — which movies/series adapter answers |
+| `TMDB_READ_ACCESS_TOKEN` / `TMDB_API_KEY` | optional | Official TMDb metadata (either one). Without it the demo catalogue is used |
+| `TMDB_LANGUAGE`, `TMDB_REGION` | optional | Metadata language (default `en-US`) and availability region (default `US`) |
+| `MEDIA_PLAYBACK_MANIFEST` | optional | JSON map of **authorized** HLS/MP4 URLs, `{"movie/<slug>":[{"url":"https://…","type":"hls"}]}` |
+
+---
+
+## Movies & Series
+
+`/movies` and `/series` reuse the same shell, theme tokens, shelves, chips and type
+scale as the music side. Detail routes are `/movies/[slug]` and `/series/[slug]`, with
+`generateMetadata` for SEO and server-side provider fetches so pages arrive with real
+HTML.
+
+### Provider model
+
+Everything goes through one interface (`src/lib/media/provider.ts`):
+
+```ts
+getTrendingMovies()  getTrendingSeries()  getPopularMovies()  getPopularSeries()
+getNewMovieReleases()  getNewSeriesReleases()  getTopRatedMovies()  getTopRatedSeries()
+browse(kind, query)  searchTitles(query, kind, limit)  getGenres(kind)  getFacets(kind)
+getMovieDetails(slug)  getSeriesDetails(slug)  getSeriesSeasons(slug, season?)
+getRelated(kind, slug, limit)  getPlaybackSources?(kind, slug)
+```
+
+Two adapters implement it:
+
+| Adapter | When | Notes |
+|---|---|---|
+| `demoProvider.ts` + `demoCatalog.ts` | default, no credentials | Fictional titles, original synopses, generated SVG artwork. Every card carries a **Demo** badge and every response is marked `demo: true`. |
+| `tmdbProvider.ts` | `TMDB_READ_ACCESS_TOKEN` or `TMDB_API_KEY` set | Official TMDb v3 API — metadata, artwork, YouTube trailer keys and official JustWatch availability links. Terms require the attribution line rendered on detail pages. |
+
+Routes:
+
+```text
+GET /api/media/browse?type=movie|series&q=&genre=&year=&language=&sort=&page=
+GET /api/media/search?q=&type=movie|series|all&limit=
+GET /api/media/title/movie|series/<slug>
+GET /api/media/seasons/<slug>?season=2
+```
+
+`src/lib/media/query.ts` holds the framework-free filtering, sorting, pagination,
+facet and "more like this" maths (covered by `tests/media.test.cjs`), so a new adapter
+only has to map its catalogue onto the models in `src/lib/media/types.ts`.
+
+### Playback policy
+
+There is **no** scraper, torrent, DRM bypass or third-party streaming site anywhere in
+this feature. A title becomes playable only when:
+
+1. a licensed provider adapter returns `getPlaybackSources(...)` — TMDb's does not,
+   because TMDb licenses metadata, not streams; or
+2. the operator lists an HTTPS HLS/MP4 URL in `MEDIA_PLAYBACK_MANIFEST`.
+
+Otherwise the detail page states that no playback source is configured and shows the
+official trailer plus the rights holder's availability links. Non-HTTPS manifest entries
+are discarded (`src/lib/media/playback.ts`). HLS plays natively in Safari/iOS; other
+browsers need an MP4 rendition from the same source.
+
+Watchlist entries persist in `localStorage` (`src/store/watchlist.ts`), rehydrated like
+the other Sidify stores, so no account is required.
+
+### Connecting a real catalogue
+
+```bash
+# .env.local
+TMDB_READ_ACCESS_TOKEN="…"        # or TMDB_API_KEY
+MEDIA_PROVIDER=auto               # or tmdb to require it
+```
+
+Restart `npm run dev` (or redeploy) — `/movies` and `/series` switch adapters, the demo
+notice disappears and detail pages get real posters, trailers and availability links.
+To add another licensed provider, implement the same interface and select it in
+`getMediaProvider()` (`src/lib/media/service.ts`).
 
 ---
 

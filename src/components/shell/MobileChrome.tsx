@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
+import { Clapperboard } from "lucide-react";
 import { usePlayer, currentTrack } from "@/store/player";
 import { next, togglePlay } from "@/lib/audioEngine";
 import { useRoomSummary } from "@/lib/rooms/client";
@@ -13,6 +14,12 @@ import { Artwork } from "../ui";
 const TABS = [
   { href: "/", label: "Home", icon: HomeGlyph, match: (p: string) => p === "/" },
   { href: "/explore", label: "Explore", icon: ExploreGlyph, match: (p: string) => p.startsWith("/explore") },
+  {
+    href: "/movies",
+    label: "Movies",
+    icon: Clapperboard,
+    match: (p: string) => p.startsWith("/movies") || p.startsWith("/series"),
+  },
   { href: "/search", label: "Search", icon: SearchGlyph, match: (p: string) => p.startsWith("/search") },
   {
     href: "/library",

@@ -2,6 +2,14 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["youtubei.js"],
+  // Movies & series artwork. Cards draw generated SVG art when a title has no poster,
+  // but the licensed provider's CDN has to be allow-listed for next/image consumers.
+  images: {
+    remotePatterns: [
+      { protocol: "https", hostname: "image.tmdb.org" },
+      { protocol: "https", hostname: "i.ytimg.com" },
+    ],
+  },
   // Expose the Vercel commit SHA to the client so Settings → About can show which build a
   // device is actually running (useful when a cached PWA shell keeps serving an old release).
   env: {

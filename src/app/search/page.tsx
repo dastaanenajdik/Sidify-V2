@@ -11,6 +11,9 @@ import { playContext } from "@/lib/audioEngine";
 import { MOODS } from "@/lib/explore";
 import TrackRow from "@/components/TrackRow";
 import { AlbumCard, ArtistCard, MoodCard } from "@/components/cards";
+import { PosterCard, posterShelfClass } from "@/components/media/PosterCard";
+import { useMediaSearch } from "@/lib/media/hooks";
+import type { MediaTitle } from "@/lib/media/types";
 import { Artwork, Chips, EmptyState, SectionHeader, Shelf, Skeleton } from "@/components/ui";
 import { SearchGlyph } from "@/components/icons";
 import type { Album, Artist, Track } from "@/lib/types";
@@ -114,6 +117,9 @@ function SearchInner() {
     staleTime: 60_000,
   });
 
+  // Movies & series live in a separate catalogue; the "all" tab shows a shelf of them.
+  const media = useMediaSearch(term, tab === "all");
+  const mediaItems = media.data?.items ?? [];
   const songs = (data?.songs ?? []).filter((t) => !ef || !t.explicit);
   const albums = data?.albums ?? [];
   const artists = data?.artists ?? [];
@@ -194,10 +200,14 @@ function SearchInner() {
             <ResultsSkeleton />
           ) : isError ? (
             <EmptyState title="Search isn't responding" desc="Check your connection and try again." />
-          ) : songs.length + albums.length + artists.length === 0 ? (
-            <EmptyState icon={<SearchGlyph size={26} />} title={`No results for “${term}”`} desc="Check the spelling, or try fewer words." />
+          ) : songs.length + albums.length + artists.length === 0 && mediaItems.length === 0 ? (
+            media.isLoading ? (
+              <ResultsSkeleton />
+            ) : (
+              <EmptyState icon={<SearchGlyph size={26} />} title={`No results for “${term}”`} desc="Check the spelling, or try fewer words." />
+            )
           ) : tab === "all" ? (
-            <AllResults songs={songs} albums={albums} artists={artists} label={label} />
+            <AllResults songs={songs} albums={albums} artists={artists} label={label} media={mediaItems} term={term} />
           ) : tab === "songs" ? (
             <div className="px-2 desk:px-6">
               {songs.map((t, i) => (
@@ -237,7 +247,21 @@ function SearchInner() {
   );
 }
 
-function AllResults({ songs, albums, artists, label }: { songs: Track[]; albums: Album[]; artists: Artist[]; label: string }) {
+function AllResults({
+  songs,
+  albums,
+  artists,
+  label,
+  media,
+  term,
+}: {
+  songs: Track[];
+  albums: Album[];
+  artists: Artist[];
+  label: string;
+  media: MediaTitle[];
+  term: string;
+}) {
   const top = artists[0] && (!songs[0] || songs[0].artist.toLowerCase() === artists[0].name.toLowerCase()) ? { kind: "artist" as const, artist: artists[0] } : songs[0] ? { kind: "song" as const, track: songs[0] } : null;
   return (
     <div className="space-y-9">
@@ -304,6 +328,17 @@ function AllResults({ songs, albums, artists, label }: { songs: Track[]; albums:
           <Shelf>
             {albums.slice(0, 14).map((a) => (
               <AlbumCard key={a.id} album={a} />
+            ))}
+          </Shelf>
+        </section>
+      )}
+
+      {media.length > 0 && (
+        <section>
+          <SectionHeader title="Movies & series" href={`/movies?q=${encodeURIComponent(term)}`} />
+          <Shelf>
+            {media.slice(0, 12).map((item) => (
+              <PosterCard key={`${item.kind}-${item.id}`} title={item} className={posterShelfClass} />
             ))}
           </Shelf>
         </section>
