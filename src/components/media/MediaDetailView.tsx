@@ -210,6 +210,11 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
               : "the rights holder's own availability pages are"}{" "}
             the way to watch.
           </p>
+          {!title.trailer && (
+            <p className="mt-2 text-[12.5px] leading-relaxed text-fg-3">
+              Official trailers appear here when the catalogue provider supplies one.
+            </p>
+          )}
           {links.length > 0 && (
             <ul className="mt-3 flex flex-wrap gap-2">
               {links.map((link) => (

@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
+import { Clapperboard } from "lucide-react";
 import { usePlayer, currentTrack } from "@/store/player";
 import { next, togglePlay } from "@/lib/audioEngine";
 import { useRoomSummary } from "@/lib/rooms/client";
-import { Clapperboard } from "lucide-react";
 import { cx } from "@/lib/format";
 import { ExploreGlyph, ForwardGlyph, HomeGlyph, LibraryGlyph, PauseGlyph, PeopleGlyph, PlayGlyph, SearchGlyph } from "../icons";
 import { Artwork } from "../ui";
