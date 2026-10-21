@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
 import { usePlayer } from "@/store/player";
+import { useWatchlist } from "@/store/watchlist";
 import { initEngine, restoreSession, togglePlay, next, prev, applySettings } from "@/lib/audioEngine";
 import { useLiked, useDownloads, useBlocked } from "@/lib/library";
 import { resumeRoom, useRoom } from "@/lib/rooms/client";
@@ -26,6 +27,7 @@ function StoreHydration() {
     void useSettings.persist.rehydrate();
     void usePlayer.persist.rehydrate();
     void useRoom.persist.rehydrate();
+    void useWatchlist.persist.rehydrate();
   }, []);
   return null;
 }
