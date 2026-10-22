@@ -7,11 +7,14 @@ export const runtime = "nodejs";
 const MAX_REQUEST_BODY_BYTES = 4_096;
 
 /**
- * POST /api/media/resolve
+ * POST /api/media/resolve   (JSON: { url, fileName?, label?, refresh? })
  *
  * Resolves a validated mirror short-link across allowlisted hops into structured
- * stream / download / fallback links. Never proxies arbitrary hosts, never forwards
- * caller cookies or credentials, and never claims `.mkv` or `.zip` files play in HTML5 video.
+ * stream / download / fallback links. Only small HTML pages are fetched here — media
+ * files are never proxied or transcoded; the browser loads the resolved URL directly.
+ * Never proxies arbitrary hosts, never forwards caller cookies or credentials, and never
+ * claims `.mkv` or `.zip` files play in HTML5 video. `refresh: true` asks for one fresh
+ * resolution when cached direct links stopped working (rate-limited by cache age).
  */
 export async function POST(req: NextRequest) {
   const rawLength = Number(req.headers.get("content-length") || 0);
@@ -22,7 +25,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let body: { url?: unknown; fileName?: unknown; label?: unknown };
+  let body: { url?: unknown; fileName?: unknown; label?: unknown; refresh?: unknown };
   try {
     const text = await req.text();
     if (text.length > MAX_REQUEST_BODY_BYTES) {
@@ -31,7 +34,7 @@ export async function POST(req: NextRequest) {
         { status: 413, headers: { "cache-control": "no-store" } }
       );
     }
-    body = JSON.parse(text) as { url?: unknown; fileName?: unknown; label?: unknown };
+    body = JSON.parse(text) as { url?: unknown; fileName?: unknown; label?: unknown; refresh?: unknown };
   } catch {
     return NextResponse.json(
       { error: "Invalid JSON request body.", code: "malformed_response" },
@@ -42,6 +45,7 @@ export async function POST(req: NextRequest) {
   const shortUrl = typeof body.url === "string" ? body.url.trim().slice(0, 2048) : "";
   const fileName = typeof body.fileName === "string" ? body.fileName.trim().slice(0, 512) : undefined;
   const label = typeof body.label === "string" ? body.label.trim().slice(0, 256) : undefined;
+  const refresh = body.refresh === true;
 
   if (!shortUrl) {
     return NextResponse.json(
@@ -50,7 +54,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const result = await resolveHubMirror({ shortUrl, fileName, label });
+  const result = await resolveHubMirror({ shortUrl, fileName, label }, { refresh });
 
   const httpStatus =
     result.status === "resolved" || result.status === "partial"

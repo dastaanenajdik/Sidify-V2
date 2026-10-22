@@ -3,11 +3,11 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, Clock, Info, SearchX, WifiOff, X } from "lucide-react";
-import { MediaApiError } from "@/lib/media/client";
+import { AlertTriangle, Info, SearchX, X } from "lucide-react";
 import { useMediaBrowse } from "@/lib/media/hooks";
 import { SORTS } from "@/lib/media/query";
 import type { MediaKind, MediaSort, MediaTitle } from "@/lib/media/types";
+import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { Button, EmptyState, PageTitle, SectionHeader, Shelf, Skeleton } from "@/components/ui";
 import { cx } from "@/lib/format";
 import { MediaFilterBar, type MediaFilterValue } from "./MediaFilterBar";
@@ -28,34 +28,12 @@ export default function MediaBrowsePage({ kind }: { kind: MediaKind }) {
   );
 }
 
-function describeBrowseError(err: unknown): { icon: React.ReactNode; title: string; desc: string } {
-  const apiErr = err instanceof MediaApiError ? err : null;
-  const code = apiErr?.code;
-  const status = apiErr?.status;
-
-  if (code === "timeout" || status === 504) {
-    return {
-      icon: <Clock size={26} />,
-      title: "Catalogue request timed out",
-      desc: "The upstream movie source took too long to answer. Wait a moment and retry.",
-    };
-  }
-  if (code === "captcha" || code === "access_control" || status === 403) {
-    return {
-      icon: <AlertTriangle size={26} />,
-      title: "Upstream access restricted",
-      desc:
-        apiErr?.message ||
-        "The upstream source returned an access-control or automated challenge page that Sidify will not bypass.",
-    };
-  }
-  return {
-    icon: <WifiOff size={26} />,
-    title: "Provider unavailable right now",
-    desc:
-      apiErr?.message ||
-      "The upstream catalogue host could not be reached from this server network. Check outbound connectivity or retry shortly.",
-  };
+/**
+ * Upstream reasons (timeouts, access challenges, DNS errors, HTTP codes) are not shown in
+ * the page — only a plain "Something went wrong" with a retry.
+ */
+function describeBrowseError(): { icon: React.ReactNode; title: string } {
+  return { icon: <AlertTriangle size={26} />, title: SOMETHING_WENT_WRONG };
 }
 
 function Browse({ kind }: { kind: MediaKind }) {
@@ -131,7 +109,7 @@ function Browse({ kind }: { kind: MediaKind }) {
   const demo = first?.provider.demo;
   const loading = query.isPending;
   const errored = query.isError;
-  const errorInfo = errored ? describeBrowseError(query.error) : null;
+  const errorInfo = errored ? describeBrowseError() : null;
 
   return (
     <div className="fade-up">
@@ -192,7 +170,6 @@ function Browse({ kind }: { kind: MediaKind }) {
         <EmptyState
           icon={errorInfo.icon}
           title={errorInfo.title}
-          desc={errorInfo.desc}
           action={
             <Button variant="secondary" onClick={() => void query.refetch()} disabled={query.isFetching}>
               {query.isFetching ? "Retrying…" : "Try again"}

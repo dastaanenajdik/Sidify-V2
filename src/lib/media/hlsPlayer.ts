@@ -88,11 +88,27 @@ function resetVideoElement(video: HTMLVideoElement): void {
   }
 }
 
+/**
+ * Category of a fatal HLS failure, so callers can tell a codec problem from a transport one:
+ * `media` = segments arrived but couldn't be decoded (same stream elsewhere won't decode
+ * either), `network` = manifest/segment requests failed (CORS, 403/404, expired token),
+ * `unsupported` = this browser has neither native HLS nor MSE.
+ */
+export type HlsFatalKind = "network" | "media" | "unsupported" | "other";
+
+export interface HlsFatalInfo {
+  kind: HlsFatalKind;
+  /** hls.js `details`, e.g. `manifestLoadError`, `bufferAppendError`. */
+  details?: string;
+  /** HTTP status of the failed manifest/segment request, when hls.js reports one. */
+  httpStatus?: number;
+}
+
 export interface AttachPlaybackOptions {
   video: HTMLVideoElement;
   source: PlaybackSource;
   onMode?: (mode: HlsPlaybackMode) => void;
-  onFatalError: (reason: string) => void;
+  onFatalError: (reason: string, info?: HlsFatalInfo) => void;
   loadHlsModule?: HlsModuleLoader;
 }
 
@@ -146,7 +162,8 @@ export async function attachPlaybackSource(
     resetVideoElement(video);
     onMode?.("unsupported");
     onFatalError(
-      "This browser supports neither native Apple HLS nor MediaSource Extensions (hls.js). Copy or open the stream URL in an external player."
+      "This browser supports neither native Apple HLS nor MediaSource Extensions (hls.js). Copy or open the stream URL in an external player.",
+      { kind: "unsupported" }
     );
     return {
       mode: "unsupported",
@@ -191,8 +208,10 @@ export async function attachPlaybackSource(
     }
 
     const reason = formatHlsFatalReason(data, Hls.ErrorTypes);
+    const kind: HlsFatalKind =
+      data.type === Hls.ErrorTypes.NETWORK_ERROR ? "network" : data.type === Hls.ErrorTypes.MEDIA_ERROR ? "media" : "other";
     cleanup();
-    onFatalError(reason);
+    onFatalError(reason, { kind, details: data.details, httpStatus: data.response?.code });
   });
 
   hls.loadSource(source.url);

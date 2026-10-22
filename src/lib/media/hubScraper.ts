@@ -664,6 +664,11 @@ export function parseHubDetailHtml(
     categoryTokens.some((c) => /series/i.test(c));
 
   const totalEpisodes = seasons.reduce((sum, s) => sum + s.episodes.length, 0);
+  // Seasons offered only as complete-season packs still count as seasons.
+  const seasonNumbers = new Set<number>(seasons.map((s) => s.seasonNumber));
+  for (const release of releases) {
+    if (typeof release.seasonNumber === "number") seasonNumbers.add(release.seasonNumber);
+  }
 
   return {
     title: {
@@ -681,7 +686,7 @@ export function parseHubDetailHtml(
       runtimeMinutes,
       poster,
       backdrop,
-      seasonCount: isSeries ? Math.max(seasons.length, 1) : undefined,
+      seasonCount: isSeries ? Math.max(seasonNumbers.size, 1) : undefined,
       episodeCount: isSeries && totalEpisodes > 0 ? totalEpisodes : undefined,
       officialUrl: safePageUrl,
       demo: false,
