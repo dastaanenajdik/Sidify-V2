@@ -55,11 +55,14 @@ import {
   type ArchiveSearchResponse,
 } from "./archive";
 
+/**
+ * Provider identity shown to the client. Labels and attribution are intentionally generic:
+ * the site never names its upstream catalogue or playback servers.
+ */
 export const ARCHIVE_PROVIDER_INFO: ProviderInfo = {
   id: "archive",
-  label: "Internet Archive",
-  attribution:
-    "Free films stream from the Internet Archive (archive.org) — public-domain and openly licensed titles. Rights and availability can vary by item.",
+  label: "Catalogue",
+  attribution: "Free films are provided as-is; rights and availability can vary by title.",
   demo: false,
 };
 
@@ -127,7 +130,7 @@ function snapshotPage(query: MediaQuery): MediaPage {
 /** Download links: the archive's download page plus any direct video file it lists. */
 export async function archiveDownloads(identifier: string): Promise<MediaDownload[]> {
   const downloads: MediaDownload[] = [
-    { label: "All download options", url: archiveDownloadUrl(identifier), kind: "page" },
+    { label: "Download options", url: archiveDownloadUrl(identifier), kind: "page" },
   ];
   const meta = await archiveJson<ArchiveMetadata>(`${ARCHIVE_META_URL}/${identifierPath(identifier)}`, 86_400);
   if (!meta || meta.is_dark || !Array.isArray(meta.files)) return downloads;
@@ -143,8 +146,9 @@ export async function archiveDownloads(identifier: string): Promise<MediaDownloa
     .slice(0, 3);
 
   for (const file of videos) {
+    const extension = file.name.split(".").pop()?.toUpperCase() ?? "VIDEO";
     downloads.push({
-      label: file.format.toUpperCase(),
+      label: `Download ${extension}`,
       url: `${archiveDownloadUrl(identifier)}/${encodeURIComponent(file.name).replace(/%2F/gi, "/")}`,
       kind: "file",
       format: file.format,
@@ -289,7 +293,7 @@ export class ArchiveMediaProvider implements MediaProvider {
     const playback: PlaybackSource[] = dark ? [] : archivePlaybackSources(identifier);
 
     if (dark) {
-      title.overview = title.overview || "This item is no longer publicly available on the Internet Archive.";
+      title.overview = title.overview || "This title is no longer publicly available.";
     }
 
     return {

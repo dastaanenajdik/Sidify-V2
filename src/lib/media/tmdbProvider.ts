@@ -262,7 +262,7 @@ function watchProvidersOf(
   // TMDb may have no provider row for a title/region. Keep a lawful discovery
   // path available instead of leaving the detail page with no next step.
   if (out.length === 0) {
-    out.push({ name: "Search JustWatch", url: justWatchSearchUrl(title, year, country) });
+    out.push({ name: "Find where to watch", url: justWatchSearchUrl(title, year, country) });
   }
   return out.slice(0, 6);
 }

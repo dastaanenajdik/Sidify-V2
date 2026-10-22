@@ -173,7 +173,6 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
         <Link href={title.kind === "movie" ? "/movies" : "/series"} className="inline-flex items-center gap-1 text-[13px] font-semibold text-playing hover:opacity-80">
           ← Back to all {title.kind === "movie" ? "movies" : "series"}
         </Link>
-        {detail.attribution && <p className="mt-4 max-w-[640px] text-[11.5px] leading-relaxed text-fg-3">{detail.attribution}</p>}
       </div>
 
       <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={title.title} />
@@ -238,9 +237,7 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
                   </li>
                 ))}
               </ul>
-              {links.some((link) => link.name === "Search JustWatch") && (
-                <p className="mt-2 text-[11.5px] text-fg-3">Availability varies by country and can change over time.</p>
-              )}
+              <p className="mt-2 text-[11.5px] text-fg-3">Availability varies by country and can change over time.</p>
             </>
           )}
           {title.officialUrl && (
@@ -267,7 +264,7 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
         {embed ? (
           <iframe
             src={source.url}
-            title={`${title.title} — ${source.label ?? "Internet Archive"}`}
+            title={`${title.title} — player`}
             allow="autoplay; fullscreen; encrypted-media"
             allowFullScreen
             loading="lazy"
@@ -290,20 +287,22 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
         <h2 id="authorized-playback" className="text-[13px] font-semibold text-fg-2">
           {embed ? "Free stream" : "Authorized playback"}
         </h2>
-        {playback.map((item, index) => (
-          <button
-            key={item.url}
-            type="button"
-            onClick={() => setActive(index)}
-            aria-pressed={index === active}
-            className={cx(
-              "rounded-full px-2.5 py-1 text-[12px] font-semibold transition-colors",
-              index === active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
-            )}
-          >
-            {item.label ?? (item.type === "hls" ? "HLS" : item.type === "embed" ? "Embed" : "MP4")}
-          </button>
-        ))}
+        {playback.length > 1 &&
+          playback.map((item, index) => (
+            <button
+              key={item.url}
+              type="button"
+              onClick={() => setActive(index)}
+              aria-pressed={index === active}
+              aria-label={`Playback option ${index + 1}`}
+              className={cx(
+                "h-6 min-w-6 rounded-full px-2 text-[12px] font-semibold tabular-nums transition-colors",
+                index === active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
+              )}
+            >
+              {index + 1}
+            </button>
+          ))}
       </div>
       {source.note && <p className="mt-1.5 max-w-[680px] text-[11.5px] leading-relaxed text-fg-3">{source.note}</p>}
 
@@ -333,8 +332,8 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
 
       <p className="mt-1.5 text-[11.5px] leading-relaxed text-fg-3">
         {playback.some((item) => item.type === "hls")
-          ? "HLS plays natively in Safari and on iOS/iPadOS; other browsers need an MP4 rendition from the same licensed source."
-          : "Playback is served by the catalogue provider itself — no third-party mirrors."}
+          ? "HLS plays natively in Safari and on iOS/iPadOS; other browsers need an MP4 rendition."
+          : "Playback happens in-page."}
       </p>
     </section>
   );

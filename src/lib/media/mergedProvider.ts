@@ -34,11 +34,14 @@ import type {
   Season,
 } from "./types";
 
+/**
+ * Provider identity shown to the client. Deliberately generic: the UI never names the
+ * metadata catalogue or the playback servers behind it.
+ */
 export const MERGED_PROVIDER_INFO: ProviderInfo = {
   id: "merged",
-  label: "TMDB + Internet Archive",
-  attribution:
-    "This product uses the TMDB API but is not endorsed or certified by TMDB. Free films stream from the Internet Archive (archive.org).",
+  label: "Catalogue",
+  attribution: "Free films are provided as-is; rights and availability can vary by title.",
   demo: false,
 };
 
@@ -175,8 +178,7 @@ export class MergedMediaProvider implements MediaProvider {
 
     const sources: PlaybackSource[] = archivePlaybackSources(match.id).map((source) => ({
       ...source,
-      label: `Free · ${source.label}`,
-      note: `Public-domain / openly licensed copy of “${match.title}” (${match.year ?? "archive.org"}) from the Internet Archive.`,
+      note: `Free, publicly available copy of “${match.title}”${match.year ? ` (${match.year})` : ""}. Print quality and running time can vary.`,
     }));
     const claimed = new Set(detail.playback.map((source) => source.url));
     const extra = sources.filter((source) => !claimed.has(source.url));
@@ -190,7 +192,7 @@ export class MergedMediaProvider implements MediaProvider {
       playback: [...detail.playback, ...extra],
       downloads: [
         ...(detail.downloads ?? []),
-        { label: "Internet Archive download options", url: archiveDownloadUrl(match.id), kind: "page" as const },
+        { label: "Download options", url: archiveDownloadUrl(match.id), kind: "page" as const },
       ],
       related: mergeTitles(detail.related, related).slice(0, 12),
     };

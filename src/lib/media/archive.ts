@@ -325,15 +325,19 @@ export function archiveDocToTitle(doc: ArchiveDoc): MediaTitle | null {
   };
 }
 
-/** Playback + download links for an archive item. The embed player never 404s on a
- *  renamed derivative file, which is why it is the primary source. */
+/**
+ * Playback + download links for an archive item.
+ *
+ * The embed player never 404s on a renamed derivative file, which is why it is the
+ * primary source. Labels are deliberately left empty: the player is presented as part of
+ * this site, never as a named third-party server.
+ */
 export function archivePlaybackSources(identifier: string) {
   return [
     {
       url: archiveEmbedUrl(identifier),
       type: "embed" as const,
-      label: "Internet Archive",
-      note: "Free public-domain / openly licensed copy. Print quality and running time can differ from the theatrical release.",
+      note: "Free, publicly available copy. Print quality and running time can differ from the theatrical release.",
     },
   ];
 }
