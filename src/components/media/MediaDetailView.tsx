@@ -203,12 +203,10 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
             Where to watch
           </h2>
           <p className="mt-1.5 max-w-[680px] text-[13.5px] leading-relaxed text-fg-2">
-            Sidify plays a film or series only when a licensed provider or the site operator authorizes the stream. No playback
-            source is configured for this title, so there is no in-site player —{" "}
-            {title.trailer
-              ? "the official trailer and the rights holder's own availability pages are"
-              : "the rights holder's own availability pages are"}{" "}
-            the way to watch.
+            No authorized playback source is configured for this title, so there is no in-site player.{" "}
+            {links.length > 0
+              ? "Use the availability options below to find licensed streaming, rental or purchase services."
+              : "No official availability information is available for this title."}
           </p>
           {!title.trailer && (
             <p className="mt-2 text-[12.5px] leading-relaxed text-fg-3">
@@ -216,22 +214,27 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
             </p>
           )}
           {links.length > 0 && (
-            <ul className="mt-3 flex flex-wrap gap-2">
-              {links.map((link) => (
-                <li key={`${link.name}-${link.url}`}>
-                  <a
-                    href={link.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="inline-flex items-center gap-1.5 rounded-full bg-fill px-3.5 py-2 text-[13px] font-semibold transition-colors hover:bg-fill-2"
-                  >
-                    {link.name}
-                    {link.kind && <span className="text-[11px] font-medium text-fg-2">{link.kind}</span>}
-                    <ExternalLink size={12} aria-hidden="true" />
-                  </a>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="mt-3 flex flex-wrap gap-2">
+                {links.map((link) => (
+                  <li key={`${link.name}-${link.url}`}>
+                    <a
+                      href={link.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-fill px-3.5 py-2 text-[13px] font-semibold transition-colors hover:bg-fill-2"
+                    >
+                      {link.name}
+                      {link.kind && <span className="text-[11px] font-medium text-fg-2">{link.kind}</span>}
+                      <ExternalLink size={12} aria-hidden="true" />
+                    </a>
+                  </li>
+                ))}
+              </ul>
+              {links.some((link) => link.name === "Search JustWatch") && (
+                <p className="mt-2 text-[11.5px] text-fg-3">Availability varies by country and can change over time.</p>
+              )}
+            </>
           )}
           {title.officialUrl && (
             <a

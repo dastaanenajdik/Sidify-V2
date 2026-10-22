@@ -11,13 +11,14 @@
  *   TMDB_API_KEY            – v3 api key
  * Optional:
  *   TMDB_LANGUAGE           – default "en-US"
- *   TMDB_REGION             – default "US" (watch-provider availability region)
+ *   TMDB_REGION             – default "IN" (watch-provider availability region)
  *
  * Terms: attribution is required — see `ATTRIBUTION` below, which the UI renders.
  */
 
 import type { MediaProvider } from "./provider";
 import { MediaProviderError } from "./provider";
+import { justWatchSearchUrl } from "./availability";
 import { filterTitles, idFromSlug, mediaSlug, sortTitles } from "./query";
 import type {
   Episode,
@@ -157,7 +158,7 @@ function settings() {
     token: process.env.TMDB_READ_ACCESS_TOKEN || "",
     key: process.env.TMDB_API_KEY || "",
     language: process.env.TMDB_LANGUAGE || "en-US",
-    region: process.env.TMDB_REGION || "US",
+    region: process.env.TMDB_REGION || "IN",
   };
 }
 
@@ -220,7 +221,12 @@ function baseTitle(raw: TmdbTitle, kind: MediaKind, genres: Genre[]): MediaTitle
     episodeCount: raw.number_of_episodes,
     status: raw.status,
     popularity: raw.popularity,
-    watchProviders: watchProvidersOf(raw["watch/providers"]?.results?.[settings().region]),
+    watchProviders: watchProvidersOf(
+      raw["watch/providers"]?.results?.[settings().region],
+      title,
+      yearOf(raw.release_date || raw.first_air_date),
+      settings().region
+    ),
     demo: false,
   };
 }
@@ -232,20 +238,32 @@ function trailerOf(videos?: TmdbVideo[]): TrailerRef | null {
   return { site: "youtube", key: pick.key, name: pick.name || "Official trailer", official: pick.official };
 }
 
-function watchProvidersOf(region?: TmdbProviderRegion): WatchProviderLink[] {
-  if (!region?.link) return [];
+function watchProvidersOf(
+  region: TmdbProviderRegion | undefined,
+  title: string,
+  year: number | undefined,
+  country: string
+): WatchProviderLink[] {
   const out: WatchProviderLink[] = [];
-  const push = (list: { provider_name?: string }[] | undefined, kind: WatchProviderLink["kind"]) => {
-    for (const provider of list || []) {
-      if (!provider.provider_name) continue;
-      if (out.some((entry) => entry.name === provider.provider_name)) continue;
-      out.push({ name: provider.provider_name, url: region.link!, kind });
-    }
-  };
-  push(region.flatrate, "stream");
-  push(region.free, "free");
-  push(region.rent, "rent");
-  push(region.buy, "buy");
+  if (region?.link) {
+    const push = (list: { provider_name?: string }[] | undefined, kind: WatchProviderLink["kind"]) => {
+      for (const provider of list || []) {
+        if (!provider.provider_name) continue;
+        if (out.some((entry) => entry.name === provider.provider_name)) continue;
+        out.push({ name: provider.provider_name, url: region.link!, kind });
+      }
+    };
+    push(region.flatrate, "stream");
+    push(region.free, "free");
+    push(region.rent, "rent");
+    push(region.buy, "buy");
+  }
+
+  // TMDb may have no provider row for a title/region. Keep a lawful discovery
+  // path available instead of leaving the detail page with no next step.
+  if (out.length === 0) {
+    out.push({ name: "Search JustWatch", url: justWatchSearchUrl(title, year, country) });
+  }
   return out.slice(0, 6);
 }
 
