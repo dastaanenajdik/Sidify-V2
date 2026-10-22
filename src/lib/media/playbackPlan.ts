@@ -65,6 +65,15 @@ export function downloadableReleases(releases: readonly MediaReleaseItem[]): Med
   return sortByQuality(releases.filter((release) => release.mirrors.length > 0));
 }
 
+/**
+ * Releases a player app (VLC, MX Player, Infuse) can be pointed at: every single file with
+ * mirrors, best quality first. Unlike the browser these apps decode MKV, HEVC and Dolby, so
+ * nothing is filtered by container — only packs/archives are, since a `.zip` cannot stream.
+ */
+export function externalPlayerReleases(releases: readonly MediaReleaseItem[]): MediaReleaseItem[] {
+  return downloadableReleases(releases).filter((release) => !isArchiveRelease(release));
+}
+
 /* ------------------------------ labels ---------------------------------- */
 
 function shortBytes(bytes: number): string {
@@ -168,6 +177,28 @@ export function streamCandidates(links: readonly ResolvedMirrorLink[]): StreamCa
 /** Direct download links (no landing pages), in resolver order. */
 export function downloadLinks(links: readonly ResolvedMirrorLink[]): ResolvedMirrorLink[] {
   return links.filter((link) => link && link.delivery !== "external" && /^https:\/\//i.test(link.url));
+}
+
+/**
+ * The one link to hand a player app: the direct file it can stream itself — HLS manifest or
+ * any container, including the ones the browser can't decode — never a landing page or a
+ * pack. Browser-compatible links win when both are offered, so a phone streams a smaller
+ * file when one exists.
+ */
+export interface ExternalPlayerLink {
+  url: string;
+  server: string;
+  container?: string;
+  streamType?: ResolvedMirrorLink["streamType"];
+}
+
+export function externalPlayerLink(links: readonly ResolvedMirrorLink[]): ExternalPlayerLink | undefined {
+  const stream = streamCandidates(links)[0];
+  if (stream) {
+    return { url: stream.sourceUrl, server: stream.server, container: stream.container, streamType: stream.kind === "hls" ? "hls" : undefined };
+  }
+  const file = downloadLinks(links).find((link) => !ARCHIVE_CONTAINERS.has(String(link.container || "").toUpperCase()));
+  return file ? { url: file.url, server: file.server, container: file.container, streamType: file.streamType } : undefined;
 }
 
 /**

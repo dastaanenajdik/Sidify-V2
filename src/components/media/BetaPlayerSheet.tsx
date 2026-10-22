@@ -33,6 +33,7 @@ import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { cx } from "@/lib/format";
 import { useMounted } from "@/lib/useMounted";
 import { ExternalPlayerLinks } from "./ExternalPlayerLinks";
+import { VlcPlayButton } from "./VlcPlayButton";
 import type { WatchTarget } from "./watch";
 
 /** How long one link may take to show its first frame before we try the next one. */
@@ -157,9 +158,9 @@ const primaryChip =
   "inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-semibold text-on-primary hover:opacity-90";
 
 /** The original file: video + every audio track, whatever the browser can decode. */
-function DownloadFileLink({ url, quality, primary = false }: { url: string; quality: string; primary?: boolean }) {
+function DownloadFileLink({ url, quality }: { url: string; quality: string }) {
   return (
-    <a href={url} target="_blank" rel="noreferrer noopener" download className={primary ? primaryChip : chip}>
+    <a href={url} target="_blank" rel="noreferrer noopener" download className={chip}>
       <Download size={13} aria-hidden="true" /> Download {quality === "file" ? "file" : quality} (video + audio)
     </a>
   );
@@ -658,6 +659,8 @@ function BetaPlayer({
   const noSoundLabels = failedList.filter((f) => f.reason === "no-audio").map((f) => labels[f.index]);
   const brokenLabels = failedList.filter((f) => f.reason === "failed").map((f) => labels[f.index]);
   const silentQuality = silent ? qualityLabel(silent.release) : null;
+  /** The freshest direct link this session found — what the player apps are handed. */
+  const handoffUrl = silent?.candidate.sourceUrl ?? lastUrl;
 
   return (
     <div>
@@ -726,9 +729,17 @@ function BetaPlayer({
             </div>
           )}
           <div className="flex flex-wrap items-center gap-1.5">
+            {handoffUrl && (
+              <VlcPlayButton
+                url={handoffUrl}
+                title={target.mediaTitle}
+                showActions={false}
+                className={cx(primaryChip, "active:scale-[0.97]")}
+              />
+            )}
             {silent && silentQuality ? (
               <>
-                <DownloadFileLink url={silent.candidate.sourceUrl} quality={silentQuality} primary />
+                <DownloadFileLink url={silent.candidate.sourceUrl} quality={silentQuality} />
                 <button
                   type="button"
                   onClick={() => begin(silent.releaseIndex, resumeAtRef.current, { pin: true, withoutSound: true })}
@@ -746,12 +757,12 @@ function BetaPlayer({
               <RotateCcw size={13} aria-hidden="true" /> Try again
             </button>
           </div>
-          {(silent?.candidate.sourceUrl || lastUrl) && (
+          {handoffUrl && (
             <div className="mt-3">
               <p className="mb-1.5 text-[12.5px] font-semibold text-fg-2">
-                {silent ? "Play with sound in VLC" : "Or open it in a player app"}
+                {silent ? "Play with sound in VLC" : "Or open it in another player app"}
               </p>
-              <ExternalPlayerLinks url={silent?.candidate.sourceUrl ?? lastUrl!} title={target.mediaTitle} />
+              <ExternalPlayerLinks url={handoffUrl} title={target.mediaTitle} />
             </div>
           )}
         </div>
@@ -868,6 +879,14 @@ function BetaPlayer({
                   >
                     <SkipForward size={13} aria-hidden="true" /> Try {qualityLabel(releases[activeIndex + 1])}
                   </button>
+                )}
+                {lastUrl && (
+                  <VlcPlayButton
+                    url={lastUrl}
+                    title={target.mediaTitle}
+                    showActions={false}
+                    className={cx(chip, "active:scale-[0.97]")}
+                  />
                 )}
                 {lastUrl ? (
                   <DownloadFileLink url={lastUrl} quality={qualityLabel(activeRelease)} />

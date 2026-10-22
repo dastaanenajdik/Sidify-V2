@@ -6,6 +6,7 @@ import { Film, Star, Tv } from "lucide-react";
 import { mediaArt } from "@/lib/media/art";
 import type { MediaTitle } from "@/lib/media/types";
 import { Skeleton } from "@/components/ui";
+import { cx } from "@/lib/format";
 import { mediaHref } from "./PosterCard";
 
 function Row({ item }: { item: MediaTitle }) {
@@ -46,19 +47,23 @@ function Row({ item }: { item: MediaTitle }) {
 }
 
 /**
- * Compact "Movies & series" results for the side column of the music search page.
+ * Compact "Movies & series" results, shown under the songs in the music search page's
+ * "Top results" tab. `columns={2}` lets a wide column put two titles side by side.
  */
 export function MediaSearchList({
   items,
   loading,
   onSeeAll,
   limit = 8,
+  columns = 1,
 }: {
   items: MediaTitle[];
   loading: boolean;
   onSeeAll?: () => void;
   limit?: number;
+  columns?: 1 | 2;
 }) {
+  const listClass = columns === 2 ? "grid gap-x-3 sm:grid-cols-2" : "space-y-0.5";
   return (
     <section aria-labelledby="media-side-heading" className="rounded-[18px] bg-raised/60 p-3 ring-1 ring-edge">
       <div className="mb-1.5 flex items-center justify-between px-1">
@@ -72,7 +77,7 @@ export function MediaSearchList({
         )}
       </div>
       {loading ? (
-        <ul className="space-y-1.5" aria-label="Loading movies and series">
+        <ul className={cx("space-y-1.5", columns === 2 && "grid gap-x-3 gap-y-1.5 sm:grid-cols-2 sm:space-y-0")} aria-label="Loading movies and series">
           {Array.from({ length: 4 }).map((_, i) => (
             <li key={i} className="flex items-center gap-3 px-2 py-1.5">
               <Skeleton className="aspect-[2/3] w-11 shrink-0 rounded-[6px]" />
@@ -86,7 +91,7 @@ export function MediaSearchList({
       ) : items.length === 0 ? (
         <p className="px-1 py-2 text-[13px] text-fg-2">No movies or series match this search.</p>
       ) : (
-        <ul className="space-y-0.5">
+        <ul className={listClass}>
           {items.slice(0, limit).map((item) => (
             <Row key={`${item.kind}-${item.id}`} item={item} />
           ))}

@@ -11,7 +11,7 @@ import { playContext } from "@/lib/audioEngine";
 import { MOODS } from "@/lib/explore";
 import TrackRow from "@/components/TrackRow";
 import { AlbumCard, ArtistCard, MoodCard } from "@/components/cards";
-import { PosterCard, posterShelfClass } from "@/components/media/PosterCard";
+import { PosterCard } from "@/components/media/PosterCard";
 import { MediaSearchList } from "@/components/media/MediaSearchList";
 import { useMediaSearch } from "@/lib/media/hooks";
 import type { MediaTitle } from "@/lib/media/types";
@@ -120,8 +120,9 @@ function SearchInner() {
     staleTime: 60_000,
   });
 
-  // Movies & series come from their own catalogue, searched alongside the music: a side
-  // column on wide screens / a shelf near the top on phones, plus their own tab.
+  // Movies & series come from their own catalogue, searched alongside the music. The
+  // "Top results" tab shows both together (songs first, films under them); there is also a
+  // tab with nothing but posters.
   const media = useMediaSearch(term, tab === "all" || tab === "media", 24);
   const mediaItems = media.data?.items ?? [];
   const mediaLoading = media.isLoading && term.length > 1;
@@ -296,112 +297,117 @@ function AllResults({
   musicError: boolean;
   onSeeAllMedia: () => void;
 }) {
-  const top = artists[0] && (!songs[0] || songs[0].artist.toLowerCase() === artists[0].name.toLowerCase()) ? { kind: "artist" as const, artist: artists[0] } : songs[0] ? { kind: "song" as const, track: songs[0] } : null;
+  const top =
+    artists[0] && (!songs[0] || songs[0].artist.toLowerCase() === artists[0].name.toLowerCase())
+      ? { kind: "artist" as const, artist: artists[0] }
+      : songs[0]
+        ? { kind: "song" as const, track: songs[0] }
+        : null;
+  // Movies & series live in this same block — songs above, posters below — at every width,
+  // so one search answers both without hunting for another tab or a side column.
   const showMedia = mediaLoading || media.length > 0;
+  const twoUp = Boolean(top) && (songs.length > 0 || showMedia);
+
   return (
-    <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start xl:gap-2 xl:pr-8">
-      <div className="min-w-0 space-y-9">
-        {(top || songs.length > 0) && (
-          <div className="grid grid-cols-1 gap-6 px-4 desk:px-8 2xl:grid-cols-[minmax(300px,420px)_1fr]">
-            {top && (
-              <section>
-                <h2 className="t-section mb-3">Top result</h2>
-                {top.kind === "artist" ? (
-                  <Link
-                    href={`/artist/${encodeURIComponent(top.artist.id)}`}
-                    className="group flex items-center gap-5 rounded-[18px] bg-raised p-5 ring-1 ring-edge transition-colors hover:bg-raised-2"
-                  >
-                    <Artwork src={top.artist.artwork} size={110} round className="h-[110px] w-[110px] shrink-0" />
-                    <div className="min-w-0">
-                      <div className="truncate text-[24px] font-bold tracking-[-0.4px]">{top.artist.name}</div>
-                      <div className="text-[14px] text-fg-2">Artist</div>
-                    </div>
-                  </Link>
-                ) : (
-                  <div className="group relative flex items-center gap-5 rounded-[18px] bg-raised p-5 ring-1 ring-edge">
-                    <Artwork src={top.track.artwork} size={110} rounded="rounded-[10px]" className="h-[110px] w-[110px] shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <div className="line-clamp-2 text-[22px] leading-tight font-bold tracking-[-0.4px]">{top.track.title}</div>
-                      <div className="mt-1 truncate text-[14px] text-fg-2">Song · {top.track.artist}</div>
-                    </div>
-                    <button
-                      type="button"
-                      aria-label={`Play ${top.track.title}`}
-                      onClick={() => playContext(songs, 0, label)}
-                      className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary text-on-primary transition-transform hover:scale-105"
-                    >
-                      <Play size={20} fill="currentColor" className="ml-0.5" />
-                    </button>
+    <div className="space-y-9">
+      {(top || songs.length > 0 || showMedia) && (
+        <div className={cx("grid grid-cols-1 gap-6 px-4 desk:px-8", twoUp && "2xl:grid-cols-[minmax(300px,420px)_1fr]")}>
+          {top && (
+            <section>
+              <h2 className="t-section mb-3">Top result</h2>
+              {top.kind === "artist" ? (
+                <Link
+                  href={`/artist/${encodeURIComponent(top.artist.id)}`}
+                  className="group flex items-center gap-5 rounded-[18px] bg-raised p-5 ring-1 ring-edge transition-colors hover:bg-raised-2"
+                >
+                  <Artwork src={top.artist.artwork} size={110} round className="h-[110px] w-[110px] shrink-0" />
+                  <div className="min-w-0">
+                    <div className="truncate text-[24px] font-bold tracking-[-0.4px]">{top.artist.name}</div>
+                    <div className="text-[14px] text-fg-2">Artist</div>
                   </div>
-                )}
-              </section>
-            )}
-            {songs.length > 0 && (
-              <section className="min-w-0">
-                <h2 className="t-section mb-1.5">Songs</h2>
-                <div className="-mx-2">
-                  {songs.slice(0, 5).map((t, i) => (
-                    <TrackRow key={t.id} tracks={songs} index={i} contextLabel={label} />
-                  ))}
+                </Link>
+              ) : (
+                <div className="group relative flex items-center gap-5 rounded-[18px] bg-raised p-5 ring-1 ring-edge">
+                  <Artwork
+                    src={top.track.artwork}
+                    size={110}
+                    rounded="rounded-[10px]"
+                    className="h-[110px] w-[110px] shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="line-clamp-2 text-[22px] leading-tight font-bold tracking-[-0.4px]">
+                      {top.track.title}
+                    </div>
+                    <div className="mt-1 truncate text-[14px] text-fg-2">Song · {top.track.artist}</div>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Play ${top.track.title}`}
+                    onClick={() => playContext(songs, 0, label)}
+                    className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary text-on-primary transition-transform hover:scale-105"
+                  >
+                    <Play size={20} fill="currentColor" className="ml-0.5" />
+                  </button>
                 </div>
-              </section>
-            )}
-          </div>
-        )}
+              )}
+            </section>
+          )}
 
-        {/* Phones / tablets: movies & series right under the top music results. */}
-        {showMedia && (
-          <section className="xl:hidden" aria-label="Movies and series">
-            <SectionHeader title="Movies & series" onMore={media.length > 0 ? onSeeAllMedia : undefined} />
-            {mediaLoading ? (
-              <div className="flex gap-3.5 overflow-hidden px-4 desk:px-8">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} className={cx("aspect-[2/3] shrink-0 rounded-[10px]", posterShelfClass)} />
-                ))}
-              </div>
-            ) : (
-              <Shelf>
-                {media.slice(0, 12).map((item) => (
-                  <PosterCard key={`${item.kind}-${item.id}`} title={item} className={posterShelfClass} />
-                ))}
-              </Shelf>
-            )}
-          </section>
-        )}
+          {(songs.length > 0 || showMedia) && (
+            <section className="min-w-0" aria-label="Songs and movies & series">
+              {songs.length > 0 && (
+                <>
+                  <h2 className="t-section mb-1.5">Songs</h2>
+                  <div className="-mx-2">
+                    {songs.slice(0, 5).map((t, i) => (
+                      <TrackRow key={t.id} tracks={songs} index={i} contextLabel={label} />
+                    ))}
+                  </div>
+                </>
+              )}
+              {showMedia && (
+                <div className={cx(songs.length > 0 && "mt-5")}>
+                  <MediaSearchList
+                    items={media}
+                    loading={mediaLoading}
+                    onSeeAll={media.length > 0 ? onSeeAllMedia : undefined}
+                    limit={8}
+                    columns={2}
+                  />
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+      )}
 
-        {artists.length > 0 && (
-          <section>
-            <SectionHeader title="Artists" />
-            <Shelf>
-              {artists.slice(0, 12).map((a) => (
-                <ArtistCard key={a.id} artist={a} />
-              ))}
-            </Shelf>
-          </section>
-        )}
+      {artists.length > 0 && (
+        <section>
+          <SectionHeader title="Artists" />
+          <Shelf>
+            {artists.slice(0, 12).map((a) => (
+              <ArtistCard key={a.id} artist={a} />
+            ))}
+          </Shelf>
+        </section>
+      )}
 
-        {albums.length > 0 && (
-          <section>
-            <SectionHeader title="Albums" />
-            <Shelf>
-              {albums.slice(0, 14).map((a) => (
-                <AlbumCard key={a.id} album={a} />
-              ))}
-            </Shelf>
-          </section>
-        )}
+      {albums.length > 0 && (
+        <section>
+          <SectionHeader title="Albums" />
+          <Shelf>
+            {albums.slice(0, 14).map((a) => (
+              <AlbumCard key={a.id} album={a} />
+            ))}
+          </Shelf>
+        </section>
+      )}
 
-        {!top && songs.length + artists.length + albums.length === 0 && (
-          <p className="px-4 text-[14px] text-fg-2 desk:px-8">
-            {musicError ? "Music search isn't responding right now." : "No songs, albums or artists match this search."}
-          </p>
-        )}
-      </div>
-
-      {/* Wide screens: movies & series beside the music results. */}
-      <aside className="hidden xl:sticky xl:top-4 xl:block" aria-label="Movies and series results">
-        <MediaSearchList items={media} loading={mediaLoading} onSeeAll={onSeeAllMedia} />
-      </aside>
+      {!top && songs.length + artists.length + albums.length === 0 && !showMedia && (
+        <p className="px-4 text-[14px] text-fg-2 desk:px-8">
+          {musicError ? "Music search isn't responding right now." : "No songs, albums or artists match this search."}
+        </p>
+      )}
     </div>
   );
 }
