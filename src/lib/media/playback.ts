@@ -18,12 +18,24 @@ import type { MediaKind, PlaybackSource } from "./types";
 
 export function sanitizePlaybackSource(entry: unknown): PlaybackSource | null {
   if (!entry || typeof entry !== "object") return null;
-  const { url, type, label } = entry as { url?: unknown; type?: unknown; label?: unknown };
+  const { url, type, label, note } = entry as { url?: unknown; type?: unknown; label?: unknown; note?: unknown };
   if (typeof url !== "string" || !/^https:\/\//i.test(url)) return null;
   const kind: PlaybackSource["type"] | null =
-    type === "hls" || type === "mp4" ? type : /\.m3u8(\?|$)/i.test(url) ? "hls" : /\.mp4(\?|$)/i.test(url) ? "mp4" : null;
+    type === "hls" || type === "mp4" || type === "embed"
+      ? type
+      : /\.m3u8(\?|$)/i.test(url)
+        ? "hls"
+        : /\.mp4(\?|$)/i.test(url)
+          ? "mp4"
+          : null;
   if (!kind) return null;
-  return { url, type: kind, label: typeof label === "string" ? label.slice(0, 40) : undefined };
+  const source: PlaybackSource = {
+    url,
+    type: kind,
+    label: typeof label === "string" ? label.slice(0, 40) : undefined,
+  };
+  if (typeof note === "string" && note.trim()) source.note = note.slice(0, 200);
+  return source;
 }
 
 export function parsePlaybackManifest(raw: string | undefined): Record<string, PlaybackSource[]> {

@@ -32,6 +32,12 @@ export interface MediaProvider {
   getNewSeriesReleases(limit?: number): Promise<MediaTitle[]>;
   getTopRatedMovies(limit?: number): Promise<MediaTitle[]>;
   getTopRatedSeries(limit?: number): Promise<MediaTitle[]>;
+  /**
+   * Films that stream free of charge (public-domain / open-licence catalogues).
+   * Optional: providers without a free tier simply omit it, and the browse page
+   * then shows no "free to watch" shelf.
+   */
+  getFreeToWatch?(limit?: number): Promise<MediaTitle[]>;
 
   /* ------------------------------- browsing ------------------------------ */
   /** Filtered, sorted, paginated catalogue. */

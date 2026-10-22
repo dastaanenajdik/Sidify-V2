@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   Clock,
+  Download,
   ExternalLink,
   Play,
   Star,
@@ -17,7 +18,7 @@ import { useSeasonEpisodes } from "@/lib/media/hooks";
 import type { Episode, MediaDetail, PlaybackSource, Season } from "@/lib/media/types";
 import { SectionHeader, Shelf } from "@/components/ui";
 import { useWatchlist } from "@/store/watchlist";
-import { cx } from "@/lib/format";
+import { cx, formatBytes } from "@/lib/format";
 import { PosterCard, posterShelfClass } from "./PosterCard";
 import { TrailerSheet } from "./TrailerSheet";
 
@@ -77,6 +78,11 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
                 {title.demo && (
                   <span className="rounded-full bg-white/12 px-2 py-[3px] text-[10px] font-bold tracking-[0.06em] text-white/75 uppercase">
                     Demo title
+                  </span>
+                )}
+                {title.free && !title.demo && (
+                  <span className="rounded-full bg-primary px-2 py-[3px] text-[10px] font-bold tracking-[0.06em] text-on-primary uppercase">
+                    Free to stream
                   </span>
                 )}
                 {typeof title.rating === "number" && title.rating > 0 && (
@@ -193,6 +199,7 @@ function formatRuntime(minutes: number): string {
 function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; detail: MediaDetail }) {
   const { title } = detail;
   const [active, setActive] = useState(0);
+  const downloads = detail.downloads ?? [];
 
   if (playback.length === 0) {
     const links = title.watchProviders ?? [];
@@ -252,23 +259,36 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
   }
 
   const source = playback[Math.min(active, playback.length - 1)];
+  const embed = source.type === "embed";
+
   return (
     <section id="play" aria-labelledby="authorized-playback" className="px-4 desk:px-8">
       <div className="overflow-hidden rounded-[16px] bg-black ring-1 ring-edge">
-        <video
-          controls
-          playsInline
-          preload="metadata"
-          poster={title.backdrop ?? title.poster ?? undefined}
-          className="aspect-video w-full bg-black"
-        >
-          <source src={source.url} type={source.type === "hls" ? "application/vnd.apple.mpegurl" : "video/mp4"} />
-          Your browser can&apos;t play this authorized stream.
-        </video>
+        {embed ? (
+          <iframe
+            src={source.url}
+            title={`${title.title} — ${source.label ?? "Internet Archive"}`}
+            allow="autoplay; fullscreen; encrypted-media"
+            allowFullScreen
+            loading="lazy"
+            className="aspect-video w-full bg-black"
+          />
+        ) : (
+          <video
+            controls
+            playsInline
+            preload="metadata"
+            poster={title.backdrop ?? title.poster ?? undefined}
+            className="aspect-video w-full bg-black"
+          >
+            <source src={source.url} type={source.type === "hls" ? "application/vnd.apple.mpegurl" : "video/mp4"} />
+            Your browser can&apos;t play this authorized stream.
+          </video>
+        )}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <h2 id="authorized-playback" className="text-[13px] font-semibold text-fg-2">
-          Authorized playback
+          {embed ? "Free stream" : "Authorized playback"}
         </h2>
         {playback.map((item, index) => (
           <button
@@ -281,12 +301,40 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
               index === active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
             )}
           >
-            {item.label ?? (item.type === "hls" ? "HLS" : "MP4")}
+            {item.label ?? (item.type === "hls" ? "HLS" : item.type === "embed" ? "Embed" : "MP4")}
           </button>
         ))}
       </div>
+      {source.note && <p className="mt-1.5 max-w-[680px] text-[11.5px] leading-relaxed text-fg-3">{source.note}</p>}
+
+      {downloads.length > 0 && (
+        <div className="mt-3" aria-labelledby="downloads-heading">
+          <h2 id="downloads-heading" className="text-[13px] font-semibold text-fg-2">
+            Download
+          </h2>
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {downloads.map((entry) => (
+              <li key={entry.url}>
+                <a
+                  href={entry.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-fill px-3.5 py-2 text-[13px] font-semibold transition-colors hover:bg-fill-2"
+                >
+                  <Download size={13} aria-hidden="true" />
+                  {entry.label}
+                  {entry.sizeBytes ? <span className="text-[11px] font-medium text-fg-2">{formatBytes(entry.sizeBytes)}</span> : null}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <p className="mt-1.5 text-[11.5px] leading-relaxed text-fg-3">
-        HLS plays natively in Safari and on iOS/iPadOS; other browsers need an MP4 rendition from the same licensed source.
+        {playback.some((item) => item.type === "hls")
+          ? "HLS plays natively in Safari and on iOS/iPadOS; other browsers need an MP4 rendition from the same licensed source."
+          : "Playback is served by the catalogue provider itself — no third-party mirrors."}
       </p>
     </section>
   );

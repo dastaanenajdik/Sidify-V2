@@ -20,7 +20,7 @@ Drizzle ORM + PostgreSQL · `youtubei.js` (InnerTube extraction) · PWA service 
 | **Up next & AutoPlay** | Queue in sections — *Now playing*, *Next in queue*, *Next from …* and *AutoPlay* — with drag to reorder. AutoPlay lines up similar songs (YouTube Music's own radio) *before* the queue runs out, so what plays next is always visible. "Start radio" from any song. |
 | **Listen Together** | Rooms with a six-character code (no I/L/O), invite link and QR. Up to 5 people (host can raise it to 10), host-only control, remove members, host hand-over, shared queue, room AutoPlay, activity log. Devices share one server clock (round-trip-corrected) and correct drift, so playback stays aligned. |
 | **Recommendations** | Home: Top picks (your mix, song radio from your last play, top-artist radio), Quick picks, Recently played, New releases, Trending, From your likes. Explore: new releases, charts and mood / genre tiles. |
-| **Movies & Series** | `/movies` and `/series`: featured backdrop hero, trending / new / top-rated / popular shelves, genre · year · language · sort filters, search, poster cards with a local watchlist. Detail pages carry official trailers, seasons and episodes, "more like this" and — only when authorized — an in-site player. Ships with a clearly marked demo catalogue until a licensed provider is configured. |
+| **Movies & Series** | `/movies` and `/series`: featured backdrop hero, trending / new / top-rated / popular shelves, a **Free to watch** shelf of public-domain films, genre · year · language · sort filters, search, poster cards with a local watchlist. Detail pages carry official trailers, seasons and episodes, "more like this", and a real player — TMDb/JustWatch links for licensed titles, the Internet Archive's own player plus its download options for free films. |
 | **Replay** | Minutes listened, top songs, top artists, streak and listening hours — counted on the device, shown as wallet-style cards. |
 | **Library** | Likes, playlists (pin to the top, grid / list), history and downloads are server-backed **and** locally mirrored, so nothing is lost when the API or DB is unavailable. |
 | **PWA** | Installable, app-shell caching and media-session (lock-screen) controls. |
@@ -110,7 +110,8 @@ Environment variables:
 | `DATABASE_URL` | runtime, optional | Likes, playlists, downloads, listening history, Listen Together rooms, `/api/health` |
 | `LRCLIB_BASE` | optional | Self-hosted lyrics mirror (defaults to `https://lrclib.net`) |
 | `LYRICS_OVH_BASE` | optional | Secondary lyrics provider (defaults to `https://api.lyrics.ovh`) |
-| `MEDIA_PROVIDER` | optional | `auto` (default) · `demo` · `tmdb` — which movies/series adapter answers |
+| `MEDIA_PROVIDER` | optional | `auto`/`merged` (default) · `tmdb` · `archive` · `demo` — which movies/series adapter answers |
+| `MEDIA_ARCHIVE` | optional | `off` hides the free Internet Archive shelf and playback |
 | `TMDB_READ_ACCESS_TOKEN` / `TMDB_API_KEY` | optional | Official TMDb metadata (either one). Without it the demo catalogue is used |
 | `TMDB_LANGUAGE`, `TMDB_REGION` | optional | Metadata language (default `en-US`) and availability region (default `IN`) |
 | `MEDIA_PLAYBACK_MANIFEST` | optional | JSON map of **authorized** HLS/MP4 URLs, `{"movie/<slug>":[{"url":"https://…","type":"hls"}]}` |
@@ -136,12 +137,14 @@ getMovieDetails(slug)  getSeriesDetails(slug)  getSeriesSeasons(slug, season?)
 getRelated(kind, slug, limit)  getPlaybackSources?(kind, slug)
 ```
 
-Two adapters implement it:
+Three adapters implement it, and `mergedProvider.ts` routes between them:
 
 | Adapter | When | Notes |
 |---|---|---|
-| `demoProvider.ts` + `demoCatalog.ts` | default, no credentials | Fictional titles, original synopses, generated SVG artwork. Every card carries a **Demo** badge and every response is marked `demo: true`. |
+| `demoProvider.ts` + `demoCatalog.ts` | `MEDIA_PROVIDER=demo`, or no free/metadata source answers | Fictional titles, original synopses, generated SVG artwork. Every card carries a **Demo** badge and every response is marked `demo: true`. |
 | `tmdbProvider.ts` | `TMDB_READ_ACCESS_TOKEN` or `TMDB_API_KEY` set | Official TMDb v3 API — real metadata, artwork, YouTube trailer keys and JustWatch availability links/searches (India by default). Terms require the attribution line rendered on detail pages. |
+| `archiveProvider.ts` | always available (default catalogue when no TMDb key) | Internet Archive Scrape API: real public-domain / openly licensed films from `feature_films`, `film_noir`, `sci-fi_horror`, `silent_films` and related collections. Supplies posters, ratings, genres and — uniquely — **lawful playback**: archive.org's own `/embed/<id>` player and `/download/<id>` files. Falls back to a verified snapshot (`archive.ts`) if archive.org is unreachable, so the shelf never breaks. |
+| `mergedProvider.ts` | `MEDIA_PROVIDER=auto` (default) | TMDb metadata plus the archive: a "Free to watch" shelf, archive results merged into search, `ia-<identifier>` slugs routed to the archive provider, and free playback attached to a TMDb title when the same film (title + year) exists in the archive. Every call degrades instead of throwing. |
 
 Routes:
 
@@ -158,18 +161,24 @@ only has to map its catalogue onto the models in `src/lib/media/types.ts`.
 
 ### Playback policy
 
-There is **no** scraper, torrent, DRM bypass or third-party streaming site anywhere in
-this feature. A title becomes playable only when:
+There is **no** scraper, torrent, DRM bypass or third-party file host anywhere in this
+feature — no `4khdhub`/`hubcloud`/`greenmotors` style resolution, no CORS-proxy scraping
+of protected pages. A title becomes playable only when:
 
-1. a licensed provider adapter returns `getPlaybackSources(...)` — TMDb's does not,
-   because TMDb licenses metadata, not streams; or
-2. the operator lists an HTTPS HLS/MP4 URL in `MEDIA_PLAYBACK_MANIFEST`.
+1. a provider that actually holds the rights returns `getPlaybackSources(...)`:
+   the Internet Archive does, for public-domain / openly licensed items, using its own
+   embed player and download endpoints; TMDb does not, because it licenses metadata,
+   not streams;
+2. a TMDb title has an unambiguous archive match (same normalised title, year within
+   ±1) — then the archive player is attached and labelled as a free copy; or
+3. the operator lists an HTTPS HLS/MP4 URL in `MEDIA_PLAYBACK_MANIFEST`.
 
 Otherwise the detail page states that no playback source is configured and shows the
 official trailer plus TMDb/JustWatch availability links (or a region-scoped JustWatch
-search when provider listings are missing). Sidify does not provide movie downloads.
-Non-HTTPS manifest entries are discarded (`src/lib/media/playback.ts`). HLS plays
-natively in Safari/iOS; other browsers need an MP4 rendition from the same source.
+search when provider listings are missing). Downloads are only ever the archive's own
+files, linked from the item's download page. Non-HTTPS manifest entries are discarded
+(`src/lib/media/playback.ts`). HLS plays natively in Safari/iOS; other browsers need an
+MP4 rendition from the same source.
 
 Watchlist entries persist in `localStorage` (`src/store/watchlist.ts`), rehydrated like
 the other Sidify stores, so no account is required.
@@ -178,13 +187,22 @@ the other Sidify stores, so no account is required.
 
 ```bash
 # .env.local
-TMDB_READ_ACCESS_TOKEN="…"        # or TMDB_API_KEY
-MEDIA_PROVIDER=auto               # or tmdb to require it
+MEDIA_PROVIDER=auto               # merged: TMDb metadata + free archive films
+TMDB_READ_ACCESS_TOKEN="…"        # optional; enables the rich metadata catalogue
 ```
 
-Restart `npm run dev` (or redeploy) — `/movies` and `/series` switch adapters, the demo
-notice disappears and detail pages get real posters, trailers and availability links.
-To add another licensed provider, implement the same interface and select it in
+With no keys at all, `/movies` serves the Internet Archive catalogue, so free films,
+posters, playback and downloads work out of the box. Restart `npm run dev` (or
+redeploy) — the demo notice disappears and detail pages get real posters, trailers and
+availability links. `MEDIA_PROVIDER=archive` serves only free films; `MEDIA_ARCHIVE=off`
+switches the free shelf and archive playback off.
+
+The server needs outbound HTTPS to `archive.org` (and `api.themoviedb.org` when TMDb is
+configured). If archive.org is blocked the shelf falls back to the verified snapshot in
+`src/lib/media/archive.ts`; playback still works because the browser loads the archive's
+embed player directly.
+
+To add another provider, implement the same interface and route to it in
 `getMediaProvider()` (`src/lib/media/service.ts`).
 
 ---
