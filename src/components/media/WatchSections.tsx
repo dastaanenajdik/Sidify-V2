@@ -30,24 +30,26 @@ function summary(releases: MediaReleaseItem[]): string {
 }
 
 /**
- * "Try Play (beta)" + "Play with VLC" + "Download" for one item. Qualities are chosen later,
- * in the sheets — and VLC picks the best file itself, since it plays what the browser can't.
+ * "Try Play (beta)" + "Play with VLC" + "Download" for one item. Qualities are chosen in
+ * the popup sheets — Play with VLC loads direct links across all qualities up front so a
+ * single tap on any link opens VLC and starts streaming right away.
  */
 export function WatchActions({
   target,
   onPlay,
+  onVlc,
   onDownload,
   size = "md",
 }: {
   target: WatchTarget;
   onPlay: () => void;
+  onVlc: () => void;
   onDownload: () => void;
   size?: "md" | "sm";
 }) {
   const releases = target.releases;
   const canPlay = playableReleases(releases).length > 0;
   const canDownload = downloadableReleases(releases).length > 0;
-  // Any single file with mirrors will stream in a player app, packs included only as a file.
   const canStream = externalPlayerReleases(releases).length > 0;
   const resumeAt = useResumePoint(target.key);
   const base = cx(
@@ -63,7 +65,16 @@ export function WatchActions({
           <BetaBadge tone="inverse" />
         </button>
       )}
-      {canStream && <VlcPlayButton title={target.mediaTitle} releases={releases} className={cx(base, "bg-fill-2 text-fg hover:bg-fill-3")} />}
+      {canStream && (
+        <VlcPlayButton
+          title={target.mediaTitle}
+          heading={target.heading}
+          releases={releases}
+          onOpen={onVlc}
+          iconSize={size === "md" ? 15 : 13}
+          className={cx(base, "bg-fill-2 text-fg hover:bg-fill-3")}
+        />
+      )}
       {canDownload && (
         <button type="button" onClick={onDownload} className={cx(base, "bg-fill-2 text-fg hover:bg-fill-3")}>
           <Download size={size === "md" ? 15 : 12} aria-hidden="true" /> Download
@@ -73,16 +84,18 @@ export function WatchActions({
   );
 }
 
-/** A movie is one row: one Try Play, one Download (quality chosen in the popup). */
+/** A movie is one row: Try Play, Play with VLC, and Download. */
 export function MovieWatchSection({
   title,
   target,
   onPlay,
+  onVlc,
   onDownload,
 }: {
   title: MediaTitle;
   target: WatchTarget;
   onPlay: OpenTarget;
+  onVlc: OpenTarget;
   onDownload: OpenTarget;
 }) {
   return (
@@ -96,12 +109,17 @@ export function MovieWatchSection({
             </h2>
             <p className="mt-0.5 text-[12.5px] text-fg-2">{summary(target.releases)}</p>
           </div>
-          <WatchActions target={target} onPlay={() => onPlay(target)} onDownload={() => onDownload(target)} />
+          <WatchActions
+            target={target}
+            onPlay={() => onPlay(target)}
+            onVlc={() => onVlc(target)}
+            onDownload={() => onDownload(target)}
+          />
         </div>
         <p className="mt-2.5 text-[11.5px] leading-relaxed text-fg-3">
-          Download asks which quality you want. Try Play starts with the best quality and steps down automatically if
-          it won&apos;t play in your browser. Play with VLC skips the browser entirely and opens the best file in the
-          VLC app.
+          Play with VLC loads stream links for all available qualities so you can tap any one to open and play in VLC.
+          Try Play starts with the best quality in your browser and steps down automatically if needed. Download lets
+          you save the original file for any quality.
         </p>
       </div>
     </section>
@@ -116,6 +134,7 @@ export function SeasonTabsSection({
   releases,
   poster,
   onPlay,
+  onVlc,
   onDownload,
 }: {
   slug: string;
@@ -124,6 +143,7 @@ export function SeasonTabsSection({
   releases: MediaReleaseItem[];
   poster?: string;
   onPlay: OpenTarget;
+  onVlc: OpenTarget;
   onDownload: OpenTarget;
 }) {
   const tabs = useMemo(() => buildSeasonTabs(seasons, releases), [seasons, releases]);
@@ -148,6 +168,7 @@ export function SeasonTabsSection({
             seriesTitle={title.title}
             poster={poster}
             onPlay={onPlay}
+            onVlc={onVlc}
             onDownload={onDownload}
           />
         </div>
@@ -162,6 +183,7 @@ function SeasonPanel({
   seriesTitle,
   poster,
   onPlay,
+  onVlc,
   onDownload,
 }: {
   tab: SeasonTab;
@@ -169,6 +191,7 @@ function SeasonPanel({
   seriesTitle: string;
   poster?: string;
   onPlay: OpenTarget;
+  onVlc: OpenTarget;
   onDownload: OpenTarget;
 }) {
   const season = tab.season;
@@ -214,6 +237,7 @@ function SeasonPanel({
             target={packTarget}
             size="sm"
             onPlay={() => onPlay(packTarget)}
+            onVlc={() => onVlc(packTarget)}
             onDownload={() => onDownload(packTarget)}
           />
         </div>
@@ -242,6 +266,7 @@ function SeasonPanel({
               seriesTitle={seriesTitle}
               poster={poster}
               onPlay={onPlay}
+              onVlc={onVlc}
               onDownload={onDownload}
             />
           ))}
@@ -256,12 +281,14 @@ function EpisodeRow({
   seriesTitle,
   poster,
   onPlay,
+  onVlc,
   onDownload,
 }: {
   episode: Episode;
   seriesTitle: string;
   poster?: string;
   onPlay: OpenTarget;
+  onVlc: OpenTarget;
   onDownload: OpenTarget;
 }) {
   const releases = episode.releases ?? [];
@@ -311,6 +338,7 @@ function EpisodeRow({
             target={target}
             size="sm"
             onPlay={() => onPlay(target)}
+            onVlc={() => onVlc(target)}
             onDownload={() => onDownload(target)}
           />
         </div>

@@ -3,8 +3,8 @@
 import { useMemo } from "react";
 import { Copy, ExternalLink, FileDown } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
-import { saveTextFile } from "@/lib/media/externalLaunch";
-import { detectClientPlatform, externalPlayerOptions, type ExternalPlayerOption } from "@/lib/media/externalPlayers";
+import { clientPlatform, saveTextFile } from "@/lib/media/externalLaunch";
+import { externalPlayerOptions, type ExternalPlayerOption } from "@/lib/media/externalPlayers";
 import { useMounted } from "@/lib/useMounted";
 import { useUi } from "@/store/ui";
 
@@ -13,8 +13,7 @@ const chip =
 
 /**
  * "Open in VLC / MX Player / Infuse / desktop player" for one direct URL, plus Copy URL.
- * App links are best-effort (they only work when the app is installed); Copy URL always
- * works and can be pasted into any player's "Open network stream".
+ * Every app link is a real `<a href>` element so tapping it is a direct user gesture.
  */
 export function ExternalPlayerLinks({ url, title, className }: { url: string; title?: string; className?: string }) {
   const mounted = useMounted();
@@ -22,12 +21,7 @@ export function ExternalPlayerLinks({ url, title, className }: { url: string; ti
 
   const options = useMemo<ExternalPlayerOption[]>(() => {
     if (!mounted) return [];
-    const platform = detectClientPlatform({
-      userAgent: navigator.userAgent,
-      platform: navigator.platform,
-      maxTouchPoints: navigator.maxTouchPoints,
-    });
-    return externalPlayerOptions(url, { title, platform });
+    return externalPlayerOptions(url, { title, platform: clientPlatform() });
   }, [mounted, url, title]);
 
   const copy = async () => {
@@ -39,7 +33,10 @@ export function ExternalPlayerLinks({ url, title, className }: { url: string; ti
     }
   };
 
-  const saveFile = (file: NonNullable<ExternalPlayerOption["file"]>) => saveTextFile(file);
+  const saveFile = (file: NonNullable<ExternalPlayerOption["file"]>) => {
+    saveTextFile(file);
+    pushToast({ title: "Playlist saved", desc: `Open ${file.fileName} to play in VLC.`, kind: "ok", duration: 6000 });
+  };
 
   return (
     <div className={className}>

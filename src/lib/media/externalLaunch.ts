@@ -1,26 +1,40 @@
 /**
- * The browser side of handing a direct link to another app.
+ * Browser-side helpers for handing an already-resolved direct stream URL to VLC or
+ * another installed video player.
  *
- * Two things a page can actually do: navigate to an app's own URL scheme (phones — the
- * OS routes it to VLC / MX Player / Infuse), or save a tiny playlist file a computer opens
- * in its default player. A web page cannot launch a desktop app, so the second one is the
- * honest desktop version of "Play with VLC"; both are best-effort, which is why the UI
- * always offers "Copy link" beside them.
+ * Mobile browsers (Android Chrome, iOS Safari) only allow `intent:` and custom-scheme
+ * navigations inside a synchronous user gesture — never after an `await fetch()`.
+ * Therefore UI components must resolve links FIRST and render real `<a href={plan.href}>`
+ * elements for phone launches, using `saveTextFile()` only for desktop `.m3u` downloads.
  */
 
-import { detectClientPlatform, externalPlayerOptions, vlcLaunchPlan, type ClientPlatform, type ExternalPlayerOption, type PlatformEnv, type VlcLaunchPlan } from "./externalPlayers";
+import {
+  detectClientPlatform,
+  externalPlayerOptions,
+  vlcLaunchPlan,
+  type ClientPlatform,
+  type ExternalPlayerOption,
+  type PlatformEnv,
+  type VlcLaunchPlan,
+} from "./externalPlayers";
 
 export type SavedFile = NonNullable<ExternalPlayerOption["file"]>;
+
+interface NavigatorWithUAData extends Navigator {
+  userAgentData?: { platform?: string };
+}
 
 function browserEnv(env?: PlatformEnv): PlatformEnv {
   if (env) return env;
   if (typeof navigator === "undefined") return {};
-  const fine = typeof window !== "undefined" && typeof window.matchMedia === "function";
+  const nav = navigator as NavigatorWithUAData;
+  const canMatchMedia = typeof window !== "undefined" && typeof window.matchMedia === "function";
   return {
-    userAgent: navigator.userAgent,
-    platform: navigator.platform,
-    maxTouchPoints: navigator.maxTouchPoints,
-    hasFinePointer: fine ? window.matchMedia("(pointer: fine)").matches : undefined,
+    userAgent: nav.userAgent,
+    platform: nav.platform,
+    uaDataPlatform: nav.userAgentData?.platform,
+    maxTouchPoints: nav.maxTouchPoints,
+    hasFinePointer: canMatchMedia ? window.matchMedia("(pointer: fine)").matches : undefined,
   };
 }
 
@@ -29,8 +43,7 @@ export function clientPlatform(env?: PlatformEnv): ClientPlatform {
   return detectClientPlatform(browserEnv(env));
 }
 
-/** Open an app through its URL scheme. An anchor click (not `location.href`) keeps it a
- *  plain "open with…" navigation, so the page stays where it is if nothing answers. */
+/** Open an app through its URL scheme (only call synchronously inside a user gesture). */
 export function openAppLink(href: string): void {
   const anchor = document.createElement("a");
   anchor.href = href;
@@ -62,25 +75,36 @@ export function openExternalPlayerOption(option: ExternalPlayerOption): void {
 
 export interface VlcHandoff {
   plan: VlcLaunchPlan;
-  /** The other player apps for the same link (MX Player, Infuse, desktop playlist…). */
+  /** The other player apps for the same link (MX Player, Other app, Infuse, IINA…). */
   others: ExternalPlayerOption[];
 }
 
 /**
- * Start VLC with this link on the current device, and return the other players it could
- * have used. `null` when the URL is not something a player app can be given.
+ * Compute the VLC launch plan plus secondary installed-player options for one resolved
+ * direct URL without firing side effects, so React renders real `<a href>` elements.
  */
-export function playWithVlc(url: string, options: { title?: string; env?: PlatformEnv } = {}): VlcHandoff | null {
+export function buildVlcHandoff(url: string, options: { title?: string; env?: PlatformEnv } = {}): VlcHandoff | null {
   const platform = clientPlatform(options.env);
   const plan = vlcLaunchPlan(url, { title: options.title, platform });
   if (!plan) return null;
-  openExternalPlayerOption(plan.href ? { id: "vlc", label: "VLC", href: plan.href } : { id: "m3u", label: "VLC", file: plan.file });
-  // The other apps for the same link. VLC itself and the desktop playlist are what the
-  // button already did, so they are not repeated.
   return {
     plan,
     others: externalPlayerOptions(url, { title: options.title, platform }).filter(
       (option) => option.id !== "vlc" && option.id !== "m3u"
     ),
   };
+}
+
+/**
+ * Start VLC synchronously for an already-resolved link on the current device.
+ */
+export function playWithVlc(url: string, options: { title?: string; env?: PlatformEnv } = {}): VlcHandoff | null {
+  const handoff = buildVlcHandoff(url, options);
+  if (!handoff) return null;
+  openExternalPlayerOption(
+    handoff.plan.href
+      ? { id: "vlc", label: "VLC", href: handoff.plan.href }
+      : { id: "m3u", label: "VLC", file: handoff.plan.file }
+  );
+  return handoff;
 }

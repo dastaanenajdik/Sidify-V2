@@ -832,28 +832,23 @@ jise tap karte hi VLC khul jaye (iOS ho ya Android, PC pe bhi). Aur Try Play me 
 wo button aa jaaye, Download to aata hi hai. Search me abhi top result → songs → albums → artists
 → movies & series alag-alag aate hain; top result me hi dono load ho — upar songs, neeche movies."
 
-**Play with VLC button** — `src/components/media/VlcPlayButton.tsx` (+ `externalLaunch.ts`,
-`externalStream.ts`, `vlcLaunchPlan()` in `externalPlayers.ts`):
+**Play with VLC button & sheet** — `src/components/media/VlcPickerSheet.tsx`, `VlcPlayButton.tsx`
+(+ `externalLaunch.ts`, `externalStream.ts`, `vlcLaunchPlan()` in `externalPlayers.ts`):
 
-- Row actions ab **Try Play (beta) · Play with VLC · Download** (`WatchActions` ek `target` leta hai,
-  `releases`/`resumeKey` alag se nahi). Movie hero pe bhi wahi button (Try Play ke bagal me).
-- Pehla tap mirror short-links se direct link nikaalta hai (`resolveExternalStream`: qualities
-  best-first, max 3, har quality ke saare mirrors, `blocked` mirror skip, `/api/media/resolve` ka
-  10-min cache second tap ko instant bana deta hai) — phir `playWithVlc()` usse device ko de deta hai.
-- Android `intent://…package=org.videolan.vlc` (VLC installed na ho to Play Store), iOS
-  `vlc-x-callback://x-callback-url/stream?url=`. Desktop/Mac pe browser app launch nahi kar sakta,
-  isliye ek-line ka `.m3u` save hota hai + toast ("open it and VLC plays").
-- Handoff ke baad button asli `<a href>` ho jaata hai — dobara tap ek real user gesture hai (phones
-  scheme navigation ke liye gesture maangte hain) — aur neeche **Copy link** + baaki players
-  (MX Player / Infuse / IINA / Android chooser) aa jaate hain.
-- Try Play (beta) fail hone par sheet me **Play with VLC** primary action hai (pehle wala
-  `DownloadFileLink` ab normal chip), aur `ExternalPlayerLinks` row neeche jaisa tha waisa hi.
-  Archive/pack rows par button nahi dikhta (`externalPlayerReleases()` ZIP/RAR/7Z ko hata deta hai).
-- `detectClientPlatform` me naya `hasFinePointer`: Apple Silicon MacBooks `maxTouchPoints > 1`
-  report karte hain aur wahi "Macintosh" UA jo desktop-mode iPad ka hota hai, isliye pehle Mac Safari
-  "iOS" samajh kar `vlc-x-callback://` link paata tha jo kuch karta nahi. Fine pointer = laptop → `.m3u`.
-- Tests: `tests/playback.test.cjs` me 5 naye cases (`vlcLaunchPlan`, `isDirectMediaUrl`,
-  `externalPlayerReleases`, `externalPlayerLink`, pointer-based platform), sab framework-free.
+- Row actions **Try Play (beta) · Play with VLC · Download** (movie hero, movie watch row, har series
+  episode row, Try Play sheet, aur Download sheet rows).
+- **Play with VLC** click karte hi `VlcPickerSheet` khulta hai aur **saari qualities** (`2160p`,
+  `1080p`, `720p`, `480p`…) ke mirrors parallel (`resolveAllReleaseStreams`, concurrency 3, `blocked`
+  mirrors skip) resolve karke har quality ke saare server links (`FSL Server`, `PixelServer`, aadi)
+  load kar deta hai.
+- Kyunki mobile browsers (`intent:` Android / `vlc-x-callback:` iOS) sirf synchronous real user
+  gesture me external app खोलte hain (`await fetch` ke baad programmatic `anchor.click()` block ho
+  jaata hai), har resolved server link pehle se hi real `<a href>` hota hai — user jis bhi quality /
+  server link pe click kare, turant VLC khulta hai aur stream play hone lagti hai. Desktop par `.m3u`
+  playlist save hoti hai + Copy link har row par milta hai.
+- `detectClientPlatform` me `hasFinePointer` + `uaDataPlatform` + coarse-touch Linux detection: Apple
+  Silicon MacBooks `mac` par rehte hain, iPad `ios` par, aur Android Chrome "Desktop site" mode me bhi
+  phone `android` hi rehta hai (`intent://…package=org.videolan.vlc`).
 
 **Search — dono ek hi jagah** (`src/app/search/page.tsx` `AllResults`): "Top results" ab ek block
 hai — Top result card (left) aur right column me **Songs** ke list ke turant neeche **Movies &

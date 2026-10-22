@@ -24,6 +24,7 @@ import { BetaBadge, BetaPlayerSheet } from "./BetaPlayerSheet";
 import { PosterCard, posterShelfClass } from "./PosterCard";
 import { QualityPickerSheet } from "./QualityPickerSheet";
 import { TrailerSheet } from "./TrailerSheet";
+import { VlcPickerSheet } from "./VlcPickerSheet";
 import { VlcPlayButton } from "./VlcPlayButton";
 import { useResumePoint } from "./useResumePoint";
 import { MovieWatchSection, SeasonTabsSection } from "./WatchSections";
@@ -40,6 +41,7 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
   // One item (movie / episode / season packs) at a time in each sheet.
   const [downloadTarget, setDownloadTarget] = useState<WatchTarget | null>(null);
   const [playTarget, setPlayTarget] = useState<WatchTarget | null>(null);
+  const [vlcTarget, setVlcTarget] = useState<WatchTarget | null>(null);
 
   const saved = useWatchlist((s) => s.items.some((item) => item.id === `${title.kind}:${title.slug}`));
   const toggle = useWatchlist((s) => s.toggle);
@@ -65,13 +67,21 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
 
   const openPlay = useCallback((target: WatchTarget) => {
     setDownloadTarget(null);
+    setVlcTarget(null);
     setPlayTarget(target);
+  }, []);
+  const openVlc = useCallback((target: WatchTarget) => {
+    setPlayTarget(null);
+    setDownloadTarget(null);
+    setVlcTarget(target);
   }, []);
   const openDownload = useCallback((target: WatchTarget) => {
     setPlayTarget(null);
+    setVlcTarget(null);
     setDownloadTarget(target);
   }, []);
   const closePlay = useCallback(() => setPlayTarget(null), []);
+  const closeVlc = useCallback(() => setVlcTarget(null), []);
   const closeDownload = useCallback(() => setDownloadTarget(null), []);
 
   const backdrop = backdropBroken
@@ -187,7 +197,9 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
                       {movieCanStream && (
                         <VlcPlayButton
                           title={movieTarget.mediaTitle}
+                          heading={movieTarget.heading}
                           releases={movieTarget.releases}
+                          onOpen={() => openVlc(movieTarget)}
                           iconSize={16}
                           className={
                             "inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-white/16 px-5 text-[15px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-xl transition-colors hover:bg-white/24 active:scale-[0.97]"
@@ -268,7 +280,7 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
           )}
 
           {movieTarget && (
-            <MovieWatchSection title={title} target={movieTarget} onPlay={openPlay} onDownload={openDownload} />
+            <MovieWatchSection title={title} target={movieTarget} onPlay={openPlay} onVlc={openVlc} onDownload={openDownload} />
           )}
 
           {hasSeasonTabs && (
@@ -279,6 +291,7 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
               releases={releases}
               poster={posterUrl}
               onPlay={openPlay}
+              onVlc={openVlc}
               onDownload={openDownload}
             />
           )}
@@ -308,8 +321,9 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
       {/* Sheets live outside the animated <article>: its `fade-up` transform animation would
           otherwise become the containing block of the sheets' `position: fixed` overlay. */}
       <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={title.title} />
+      <VlcPickerSheet target={vlcTarget} onClose={closeVlc} />
       <QualityPickerSheet target={downloadTarget} onClose={closeDownload} />
-      <BetaPlayerSheet target={playTarget} onClose={closePlay} onDownload={openDownload} />
+      <BetaPlayerSheet target={playTarget} onClose={closePlay} onOpenVlc={openVlc} onDownload={openDownload} />
     </>
   );
 }
@@ -402,10 +416,12 @@ function StreamExtras({
   videoRef,
   resumeKey,
   sourceUrl,
+  title,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   resumeKey: string;
   sourceUrl: string;
+  title: string;
 }) {
   const [resumedFrom, setResumedFrom] = useState<number | null>(null);
 
@@ -484,6 +500,7 @@ function StreamExtras({
       <button type="button" onClick={() => seekBy(10)} aria-label="Forward 10 seconds" title="Forward 10 seconds" className={chipClass}>
         10s <RotateCw size={14} aria-hidden="true" />
       </button>
+      <VlcPlayButton url={sourceUrl} title={title} className={chipClass} />
       {resumedFrom !== null && (
         <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-fill/60 pr-1 pl-3 text-[12.5px] text-fg-2">
           Resumed from {formatPlaybackTime(resumedFrom)}
@@ -614,7 +631,14 @@ function PlaybackSection({
           />
         )}
       </div>
-      {!embed && <StreamExtras videoRef={streamVideoRef} resumeKey={`stream-${title.kind}-${title.slug}`} sourceUrl={source.url} />}
+      {!embed && (
+        <StreamExtras
+          videoRef={streamVideoRef}
+          resumeKey={`stream-${title.kind}-${title.slug}`}
+          sourceUrl={source.url}
+          title={title.title}
+        />
+      )}
 
       {failureMessage && (
         <div

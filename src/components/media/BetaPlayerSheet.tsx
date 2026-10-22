@@ -74,10 +74,12 @@ interface BetaPlayerHandle {
 export function BetaPlayerSheet({
   target,
   onClose,
+  onOpenVlc,
   onDownload,
 }: {
   target: WatchTarget | null;
   onClose: () => void;
+  onOpenVlc?: (target: WatchTarget) => void;
   onDownload: (target: WatchTarget) => void;
 }) {
   const playerRef = useRef<BetaPlayerHandle | null>(null);
@@ -103,6 +105,14 @@ export function BetaPlayerSheet({
           key={target.key}
           ref={playerRef}
           target={target}
+          onOpenVlc={
+            onOpenVlc
+              ? () => {
+                  close();
+                  onOpenVlc(target);
+                }
+              : undefined
+          }
           onDownload={() => {
             close();
             onDownload(target);
@@ -168,10 +178,12 @@ function DownloadFileLink({ url, quality }: { url: string; quality: string }) {
 
 function BetaPlayer({
   target,
+  onOpenVlc,
   onDownload,
   ref,
 }: {
   target: WatchTarget;
+  onOpenVlc?: () => void;
   onDownload: () => void;
   ref?: Ref<BetaPlayerHandle>;
 }) {
@@ -729,11 +741,13 @@ function BetaPlayer({
             </div>
           )}
           <div className="flex flex-wrap items-center gap-1.5">
-            {handoffUrl && (
+            {(target.releases.length > 0 || handoffUrl) && (
               <VlcPlayButton
-                url={handoffUrl}
+                url={target.releases.length > 0 ? undefined : handoffUrl}
+                releases={target.releases}
+                onOpen={onOpenVlc}
                 title={target.mediaTitle}
-                showActions={false}
+                heading={target.heading}
                 className={cx(primaryChip, "active:scale-[0.97]")}
               />
             )}
@@ -880,11 +894,13 @@ function BetaPlayer({
                     <SkipForward size={13} aria-hidden="true" /> Try {qualityLabel(releases[activeIndex + 1])}
                   </button>
                 )}
-                {lastUrl && (
+                {(target.releases.length > 0 || lastUrl) && (
                   <VlcPlayButton
-                    url={lastUrl}
+                    url={target.releases.length > 0 ? undefined : lastUrl}
+                    releases={target.releases}
+                    onOpen={onOpenVlc}
                     title={target.mediaTitle}
-                    showActions={false}
+                    heading={target.heading}
                     className={cx(chip, "active:scale-[0.97]")}
                   />
                 )}
