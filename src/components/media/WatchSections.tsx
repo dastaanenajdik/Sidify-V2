@@ -14,8 +14,10 @@ import {
 import { buildSeasonTabs, episodeCode, type SeasonTab } from "@/lib/media/seasonTabs";
 import type { Episode, MediaReleaseItem, MediaTitle, Season } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
+import { formatPlaybackTime } from "@/lib/media/resumePoints";
 import { cx } from "@/lib/format";
 import { BetaBadge } from "./BetaPlayerSheet";
+import { useResumePoint } from "./useResumePoint";
 import type { WatchTarget } from "./watch";
 
 type OpenTarget = (target: WatchTarget) => void;
@@ -30,15 +32,19 @@ export function WatchActions({
   releases,
   onPlay,
   onDownload,
+  resumeKey,
   size = "md",
 }: {
   releases: MediaReleaseItem[];
   onPlay: () => void;
   onDownload: () => void;
+  /** `WatchTarget.key` — shows "Resume 23:10" when this item was left part-way. */
+  resumeKey?: string;
   size?: "md" | "sm";
 }) {
   const canPlay = playableReleases(releases).length > 0;
   const canDownload = downloadableReleases(releases).length > 0;
+  const resumeAt = useResumePoint(resumeKey);
   const base = cx(
     "inline-flex shrink-0 items-center gap-1.5 rounded-full font-semibold transition-[background,opacity,transform] active:scale-[0.97]",
     size === "md" ? "h-10 px-4 text-[14px]" : "h-8 px-3 text-[12.5px]"
@@ -47,7 +53,8 @@ export function WatchActions({
     <div className="flex shrink-0 flex-wrap items-center gap-1.5">
       {canPlay && (
         <button type="button" onClick={onPlay} className={cx(base, "bg-primary text-on-primary hover:opacity-90")}>
-          <Play size={size === "md" ? 15 : 12} fill="currentColor" aria-hidden="true" /> Try Play
+          <Play size={size === "md" ? 15 : 12} fill="currentColor" aria-hidden="true" />{" "}
+          {resumeAt !== null ? `Resume ${formatPlaybackTime(resumeAt)}` : "Try Play"}
           <BetaBadge tone="inverse" />
         </button>
       )}
@@ -83,7 +90,12 @@ export function MovieWatchSection({
             </h2>
             <p className="mt-0.5 text-[12.5px] text-fg-2">{summary(target.releases)}</p>
           </div>
-          <WatchActions releases={target.releases} onPlay={() => onPlay(target)} onDownload={() => onDownload(target)} />
+          <WatchActions
+            releases={target.releases}
+            resumeKey={target.key}
+            onPlay={() => onPlay(target)}
+            onDownload={() => onDownload(target)}
+          />
         </div>
         <p className="mt-2.5 text-[11.5px] leading-relaxed text-fg-3">
           Download asks which quality you want. Try Play starts with the best quality and steps down automatically if
@@ -170,7 +182,7 @@ function SeasonPanel({
     tab.seasonNumber === null ? "More downloads" : allArchives ? `Complete ${tab.label}` : `${tab.label} downloads`;
   const packTarget: WatchTarget | null = tab.packs.length
     ? {
-        key: `${tab.key}-packs`,
+        key: `${slug}-${tab.key}-packs`,
         heading:
           tab.seasonNumber === null
             ? `${seriesTitle} · More downloads`
@@ -199,6 +211,7 @@ function SeasonPanel({
           <WatchActions
             releases={tab.packs}
             size="sm"
+            resumeKey={packTarget.key}
             onPlay={() => onPlay(packTarget)}
             onDownload={() => onDownload(packTarget)}
           />
@@ -296,6 +309,7 @@ function EpisodeRow({
           <WatchActions
             releases={releases}
             size="sm"
+            resumeKey={target.key}
             onPlay={() => onPlay(target)}
             onDownload={() => onDownload(target)}
           />

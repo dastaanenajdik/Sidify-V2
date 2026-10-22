@@ -2,11 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Bookmark, Check, Copy, Download, ExternalLink, ListVideo, Play, Star } from "lucide-react";
+import { Bookmark, Check, Copy, Download, ExternalLink, ListVideo, Play, RotateCcw, RotateCw, Star } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
 import { mediaArt } from "@/lib/media/art";
 import { attachPlaybackSource, type HlsPlaybackMode } from "@/lib/media/hlsPlayer";
 import { playableReleases } from "@/lib/media/playbackPlan";
+import {
+  clearResumePoint,
+  formatPlaybackTime,
+  loadResumePoint,
+  resumePosition,
+  saveResumePoint,
+} from "@/lib/media/resumePoints";
 import type { MediaDetail, PlaybackSource } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { SectionHeader, Shelf } from "@/components/ui";
@@ -17,6 +24,7 @@ import { BetaBadge, BetaPlayerSheet } from "./BetaPlayerSheet";
 import { PosterCard, posterShelfClass } from "./PosterCard";
 import { QualityPickerSheet } from "./QualityPickerSheet";
 import { TrailerSheet } from "./TrailerSheet";
+import { useResumePoint } from "./useResumePoint";
 import { MovieWatchSection, SeasonTabsSection } from "./WatchSections";
 import type { WatchTarget } from "./watch";
 
@@ -49,6 +57,7 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
     [isSeries, releases, title.slug, title.title, posterUrl]
   );
   const movieCanPlay = movieTarget ? playableReleases(movieTarget.releases).length > 0 : false;
+  const movieResumeAt = useResumePoint(movieTarget?.key);
   const hasSeasonTabs = isSeries && (seasons.length > 0 || releases.length > 0);
   const hasEpisodeFiles = seasons.some((season) => season.episodes.some((episode) => (episode.releases?.length ?? 0) > 0));
 
@@ -168,7 +177,8 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
                           onClick={() => openPlay(movieTarget)}
                           className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[15px] font-semibold text-black transition-transform active:scale-[0.97] hover:opacity-90"
                         >
-                          <Play size={16} fill="currentColor" aria-hidden="true" /> Try Play
+                          <Play size={16} fill="currentColor" aria-hidden="true" />{" "}
+                          {movieResumeAt !== null ? `Resume ${formatPlaybackTime(movieResumeAt)}` : "Try Play"}
                           <BetaBadge tone="onWhite" />
                         </button>
                       )}
@@ -303,15 +313,16 @@ function formatRuntime(minutes: number): string {
 function MediaStreamPlayer({
   source,
   poster,
+  videoRef,
   onModeChange,
   onStreamError,
 }: {
   source: PlaybackSource;
   poster?: string;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   onModeChange: (url: string, mode: HlsPlaybackMode) => void;
   onStreamError: (url: string, message: string) => void;
 }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const videoEl = videoRef.current;
@@ -347,7 +358,7 @@ function MediaStreamPlayer({
       window.clearTimeout(timer);
       teardown?.();
     };
-  }, [source, onModeChange, onStreamError]);
+  }, [source, videoRef, onModeChange, onStreamError]);
 
   return (
     <video
@@ -370,6 +381,113 @@ function MediaStreamPlayer({
   );
 }
 
+/**
+ * ⟲ 10s / 10s ⟳ and "continue from where you stopped" for the operator stream player.
+ * Positions are saved only while a source is loaded (readyState ≥ 1), so tearing a source
+ * down never overwrites the saved spot with 0.
+ */
+function StreamExtras({
+  videoRef,
+  resumeKey,
+  sourceUrl,
+}: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  resumeKey: string;
+  sourceUrl: string;
+}) {
+  const [resumedFrom, setResumedFrom] = useState<number | null>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const stored = resumePosition(loadResumePoint(resumeKey));
+    let restored = false;
+    let lastSaved = 0;
+    const loaded = () => video.readyState >= 1 && Boolean(video.currentSrc) && Number.isFinite(video.currentTime);
+    const save = () => {
+      if (!loaded()) return;
+      lastSaved = video.currentTime;
+      saveResumePoint(resumeKey, video.currentTime, Number.isFinite(video.duration) ? video.duration : undefined);
+    };
+    const onMetadata = () => {
+      if (restored || stored === null) return;
+      restored = true;
+      if (Number.isFinite(video.duration) && stored >= video.duration - 1) return;
+      try {
+        video.currentTime = stored;
+        setResumedFrom(stored);
+      } catch {
+        /* not seekable yet */
+      }
+    };
+    const onTime = () => {
+      if (loaded() && Math.abs(video.currentTime - lastSaved) >= 5) save();
+    };
+    const onPause = () => {
+      if (!video.ended) save();
+    };
+    const onEnded = () => clearResumePoint(resumeKey);
+    const onHide = () => {
+      if (document.visibilityState === "hidden") save();
+    };
+    video.addEventListener("loadedmetadata", onMetadata);
+    video.addEventListener("timeupdate", onTime);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("ended", onEnded);
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", save);
+    if (video.readyState >= 1) onMetadata();
+    return () => {
+      save();
+      video.removeEventListener("loadedmetadata", onMetadata);
+      video.removeEventListener("timeupdate", onTime);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("ended", onEnded);
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", save);
+    };
+  }, [videoRef, resumeKey, sourceUrl]);
+
+  const seekBy = (delta: number) => {
+    const video = videoRef.current;
+    if (!video || video.readyState < 1 || !Number.isFinite(video.currentTime)) return;
+    const end = Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.25) : Number.POSITIVE_INFINITY;
+    video.currentTime = Math.min(end, Math.max(0, video.currentTime + delta));
+  };
+
+  const startOver = () => {
+    clearResumePoint(resumeKey);
+    setResumedFrom(null);
+    const video = videoRef.current;
+    if (video && video.readyState >= 1) video.currentTime = 0;
+  };
+
+  const chipClass =
+    "inline-flex h-8 items-center gap-1.5 rounded-full bg-fill-2 px-3.5 text-[12.5px] font-semibold text-fg hover:bg-fill-3";
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+      <button type="button" onClick={() => seekBy(-10)} aria-label="Back 10 seconds" title="Back 10 seconds" className={chipClass}>
+        <RotateCcw size={14} aria-hidden="true" /> 10s
+      </button>
+      <button type="button" onClick={() => seekBy(10)} aria-label="Forward 10 seconds" title="Forward 10 seconds" className={chipClass}>
+        10s <RotateCw size={14} aria-hidden="true" />
+      </button>
+      {resumedFrom !== null && (
+        <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-fill/60 pr-1 pl-3 text-[12.5px] text-fg-2">
+          Resumed from {formatPlaybackTime(resumedFrom)}
+          <button
+            type="button"
+            onClick={startOver}
+            className="h-6 rounded-full bg-fill-2 px-2.5 text-[12px] font-semibold text-fg hover:bg-fill-3"
+          >
+            Start over
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
+
 function PlaybackSection({
   playback,
   active,
@@ -385,6 +503,7 @@ function PlaybackSection({
   const pushToast = useUi((s) => s.pushToast);
   const [failedReasons, setFailedReasons] = useState<Record<string, string>>({});
   const [streamModes, setStreamModes] = useState<Record<string, HlsPlaybackMode>>({});
+  const streamVideoRef = useRef<HTMLVideoElement | null>(null);
   const downloads = detail.downloads ?? [];
 
   // Stable callbacks, so reporting a mode/error doesn't re-run (and re-attach) the player.
@@ -477,11 +596,13 @@ function PlaybackSection({
           <MediaStreamPlayer
             source={source}
             poster={title.backdrop ?? title.poster ?? undefined}
+            videoRef={streamVideoRef}
             onModeChange={handleModeChange}
             onStreamError={handleStreamError}
           />
         )}
       </div>
+      {!embed && <StreamExtras videoRef={streamVideoRef} resumeKey={`stream-${title.kind}-${title.slug}`} sourceUrl={source.url} />}
 
       {failureMessage && (
         <div

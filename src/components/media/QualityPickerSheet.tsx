@@ -277,6 +277,7 @@ function LinkList({ links, title }: { links: ResolvedMirrorLink[]; title: string
                 href={link.url}
                 target="_blank"
                 rel="noreferrer noopener"
+                download
                 className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-semibold text-on-primary hover:opacity-90"
               >
                 <Download size={13} aria-hidden="true" /> Download
@@ -295,6 +296,12 @@ function LinkList({ links, title }: { links: ResolvedMirrorLink[]; title: string
           </li>
         ))}
       </ul>
+
+      <p className="text-[11.5px] leading-relaxed text-fg-3">
+        Downloads are the original file — video plus every audio track. If it opens in a browser tab instead of
+        saving, long-press the Download button (phone) or right-click it (computer) and choose “Download link” /
+        “Save link as”.
+      </p>
 
       {preferred && (
         <div className="rounded-[12px] bg-fill/40 px-3 py-2.5">

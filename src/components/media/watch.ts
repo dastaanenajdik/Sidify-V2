@@ -5,7 +5,10 @@ import type { MediaReleaseItem } from "@/lib/media/types";
  * Its `releases` are every quality/encode of that one item.
  */
 export interface WatchTarget {
-  /** Stable per item, e.g. `movie`, `s2e5`, `s2-packs`. */
+  /**
+   * Stable and unique per item across titles — `movie-<slug>`, `<slug>-s2e5`,
+   * `<slug>-s2-packs`. Also the key of the saved "continue from" position.
+   */
   key: string;
   /** Sheet heading, e.g. `Moana` or `S02E05 · Marvel's The Punisher`. */
   heading: string;

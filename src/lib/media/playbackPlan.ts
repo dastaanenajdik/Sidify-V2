@@ -6,8 +6,13 @@
  *   - Highest quality first (2160p → 1080p → 720p → 480p); equal tiers keep page order.
  *   - MKV / extension-less direct files are *attempted*, never marked verified-playable.
  *     Success is decided by real playback events in the browser, not by file names.
- *   - A file-level failure (decode error, or no picture after metadata) skips the other
- *     servers/mirrors of the same release — they serve the same encode.
+ *   - A link only counts as playing when its picture AND its sound work. Where the engine
+ *     exposes live decoder counters (Chromium), a file whose video decodes but whose audio
+ *     doesn't (e.g. Dolby DD/DDP in Chrome) is a `no-audio` failure and the next quality is
+ *     tried. Elsewhere, releases whose file name suggests only browser-unsupported audio
+ *     are tried after the others (order only — never a verdict).
+ *   - A file-level failure (decode error, no picture after metadata, no sound) skips the
+ *     other servers/mirrors of the same release — they serve the same encode.
  *   - Network-type failures try the next server/mirror; at most ONE fresh re-resolve per
  *     session. A `blocked` (CAPTCHA / 401–403) mirror is skipped, never retried or bypassed.
  *   - Attempts and wall-clock time per session are capped.
@@ -176,13 +181,48 @@ export function landingPageUrl(result: Pick<MirrorResolveResult, "links"> | null
 
 /* --------------------------- attempt outcomes ---------------------------- */
 
-export type AttemptFailure = "network" | "decode" | "no-picture" | "timeout";
+export type AttemptFailure = "network" | "decode" | "no-picture" | "timeout" | "no-audio";
 
 export type AttemptOutcome = { ok: true } | { ok: false; failure: AttemptFailure | "aborted" };
 
-/** The same encode on another server will not decode either. */
+/** The same encode on another server will not decode (or sound) any better. */
 export function isFileLevelFailure(failure: AttemptFailure | "aborted"): boolean {
-  return failure === "decode" || failure === "no-picture";
+  return failure === "decode" || failure === "no-picture" || failure === "no-audio";
+}
+
+/** Seconds of real playback before a file with zero decoded audio counts as silent. */
+export const AUDIO_CHECK_SECONDS = 2;
+
+export interface AudioSample {
+  /** Seconds of media played since the check started. */
+  progress: number;
+  /** `webkitAudioDecodedByteCount` — compressed audio bytes the decoder consumed. */
+  audioBytes: number | undefined;
+  /** `webkitVideoDecodedByteCount` — proves the counters are live in this engine. */
+  videoBytes: number | undefined;
+  /** `getVideoPlaybackQuality().totalVideoFrames`, a progress signal that survives stalls. */
+  frames?: number;
+}
+
+export type AudioVerdict = "audio" | "silent" | "pending" | "unknown";
+
+/**
+ * Is the sound actually decoding? Chromium counts the compressed bytes each decoder
+ * consumes. A track the browser can't decode (AC-3 / E-AC-3 / DTS in Chrome) never reaches
+ * a decoder, so its counter stays at 0 while the video counter climbs. The counter does
+ * not depend on volume or mute, so muted autoplay is checked the same way.
+ *   - `audio`:   audio bytes are being decoded.
+ *   - `silent`:  video decoded for AUDIO_CHECK_SECONDS (or ~2 s of frames) with no audio.
+ *   - `unknown`: counters aren't live here (video counter stuck at 0) — can't tell.
+ *   - `pending`: keep watching.
+ */
+export function audioVerdict(sample: AudioSample, minProgress = AUDIO_CHECK_SECONDS): AudioVerdict {
+  const audio = Number(sample.audioBytes) || 0;
+  const video = Number(sample.videoBytes) || 0;
+  if (audio > 0) return "audio";
+  const progressed = sample.progress >= minProgress || (sample.frames ?? 0) >= minProgress * 30;
+  if (!progressed) return "pending";
+  return video > 0 ? "silent" : "unknown";
 }
 
 /**
@@ -220,8 +260,8 @@ export function classifyHlsFatal(kind: string | undefined): AttemptFailure {
 
 /* ------------------------------ the loop -------------------------------- */
 
-export const MAX_ATTEMPTS_PER_SESSION = 8;
-export const SESSION_BUDGET_MS = 150_000;
+export const MAX_ATTEMPTS_PER_SESSION = 12;
+export const SESSION_BUDGET_MS = 180_000;
 
 /** One user action ("Try Play", pick a quality, "Try again"). Automatic recovery reuses it. */
 export class PlaybackSession {
@@ -249,9 +289,16 @@ export interface PlaybackStatus {
   attempt?: number;
 }
 
+/** The best link that showed a picture but had no sound (offered as "Play without sound"). */
+export interface SilentCandidate {
+  releaseIndex: number;
+  release: MediaReleaseItem;
+  candidate: StreamCandidate;
+}
+
 export type FallbackResult =
   | { status: "playing"; releaseIndex: number; release: MediaReleaseItem; candidate: StreamCandidate }
-  | { status: "failed"; reason: "exhausted" | "no-sources" | "limit" }
+  | { status: "failed"; reason: "exhausted" | "no-sources" | "limit"; silent?: SilentCandidate }
   | { status: "aborted" };
 
 export interface FallbackOptions {
@@ -261,7 +308,34 @@ export interface FallbackOptions {
   signal?: AbortSignal;
   /** Index into `releases` to start from (manual quality pick / "next quality"). */
   startIndex?: number;
+  /**
+   * Releases to try only after the others (e.g. file name suggests audio this browser
+   * can't decode). Changes the order, never skips anything.
+   */
+  isDeferred?: (release: MediaReleaseItem) => boolean;
+  /** The user picked `startIndex` themselves: try it first even if it is deferred. */
+  pinStart?: boolean;
   now?: () => number;
+}
+
+/**
+ * Order in which releases are tried: from `startIndex` down, best quality first, with
+ * deferred releases moved after the rest (each group keeps its order). A pinned start
+ * stays first.
+ */
+export function attemptOrder(
+  releases: readonly MediaReleaseItem[],
+  options: { startIndex?: number; isDeferred?: (release: MediaReleaseItem) => boolean; pinStart?: boolean } = {}
+): number[] {
+  const start = Math.max(0, options.startIndex ?? 0);
+  const indices: number[] = [];
+  for (let i = start; i < releases.length; i++) indices.push(i);
+  const deferred = options.isDeferred;
+  if (!deferred) return indices;
+  const head = options.pinStart && indices.length ? [indices.shift()!] : [];
+  const now = indices.filter((i) => !deferred(releases[i]));
+  const later = indices.filter((i) => deferred(releases[i]));
+  return [...head, ...now, ...later];
 }
 
 type Verdict =
@@ -282,10 +356,11 @@ export async function runPlaybackFallback(
   const isAborted = () => Boolean(signal?.aborted);
   const overLimit = () => session.attempts >= session.maxAttempts || now() - session.startedAt > session.budgetMs;
   let sawCandidate = false;
+  let silent: SilentCandidate | undefined;
 
   const failed = (reason: "exhausted" | "no-sources" | "limit"): FallbackResult => {
     onStatus?.({ phase: "failed" });
-    return { status: "failed", reason };
+    return silent ? { status: "failed", reason, silent } : { status: "failed", reason };
   };
 
   const playing = (releaseIndex: number, release: MediaReleaseItem, candidate: StreamCandidate): FallbackResult => {
@@ -315,6 +390,8 @@ export async function runPlaybackFallback(
       }
       if (isAborted() || (!outcome.ok && outcome.failure === "aborted")) return { kind: "aborted" };
       if (outcome.ok) return { kind: "played", candidate };
+      // Keep the best (highest-quality) silent link, whatever order releases were tried in.
+      if (outcome.failure === "no-audio" && (!silent || releaseIndex < silent.releaseIndex)) silent = { releaseIndex, release, candidate };
       if (isFileLevelFailure(outcome.failure)) return { kind: "file-failed" };
     }
     return { kind: "network-failed" };
@@ -328,7 +405,8 @@ export async function runPlaybackFallback(
     }
   };
 
-  for (let releaseIndex = Math.max(0, options.startIndex ?? 0); releaseIndex < releases.length; releaseIndex++) {
+  const order = attemptOrder(releases, { startIndex: options.startIndex, isDeferred: options.isDeferred, pinStart: options.pinStart });
+  for (const releaseIndex of order) {
     const release = releases[releaseIndex];
 
     for (const mirror of release.mirrors) {

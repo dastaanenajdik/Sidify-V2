@@ -11,6 +11,20 @@ import type { BrowserCapabilities } from "./releaseHints";
 
 export type CanPlayTypeProbe = Pick<HTMLMediaElement, "canPlayType">;
 
+/**
+ * Live decoder counters (`webkitAudioDecodedByteCount` / `webkitVideoDecodedByteCount`)
+ * are only trusted in Chromium (detected by `navigator.userAgentData`, a Chromium-only
+ * API). WebKit has the same properties, but Safari's AVFoundation playback leaves them at 0.
+ */
+export function hasLiveDecoderCounters(
+  target: object | null | undefined,
+  nav: object | null | undefined = typeof navigator === "undefined" ? null : navigator
+): boolean {
+  if (!target || !nav || !("userAgentData" in nav)) return false;
+  const counters = target as { webkitAudioDecodedByteCount?: unknown; webkitVideoDecodedByteCount?: unknown };
+  return typeof counters.webkitAudioDecodedByteCount === "number" && typeof counters.webkitVideoDecodedByteCount === "number";
+}
+
 const PROBES = {
   h264: ['video/mp4; codecs="avc1.640028"', 'video/mp4; codecs="avc1.42E01E"'],
   hevc: ['video/mp4; codecs="hvc1.2.4.L153.B0"', 'video/mp4; codecs="hev1.1.6.L93.B0"', 'video/mp4; codecs="hvc1.1.6.L93.B0"'],
@@ -63,5 +77,6 @@ export function probeBrowserCapabilities(probe?: CanPlayTypeProbe | null): Brows
     eac3: supports(target, PROBES.eac3),
     opus: supports(target, PROBES.opus),
     mkv,
+    audioCounters: hasLiveDecoderCounters(target),
   };
 }

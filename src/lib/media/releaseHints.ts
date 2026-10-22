@@ -117,12 +117,40 @@ export interface BrowserCapabilities {
    * (unknown — older Chromium answered "" yet played MKV fine).
    */
   mkv: true | null;
+  /**
+   * The engine exposes live decoder byte counters (`webkitAudioDecodedByteCount`), so
+   * Try Play can check at runtime that a file's sound really decodes. Chromium only.
+   */
+  audioCounters?: boolean;
+}
+
+/** Whether the browser *reports* it can decode an audio codec named in a file name. */
+const AUDIO_DECODABLE: Record<AudioCodecHint, (caps: BrowserCapabilities) => boolean> = {
+  aac: (caps) => caps.aac,
+  opus: (caps) => caps.opus,
+  flac: () => true,
+  eac3: (caps) => caps.eac3,
+  ac3: (caps) => caps.ac3,
+  // No mainstream browser decodes these.
+  truehd: () => false,
+  dts: () => false,
+};
+
+/**
+ * True when every audio codec the file name mentions is one this browser reports it can't
+ * decode (typically `[Hindi DD 5.1 + English DDP 5.1]` in Chrome / Firefox). A guess from
+ * text: Try Play only uses it to try such releases after the others — whether a file
+ * really has sound is decided by runtime checks, never by this.
+ */
+export function predictSilentAudio(hints: ReleaseHints, caps: BrowserCapabilities | null): boolean {
+  if (!caps || hints.audio.length === 0) return false;
+  return hints.audio.every((codec) => !AUDIO_DECODABLE[codec](caps));
 }
 
 /**
  * Soft, hedged notes that combine file-name hints with reported browser capabilities.
- * Wording is deliberately "may": neither input is verified, and silent audio is never
- * detected automatically — the user is pointed at the manual external-player fallback.
+ * Wording is deliberately "may": neither input is verified. (Where the engine has live
+ * decoder counters, Try Play checks the sound at runtime instead; these notes stay hints.)
  */
 export function compatibilityNotes(hints: ReleaseHints, caps: BrowserCapabilities | null): string[] {
   if (!caps) return [];

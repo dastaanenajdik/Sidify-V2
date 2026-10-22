@@ -48,6 +48,7 @@ const Plan = loadTs('../src/lib/media/playbackPlan.ts');
 const Tabs = loadTs('../src/lib/media/seasonTabs.ts');
 const Resolver = loadTs('../src/lib/media/hubResolver.ts');
 const UserError = loadTs('../src/lib/media/userError.ts');
+const Resume = loadTs('../src/lib/media/resumePoints.ts');
 
 /* -------------------------------- fixtures ------------------------------- */
 
@@ -141,7 +142,7 @@ test('probeBrowserCapabilities maps canPlayType self-reports; MKV "" stays unkno
     },
   };
   const caps = Caps.probeBrowserCapabilities(chromeLike);
-  assert.deepEqual(caps, { h264: true, hevc: false, av1: true, vp9: true, aac: true, ac3: false, eac3: false, opus: true, mkv: true });
+  assert.deepEqual(caps, { h264: true, hevc: false, av1: true, vp9: true, aac: true, ac3: false, eac3: false, opus: true, mkv: true, audioCounters: false });
 
   const safariLike = { canPlayType: (type) => (/hvc1|avc1|mp4a|ac-3|ec-3/.test(type) ? 'probably' : '') };
   const safari = Caps.probeBrowserCapabilities(safariLike);
@@ -537,4 +538,163 @@ test('resolve refresh skips a cached result only once it is old enough (no upstr
 
 test('user-facing failure copy is a single plain sentence', () => {
   assert.equal(UserError.SOMETHING_WENT_WRONG, 'Something went wrong');
+});
+
+/* ------------------------- sound: runtime + order ------------------------- */
+
+test('live decoder counters are trusted only in Chromium (userAgentData + numeric counters)', () => {
+  const counters = { webkitAudioDecodedByteCount: 0, webkitVideoDecodedByteCount: 0 };
+  assert.equal(Caps.hasLiveDecoderCounters(counters, { userAgentData: {} }), true);
+  assert.equal(Caps.hasLiveDecoderCounters(counters, { userAgent: 'Safari' }), false, 'WebKit has the props, but AVFoundation leaves them at 0');
+  assert.equal(Caps.hasLiveDecoderCounters({}, { userAgentData: {} }), false, 'Firefox: no counters');
+  assert.equal(Caps.hasLiveDecoderCounters(null, { userAgentData: {} }), false);
+});
+
+test('predictSilentAudio: only when EVERY audio codec named is one the browser reports it cannot decode', () => {
+  const chrome = { h264: true, hevc: false, av1: true, vp9: true, aac: true, ac3: false, eac3: false, opus: true, mkv: null };
+  const edge = { ...chrome, ac3: true, eac3: true };
+  const ddOnly = Hints.parseReleaseHints('Movie.2026.1080p.WEB-DL.[Hindi DD 5.1 + English DDP 5.1].x264.mkv');
+  assert.equal(Hints.predictSilentAudio(ddOnly, chrome), true);
+  assert.equal(Hints.predictSilentAudio(ddOnly, edge), false, 'Edge reports AC-3 / E-AC-3 support');
+  assert.equal(Hints.predictSilentAudio(Hints.parseReleaseHints('Movie.720p.[Hindi AAC 2.0 + English DDP 5.1].mkv'), chrome), false);
+  assert.equal(Hints.predictSilentAudio(Hints.parseReleaseHints('Movie.2160p.REMUX.TrueHD.7.1.Atmos.mkv'), edge), true, 'no browser decodes TrueHD');
+  assert.equal(Hints.predictSilentAudio(Hints.parseReleaseHints('Movie.1080p.WEB-DL.x264.mkv'), chrome), false, 'no audio named → no guess');
+  assert.equal(Hints.predictSilentAudio(ddOnly, null), false);
+});
+
+test('audioVerdict: decoding bytes = sound; video decoding with zero audio for 2 s = silent; dead counters = unknown', () => {
+  assert.equal(Plan.audioVerdict({ progress: 0.3, audioBytes: 11178, videoBytes: 165585 }), 'audio');
+  assert.equal(Plan.audioVerdict({ progress: 0.5, audioBytes: 0, videoBytes: 200159 }), 'pending');
+  assert.equal(Plan.audioVerdict({ progress: 2.1, audioBytes: 0, videoBytes: 861599 }), 'silent');
+  assert.equal(Plan.audioVerdict({ progress: 0.4, audioBytes: 0, videoBytes: 500000, frames: 61 }), 'silent', 'frame count keeps working through stalls');
+  assert.equal(Plan.audioVerdict({ progress: 3, audioBytes: 0, videoBytes: 0 }), 'unknown', 'counters not live → cannot judge');
+  assert.equal(Plan.audioVerdict({ progress: 3, audioBytes: undefined, videoBytes: undefined }), 'unknown');
+  assert.equal(Plan.isFileLevelFailure('no-audio'), true, 'the same encode has the same audio on every server');
+});
+
+test('a file with picture but no sound is skipped like a decode failure; the next quality plays', async () => {
+  const fhd = release({ id: 'dd', quality: '1080p' });
+  const hd = release({ id: 'aac', quality: '720p' });
+  const { calls, options } = harness({
+    links: {
+      [fhd.mirrors[0].shortUrl]: ['https://fsl.example/dd.mkv', 'https://pixeldrain.com/api/file/DD?download'],
+      [fhd.mirrors[1].shortUrl]: ['https://other.example/dd.mkv'],
+      [hd.mirrors[0].shortUrl]: ['https://fsl.example/aac.mkv'],
+    },
+    outcomes: { 'https://fsl.example/dd.mkv': 'no-audio' },
+  });
+  const result = await Plan.runPlaybackFallback(new Plan.PlaybackSession(), [fhd, hd], options);
+  assert.equal(result.status, 'playing');
+  assert.equal(result.release.id, 'aac');
+  assert.deepEqual(calls.attempts, ['https://fsl.example/dd.mkv', 'https://fsl.example/aac.mkv'], 'no other server / mirror of the silent encode');
+});
+
+test('when nothing plays with sound, the best silent link is reported for "Play without sound"', async () => {
+  const uhd = release({ id: 'u', quality: '2160p' });
+  const fhd = release({ id: 'f', quality: '1080p' });
+  const hd = release({ id: 'h', quality: '720p' });
+  const { options } = harness({
+    links: {
+      [uhd.mirrors[0].shortUrl]: ['https://fsl.example/u.mkv'],
+      [fhd.mirrors[0].shortUrl]: ['https://fsl.example/f.mkv'],
+      [hd.mirrors[0].shortUrl]: ['https://fsl.example/h.mkv'],
+    },
+    outcomes: { 'https://fsl.example/u.mkv': 'decode', 'https://fsl.example/f.mkv': 'no-audio', 'https://fsl.example/h.mkv': 'no-audio' },
+  });
+  const result = await Plan.runPlaybackFallback(new Plan.PlaybackSession(), [uhd, fhd, hd], options);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.reason, 'exhausted');
+  assert.equal(result.silent.releaseIndex, 1, 'highest quality that showed a picture');
+  assert.equal(result.silent.candidate.url, 'https://fsl.example/f.mkv');
+
+  const { options: noVideo } = harness({
+    links: { [uhd.mirrors[0].shortUrl]: ['https://fsl.example/u.mkv'] },
+    outcomes: { 'https://fsl.example/u.mkv': 'decode' },
+  });
+  const nothing = await Plan.runPlaybackFallback(new Plan.PlaybackSession(), [uhd], noVideo);
+  assert.deepEqual(nothing, { status: 'failed', reason: 'exhausted' }, 'no silent candidate when no picture ever showed');
+
+  // Deferred order tries 720p first, but "Play without sound" still offers the better 1080p.
+  const { options: deferredOpts } = harness({
+    links: { [fhd.mirrors[0].shortUrl]: ['https://fsl.example/f.mkv'], [hd.mirrors[0].shortUrl]: ['https://fsl.example/h.mkv'] },
+    outcomes: { 'https://fsl.example/f.mkv': 'no-audio', 'https://fsl.example/h.mkv': 'no-audio' },
+  });
+  const both = await Plan.runPlaybackFallback(new Plan.PlaybackSession(), [fhd, hd], { ...deferredOpts, isDeferred: (r) => r.id === 'f' });
+  assert.equal(both.silent.release.id, 'f');
+});
+
+test('attemptOrder tries releases with browser-friendly sound first (order only), a picked quality stays first', () => {
+  const rels = ['2160p', '1080p', '720p', '480p'].map((quality) => release({ quality }));
+  const dolby = new Set([rels[0].id, rels[1].id]);
+  const isDeferred = (r) => dolby.has(r.id);
+  assert.deepEqual(Plan.attemptOrder(rels), [0, 1, 2, 3]);
+  assert.deepEqual(Plan.attemptOrder(rels, { isDeferred }), [2, 3, 0, 1], 'nothing is dropped');
+  assert.deepEqual(Plan.attemptOrder(rels, { isDeferred, startIndex: 1, pinStart: true }), [1, 2, 3], 'user picked 1080p');
+  assert.deepEqual(Plan.attemptOrder(rels, { isDeferred, startIndex: 1 }), [2, 3, 1]);
+});
+
+test('deferred releases are tried after the others in the real fallback loop', async () => {
+  const fhd = release({ id: 'dolby', quality: '1080p' });
+  const hd = release({ id: 'aac2', quality: '720p' });
+  const { calls, options } = harness({
+    links: { [fhd.mirrors[0].shortUrl]: ['https://fsl.example/dolby.mkv'], [hd.mirrors[0].shortUrl]: ['https://fsl.example/aac2.mkv'] },
+  });
+  const result = await Plan.runPlaybackFallback(new Plan.PlaybackSession(), [fhd, hd], { ...options, isDeferred: (r) => r.id === 'dolby' });
+  assert.equal(result.release.id, 'aac2');
+  assert.equal(result.releaseIndex, 1, 'indices still point into the quality-sorted list');
+  assert.deepEqual(calls.attempts, ['https://fsl.example/aac2.mkv']);
+});
+
+/* ------------------------- continue where you stopped ------------------------- */
+
+function memoryStorage() {
+  const data = new Map();
+  return { getItem: (k) => (data.has(k) ? data.get(k) : null), setItem: (k, v) => data.set(k, String(v)), data };
+}
+
+test('resume points: saved per item, resumed from 10 s on, cleared near the end, never stale', () => {
+  const store = memoryStorage();
+  const now = 1_800_000_000_000;
+  Resume.saveResumePoint('movie-x', 1390.4, 7200, store, now);
+  const point = Resume.loadResumePoint('movie-x', store);
+  assert.deepEqual(point, { t: 1390.4, d: 7200, at: now });
+  assert.equal(Resume.resumePosition(point, now + 1000), 1390.4);
+  assert.equal(Resume.loadResumePoint('movie-y', store), null, 'per item');
+
+  Resume.saveResumePoint('movie-x', 7100, 7200, store, now);
+  assert.equal(Resume.loadResumePoint('movie-x', store), null, 'within the last 3% (credits) = finished → start over next time');
+
+  Resume.saveResumePoint('ep-1', 6, 2400, store, now);
+  assert.equal(Resume.loadResumePoint('ep-1', store), null, 'under 10 s is not worth resuming');
+
+  Resume.saveResumePoint('ep-2', 600, undefined, store, now);
+  assert.equal(Resume.resumePosition(Resume.loadResumePoint('ep-2', store), now), 600, 'unknown duration still resumes');
+  assert.equal(Resume.resumePosition(Resume.loadResumePoint('ep-2', store), now + 121 * 86_400_000), null, 'stale after 120 days');
+
+  Resume.clearResumePoint('ep-2', store, now);
+  assert.equal(Resume.loadResumePoint('ep-2', store), null);
+
+  const raw = JSON.parse(store.data.get(Resume.RESUME_STORAGE_KEY));
+  assert.ok(Object.values(raw).every((p) => Object.keys(p).every((k) => ['t', 'd', 'at'].includes(k))), 'only numbers — no URLs or tokens');
+});
+
+test('resume store tolerates junk, caps its size and formats times', () => {
+  const store = memoryStorage();
+  store.setItem(Resume.RESUME_STORAGE_KEY, '{not json');
+  assert.equal(Resume.loadResumePoint('a', store), null);
+  store.setItem(Resume.RESUME_STORAGE_KEY, JSON.stringify({ a: { t: 'x' }, b: { t: 50, at: 1 } }));
+  assert.equal(Resume.loadResumePoint('a', store), null);
+  assert.equal(Resume.loadResumePoint('b', store).t, 50);
+
+  const big = memoryStorage();
+  for (let i = 0; i < 230; i++) Resume.saveResumePoint(`k${i}`, 100 + i, 3600, big, 1_000_000 + i);
+  const kept = Object.keys(JSON.parse(big.data.get(Resume.RESUME_STORAGE_KEY)));
+  assert.equal(kept.length, 200);
+  assert.ok(kept.includes('k229') && !kept.includes('k0'), 'newest kept');
+
+  assert.equal(Resume.formatPlaybackTime(1390.4), '23:10');
+  assert.equal(Resume.formatPlaybackTime(3723), '1:02:03');
+  assert.equal(Resume.formatPlaybackTime(9), '0:09');
+  assert.equal(Resume.isNearEnd(50, 60), true);
+  assert.equal(Resume.isNearEnd(50, undefined), false);
 });
