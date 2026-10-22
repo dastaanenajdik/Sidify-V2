@@ -1,11 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import { Inter } from "next/font/google";
 import "./globals.css";
 import Providers from "@/components/Providers";
 import AppShell from "@/components/shell/AppShell";
-
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 
 export const metadata: Metadata = {
   title: { default: "Sidify", template: "%s · Sidify" },
@@ -36,7 +33,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <link rel="dns-prefetch" href="https://i.ytimg.com" />
         <link rel="dns-prefetch" href="https://www.gstatic.com" />
       </head>
-      <body className={`${inter.variable} antialiased`}>
+      <body className="antialiased">
         <Providers>
           <AppShell>{children}</AppShell>
         </Providers>

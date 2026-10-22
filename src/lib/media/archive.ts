@@ -1,14 +1,10 @@
 /**
  * Internet Archive catalogue helpers (framework-free).
  *
- * The Internet Archive (archive.org) is a real, lawful source of films that are in the
- * public domain or published under an open licence. This module turns its Scrape-API
- * documents into `MediaTitle`s, builds the Lucene queries the `/advancedsearch.php`
- * endpoint expects, and keeps a small verified snapshot of openly available features so
- * the shelf still renders when archive.org cannot be reached at request time.
- *
- * Nothing here scrapes third-party file hosts: identifiers come from archive.org and
- * playback is archive.org's own embed player / download endpoints.
+ * Maps archive.org Scrape-API documents into `MediaTitle`s, builds Lucene queries for
+ * `/advancedsearch.php`, and keeps a small snapshot for explicit `MEDIA_PROVIDER=archive`
+ * fallback. Note: being uploaded to an Internet Archive collection does NOT by itself
+ * prove public-domain status; individual items carry varying rights and licences.
  */
 
 import type { Genre, MediaKind, MediaQuery, MediaSort, MediaTitle } from "./types";

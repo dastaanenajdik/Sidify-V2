@@ -21,13 +21,15 @@ export function sanitizePlaybackSource(entry: unknown): PlaybackSource | null {
   const { url, type, label, note } = entry as { url?: unknown; type?: unknown; label?: unknown; note?: unknown };
   if (typeof url !== "string" || !/^https:\/\//i.test(url)) return null;
   const kind: PlaybackSource["type"] | null =
-    type === "hls" || type === "mp4" || type === "embed"
+    type === "hls" || type === "mp4" || type === "webm" || type === "embed"
       ? type
       : /\.m3u8(\?|$)/i.test(url)
         ? "hls"
-        : /\.mp4(\?|$)/i.test(url)
-          ? "mp4"
-          : null;
+        : /\.webm(\?|$)/i.test(url)
+          ? "webm"
+          : /\.mp4(\?|$)/i.test(url)
+            ? "mp4"
+            : null;
   if (!kind) return null;
   const source: PlaybackSource = {
     url,

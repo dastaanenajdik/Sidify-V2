@@ -27,7 +27,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
     );
   } catch (error) {
     const status = error instanceof MediaProviderError ? (error.status === 501 ? 503 : error.status) : 502;
+    const message = error instanceof MediaProviderError ? error.message : "Could not load episodes.";
+    const code = error instanceof MediaProviderError ? error.code : "upstream_error";
     console.error("[api/media/seasons]", error);
-    return NextResponse.json({ error: "Could not load episodes." }, { status, headers: { "cache-control": "no-store" } });
+    return NextResponse.json(
+      { error: message, code },
+      { status, headers: { "cache-control": "no-store" } }
+    );
   }
 }
