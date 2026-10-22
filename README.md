@@ -148,14 +148,46 @@ Four adapters implement it, plus an optional `mergedProvider.ts` router:
 | `archiveProvider.ts` | `MEDIA_PROVIDER=archive` | Internet Archive Scrape API + `/embed/<id>` and `/download/<id>` endpoints. Note: upload to an Internet Archive collection is not proof of public-domain status. |
 | `mergedProvider.ts` | `MEDIA_PROVIDER=merged` | Explicit opt-in router combining TMDb metadata with Internet Archive items. |
 
-Routes:
+Routes & root-level JSON response shapes:
 
 ```text
 GET  /api/media/browse?type=movie|series&q=&genre=&year=&language=&sort=&page=
+       -> { kind, items, page, totalPages, totalResults, pageSize, featured, rails, facets, provider, filtered }
 GET  /api/media/search?q=&type=movie|series|all&limit=
+       -> { query, items, provider }
 GET  /api/media/title/movie|series/<slug>
+       -> { title, seasons, related, playback, downloads?, releases?, provider, attribution? }
 GET  /api/media/seasons/<slug>?season=2
-POST /api/media/resolve   (JSON: { url, fileName, label } -> resolved stream/download/fallback links)
+       -> { seasons }
+POST /api/media/resolve   (JSON: { url, fileName?, label? })
+       -> { status: "resolved" | "partial" | "blocked" | "error", links, externalFallbackUrl?, reason?, message?, hops }
+```
+
+Manual verification (`curl` + `jq`, normal internet environment with `npm run dev`):
+
+```bash
+# 1. Search (root `.items`)
+curl -s "http://localhost:3000/api/media/search?q=inception&type=movie" \
+  | jq '{query, provider: .provider.id, count: (.items | length), first: .items[0] | {slug, title, year, poster}}'
+
+# 2. Movie detail (root `.title`, `.releases`)
+curl -s "http://localhost:3000/api/media/title/movie/hub-moana-movie-8014" \
+  | jq '{title: .title.title, year: .title.year, releases: (.releases | map({quality, size, container, mirrors: (.mirrors | length)}))}'
+
+# 3. Series detail (root `.title`, `.releases` season packs, `.seasons`)
+curl -s "http://localhost:3000/api/media/title/series/hub-marvels-the-punisher-series-2288" \
+  | jq '{title: .title.title, packCount: (.releases | length), seasons: (.seasons | map({seasonNumber, episodes: (.episodes | length)}))}'
+
+# 4. Multi-hop mirror resolution (root `.status`, `.hops`, `.links`)
+BODY=$(curl -s "http://localhost:3000/api/media/title/movie/hub-moana-movie-8014" \
+  | jq -c '{url: .releases[0].mirrors[0].shortUrl, fileName: .releases[0].fileName, label: .releases[0].mirrors[0].label}')
+curl -s -X POST "http://localhost:3000/api/media/resolve" \
+  -H "Content-Type: application/json" \
+  -d "$BODY" \
+  | jq '{status, reason, hops: (.hops | map({step, host, status})), links}'
+
+# 5. Browser HLS player check (`Native HLS` on Safari, `HLS · hls.js MSE` on Chrome/Firefox)
+MEDIA_PLAYBACK_MANIFEST='{"movie/hub-moana-movie-8014":[{"url":"https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8","type":"hls","label":"HLS Test Stream"}]}' npm run dev
 ```
 
 ### Playback & media container policy
