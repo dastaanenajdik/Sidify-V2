@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { Copy, ExternalLink, FileDown } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
+import { saveTextFile } from "@/lib/media/externalLaunch";
 import { detectClientPlatform, externalPlayerOptions, type ExternalPlayerOption } from "@/lib/media/externalPlayers";
 import { useMounted } from "@/lib/useMounted";
 import { useUi } from "@/store/ui";
@@ -38,17 +39,7 @@ export function ExternalPlayerLinks({ url, title, className }: { url: string; ti
     }
   };
 
-  const saveFile = (file: NonNullable<ExternalPlayerOption["file"]>) => {
-    const blob = new Blob([file.content], { type: file.mimeType });
-    const href = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = file.fileName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(href), 4000);
-  };
+  const saveFile = (file: NonNullable<ExternalPlayerOption["file"]>) => saveTextFile(file);
 
   return (
     <div className={className}>

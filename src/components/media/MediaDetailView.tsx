@@ -6,7 +6,7 @@ import { Bookmark, Check, Copy, Download, ExternalLink, ListVideo, Play, RotateC
 import { copyText } from "@/lib/clipboard";
 import { mediaArt } from "@/lib/media/art";
 import { attachPlaybackSource, type HlsPlaybackMode } from "@/lib/media/hlsPlayer";
-import { playableReleases } from "@/lib/media/playbackPlan";
+import { externalPlayerReleases, playableReleases } from "@/lib/media/playbackPlan";
 import {
   clearResumePoint,
   formatPlaybackTime,
@@ -24,6 +24,7 @@ import { BetaBadge, BetaPlayerSheet } from "./BetaPlayerSheet";
 import { PosterCard, posterShelfClass } from "./PosterCard";
 import { QualityPickerSheet } from "./QualityPickerSheet";
 import { TrailerSheet } from "./TrailerSheet";
+import { VlcPlayButton } from "./VlcPlayButton";
 import { useResumePoint } from "./useResumePoint";
 import { MovieWatchSection, SeasonTabsSection } from "./WatchSections";
 import type { WatchTarget } from "./watch";
@@ -57,6 +58,7 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
     [isSeries, releases, title.slug, title.title, posterUrl]
   );
   const movieCanPlay = movieTarget ? playableReleases(movieTarget.releases).length > 0 : false;
+  const movieCanStream = movieTarget ? externalPlayerReleases(movieTarget.releases).length > 0 : false;
   const movieResumeAt = useResumePoint(movieTarget?.key);
   const hasSeasonTabs = isSeries && (seasons.length > 0 || releases.length > 0);
   const hasEpisodeFiles = seasons.some((season) => season.episodes.some((episode) => (episode.releases?.length ?? 0) > 0));
@@ -181,6 +183,16 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
                           {movieResumeAt !== null ? `Resume ${formatPlaybackTime(movieResumeAt)}` : "Try Play"}
                           <BetaBadge tone="onWhite" />
                         </button>
+                      )}
+                      {movieCanStream && (
+                        <VlcPlayButton
+                          title={movieTarget.mediaTitle}
+                          releases={movieTarget.releases}
+                          iconSize={16}
+                          className={
+                            "inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-white/16 px-5 text-[15px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-xl transition-colors hover:bg-white/24 active:scale-[0.97]"
+                          }
+                        />
                       )}
                       <button
                         type="button"

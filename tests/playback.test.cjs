@@ -194,6 +194,73 @@ test('external player links are platform-specific, encoded, and never offered fo
   assert.deepEqual(Ext.externalPlayerOptions('javascript:alert(1)', { platform: 'desktop' }), []);
 });
 
+/* --------------------------- "Play with VLC" ----------------------------- */
+
+test('detectClientPlatform keeps an Apple Silicon laptop on the desktop path, iPad on iOS', () => {
+  const macUa = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605';
+  // Apple Silicon Macs report touch AND the same UA as an iPad in desktop mode: the pointer
+  // is what tells them apart.
+  assert.equal(Ext.detectClientPlatform({ userAgent: macUa, maxTouchPoints: 5, hasFinePointer: true }), 'mac');
+  assert.equal(Ext.detectClientPlatform({ userAgent: macUa, maxTouchPoints: 5, hasFinePointer: false }), 'ios');
+  assert.equal(Ext.detectClientPlatform({ userAgent: macUa, maxTouchPoints: 5 }), 'ios', 'unknown pointer stays on the touch path');
+});
+
+test('vlcLaunchPlan opens the app on phones and saves a playlist on computers', () => {
+  const url = 'https://cdn.example.com/files/Show.S01E01.mkv?token=a1b2';
+
+  const android = Ext.vlcLaunchPlan(url, { platform: 'android', title: 'My Show S01E01' });
+  assert.equal(android.mode, 'app');
+  assert.ok(android.href.startsWith('intent://cdn.example.com/files/Show.S01E01.mkv?token=a1b2#Intent;'));
+  assert.ok(android.href.includes('package=org.videolan.vlc'), 'only VLC answers this intent');
+  assert.ok(android.href.includes('S.browser_fallback_url=https%3A%2F%2Fplay.google.com'), 'Play Store when VLC is missing');
+
+  const ios = Ext.vlcLaunchPlan(url, { platform: 'ios' });
+  assert.equal(ios.mode, 'app');
+  assert.equal(ios.href, `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(url)}`);
+
+  const desktop = Ext.vlcLaunchPlan(url, { platform: 'desktop', title: 'My Show' });
+  assert.equal(desktop.mode, 'playlist');
+  assert.equal(desktop.file.fileName, 'My.Show.m3u');
+  assert.equal(desktop.file.content, `#EXTM3U\n#EXTINF:-1,My Show\n${url}\n`);
+  assert.equal(Ext.vlcLaunchPlan('http://plain.example.com/a.mkv', { platform: 'android' }), null);
+  assert.equal(Ext.vlcLaunchPlan('javascript:alert(1)', { platform: 'ios' }), null);
+});
+
+test('isDirectMediaUrl accepts only https links without embedded credentials', () => {
+  assert.equal(Ext.isDirectMediaUrl('https://cdn.example.com/a.mkv?token=1'), true);
+  assert.equal(Ext.isDirectMediaUrl('https://user:pass@cdn.example.com/a.mkv'), false);
+  assert.equal(Ext.isDirectMediaUrl('http://cdn.example.com/a.mkv'), false);
+  assert.equal(Ext.isDirectMediaUrl('blob:https://cdn.example.com/x'), false);
+  assert.equal(Ext.isDirectMediaUrl(''), false);
+  assert.equal(Ext.isDirectMediaUrl(null), false);
+});
+
+test('a player app may be pointed at any single file, packs and mirror-less rows never', () => {
+  const mkv = release({ quality: '1080p' });
+  const mp4 = release({ quality: '720p', container: 'MP4' });
+  const pack = release({ quality: '2160p', isPack: true, container: 'ZIP' });
+  const noMirrors = release({ quality: '480p', mirrors: [] });
+
+  const queue = Plan.externalPlayerReleases([pack, mp4, noMirrors, mkv]);
+  assert.deepEqual(queue.map((r) => r.id), [mkv.id, mp4.id], 'best first, MKV included, ZIP excluded');
+});
+
+test('externalPlayerLink picks a streamable file, skips landing pages and archives', () => {
+  const onlyPage = [link('https://hubcloud.one/drive/page', { delivery: 'external', container: 'PAGE' })];
+  assert.equal(Plan.externalPlayerLink(onlyPage), undefined, 'a landing page is not a stream');
+
+  const direct = Plan.externalPlayerLink([
+    link('https://pub-x.r2.dev/Show.S01.zip', { container: 'ZIP' }),
+    link('https://fsl.example.net/Show.mkv', { server: 'FSL Server' }),
+    link('https://cdn.example.com/master.m3u8', { server: 'HLS', playable: true, delivery: 'stream', container: 'HLS', streamType: 'hls' }),
+  ]);
+  assert.equal(direct.url, 'https://cdn.example.com/master.m3u8', 'verified stream first, archives never');
+  assert.equal(direct.streamType, 'hls');
+
+  const downloadOnly = Plan.externalPlayerLink([link('https://pixeldrain.com/api/file/AbC?download', { server: 'PixelServer' })]);
+  assert.equal(downloadOnly.url, 'https://pixeldrain.com/api/file/AbC?download', 'the exact resolved link for a player app');
+});
+
 /* ------------------------------ ordering --------------------------------- */
 
 test('releases sort best quality first, keep page order within a tier, and packs never play', () => {

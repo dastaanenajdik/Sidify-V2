@@ -6,6 +6,7 @@ import { Chips, SectionHeader } from "@/components/ui";
 import { useSeasonEpisodes } from "@/lib/media/hooks";
 import {
   downloadableReleases,
+  externalPlayerReleases,
   isArchiveRelease,
   playableReleases,
   qualityTiers,
@@ -17,6 +18,7 @@ import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { formatPlaybackTime } from "@/lib/media/resumePoints";
 import { cx } from "@/lib/format";
 import { BetaBadge } from "./BetaPlayerSheet";
+import { VlcPlayButton } from "./VlcPlayButton";
 import { useResumePoint } from "./useResumePoint";
 import type { WatchTarget } from "./watch";
 
@@ -27,24 +29,27 @@ function summary(releases: MediaReleaseItem[]): string {
   return [tiers.join(" · "), sizeRangeLabel(releases)].filter(Boolean).join("  ·  ");
 }
 
-/** "Try Play (beta)" + "Download" for one item. Qualities are chosen later, in the sheets. */
+/**
+ * "Try Play (beta)" + "Play with VLC" + "Download" for one item. Qualities are chosen later,
+ * in the sheets — and VLC picks the best file itself, since it plays what the browser can't.
+ */
 export function WatchActions({
-  releases,
+  target,
   onPlay,
   onDownload,
-  resumeKey,
   size = "md",
 }: {
-  releases: MediaReleaseItem[];
+  target: WatchTarget;
   onPlay: () => void;
   onDownload: () => void;
-  /** `WatchTarget.key` — shows "Resume 23:10" when this item was left part-way. */
-  resumeKey?: string;
   size?: "md" | "sm";
 }) {
+  const releases = target.releases;
   const canPlay = playableReleases(releases).length > 0;
   const canDownload = downloadableReleases(releases).length > 0;
-  const resumeAt = useResumePoint(resumeKey);
+  // Any single file with mirrors will stream in a player app, packs included only as a file.
+  const canStream = externalPlayerReleases(releases).length > 0;
+  const resumeAt = useResumePoint(target.key);
   const base = cx(
     "inline-flex shrink-0 items-center gap-1.5 rounded-full font-semibold transition-[background,opacity,transform] active:scale-[0.97]",
     size === "md" ? "h-10 px-4 text-[14px]" : "h-8 px-3 text-[12.5px]"
@@ -58,6 +63,7 @@ export function WatchActions({
           <BetaBadge tone="inverse" />
         </button>
       )}
+      {canStream && <VlcPlayButton title={target.mediaTitle} releases={releases} className={cx(base, "bg-fill-2 text-fg hover:bg-fill-3")} />}
       {canDownload && (
         <button type="button" onClick={onDownload} className={cx(base, "bg-fill-2 text-fg hover:bg-fill-3")}>
           <Download size={size === "md" ? 15 : 12} aria-hidden="true" /> Download
@@ -90,16 +96,12 @@ export function MovieWatchSection({
             </h2>
             <p className="mt-0.5 text-[12.5px] text-fg-2">{summary(target.releases)}</p>
           </div>
-          <WatchActions
-            releases={target.releases}
-            resumeKey={target.key}
-            onPlay={() => onPlay(target)}
-            onDownload={() => onDownload(target)}
-          />
+          <WatchActions target={target} onPlay={() => onPlay(target)} onDownload={() => onDownload(target)} />
         </div>
         <p className="mt-2.5 text-[11.5px] leading-relaxed text-fg-3">
           Download asks which quality you want. Try Play starts with the best quality and steps down automatically if
-          it won&apos;t play in your browser.
+          it won&apos;t play in your browser. Play with VLC skips the browser entirely and opens the best file in the
+          VLC app.
         </p>
       </div>
     </section>
@@ -209,9 +211,8 @@ function SeasonPanel({
             </div>
           </div>
           <WatchActions
-            releases={tab.packs}
+            target={packTarget}
             size="sm"
-            resumeKey={packTarget.key}
             onPlay={() => onPlay(packTarget)}
             onDownload={() => onDownload(packTarget)}
           />
@@ -307,9 +308,8 @@ function EpisodeRow({
       {releases.length > 0 && (
         <div className="pl-9 sm:pl-0">
           <WatchActions
-            releases={releases}
+            target={target}
             size="sm"
-            resumeKey={target.key}
             onPlay={() => onPlay(target)}
             onDownload={() => onDownload(target)}
           />

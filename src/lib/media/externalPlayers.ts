@@ -6,6 +6,10 @@
  * fallback when in-browser playback shows a black screen or has no sound. Nothing here
  * contacts the media host; the user's own device opens the URL. Whether a link works
  * depends on which apps are installed, so the UI always keeps "Copy URL" next to them.
+ *
+ * `vlcLaunchPlan()` is the one-tap variant behind the "Play with VLC" button: it returns
+ * exactly what this device needs to start VLC — an app link on phones, a saved playlist on
+ * computers (a browser cannot launch a desktop app).
  */
 
 export type ClientPlatform = "android" | "ios" | "mac" | "desktop";
@@ -14,6 +18,13 @@ export interface PlatformEnv {
   userAgent?: string;
   platform?: string;
   maxTouchPoints?: number;
+  /**
+   * `window.matchMedia("(pointer: fine)")` — a mouse is the main pointer. Apple Silicon Macs
+   * report `maxTouchPoints > 1` *and* the same "Macintosh" UA as an iPad in desktop mode, so
+   * touch alone would send a laptop down the iOS path (a `vlc-x-callback:` link that does
+   * nothing). iPads report a coarse pointer, so they keep the app links.
+   */
+  hasFinePointer?: boolean;
 }
 
 /** Coarse platform from the user agent. iPadOS desktop-mode UAs count as iOS. */
@@ -22,7 +33,9 @@ export function detectClientPlatform(env: PlatformEnv | null | undefined): Clien
   if (/Android/i.test(ua)) return "android";
   if (/iPhone|iPad|iPod/i.test(ua)) return "ios";
   const touch = (env?.maxTouchPoints ?? 0) > 1;
-  if (/Macintosh|Mac OS X/i.test(ua) || /^Mac/i.test(env?.platform || "")) return touch ? "ios" : "mac";
+  if (/Macintosh|Mac OS X/i.test(ua) || /^Mac/i.test(env?.platform || "")) {
+    return touch && !env?.hasFinePointer ? "ios" : "mac";
+  }
   return "desktop";
 }
 
@@ -37,6 +50,7 @@ export interface ExternalPlayerOption {
 }
 
 const PLAY_STORE = "https://play.google.com/store/apps/details?id=";
+const VLC_ANDROID_PACKAGE = "org.videolan.vlc";
 
 function withoutHash(url: string): string {
   const index = url.indexOf("#");
@@ -79,6 +93,25 @@ export function playlistFileName(title?: string): string {
   return `${base || "stream"}.m3u`;
 }
 
+/** The playlist file a computer saves to start its own player. */
+function playlistFile(url: string, title?: string): NonNullable<ExternalPlayerOption["file"]> {
+  return { fileName: playlistFileName(title), mimeType: "audio/x-mpegurl", content: m3uPlaylist(url, title) };
+}
+
+/** Android intent that only VLC answers (the Play Store when VLC isn't installed). */
+function androidVlcUrl(url: string, title?: string): string {
+  return androidIntentUrl(url, {
+    packageName: VLC_ANDROID_PACKAGE,
+    title,
+    browserFallbackUrl: `${PLAY_STORE}${VLC_ANDROID_PACKAGE}`,
+  });
+}
+
+/** VLC for iOS' x-callback-url stream scheme. */
+function iosVlcUrl(url: string): string {
+  return `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(withoutHash(url))}`;
+}
+
 /** Ordered external-player options for this platform. "Copy URL" is added by the UI. */
 export function externalPlayerOptions(
   url: string,
@@ -90,17 +123,13 @@ export function externalPlayerOptions(
   const playlist: ExternalPlayerOption = {
     id: "m3u",
     label: "Desktop player (.m3u)",
-    file: { fileName: playlistFileName(title), mimeType: "audio/x-mpegurl", content: m3uPlaylist(url, title) },
+    file: playlistFile(url, title),
     note: "Opens in VLC, IINA, mpv or your default player.",
   };
 
   if (platform === "android") {
     return [
-      {
-        id: "vlc",
-        label: "VLC",
-        href: androidIntentUrl(url, { packageName: "org.videolan.vlc", title, browserFallbackUrl: `${PLAY_STORE}org.videolan.vlc` }),
-      },
+      { id: "vlc", label: "VLC", href: androidVlcUrl(url, title) },
       {
         id: "mx",
         label: "MX Player",
@@ -117,7 +146,7 @@ export function externalPlayerOptions(
   if (platform === "ios") {
     const encoded = encodeURIComponent(withoutHash(url));
     return [
-      { id: "vlc", label: "VLC", href: `vlc-x-callback://x-callback-url/stream?url=${encoded}` },
+      { id: "vlc", label: "VLC", href: iosVlcUrl(url) },
       { id: "infuse", label: "Infuse", href: `infuse://x-callback-url/play?url=${encoded}` },
     ];
   }
@@ -130,4 +159,53 @@ export function externalPlayerOptions(
   }
 
   return [playlist];
+}
+
+/* ------------------------- one-tap "Play with VLC" ------------------------- */
+
+export interface VlcLaunchPlan {
+  /** `app` opens the VLC app through its URL scheme, `playlist` saves a file for it. */
+  mode: "app" | "playlist";
+  /** App link — Android `intent:` / iOS `vlc-x-callback:`. Only in `app` mode. */
+  href?: string;
+  /** `.m3u` to save and double-click. Only in `playlist` mode (no browser can launch an app). */
+  file?: NonNullable<ExternalPlayerOption["file"]>;
+  /** One line telling the user what will happen next. */
+  note: string;
+}
+
+/**
+ * How to start VLC on this device with one tap. Phones get VLC's own link (which is also
+ * what an `href` can carry, so it stays inside the user's tap); computers get a playlist
+ * file, because a web page cannot launch a desktop app.
+ */
+export function vlcLaunchPlan(url: string, options: { title?: string; platform: ClientPlatform }): VlcLaunchPlan | null {
+  const { title, platform } = options;
+  if (!/^https:\/\//i.test(url)) return null;
+
+  if (platform === "android") {
+    return { mode: "app", href: androidVlcUrl(url, title), note: "VLC opens and streams it." };
+  }
+  if (platform === "ios") {
+    return { mode: "app", href: iosVlcUrl(url), note: "VLC opens and streams it." };
+  }
+  const file = playlistFile(url, title);
+  return { mode: "playlist", file, note: `Saved ${file.fileName} — open it to play in VLC.` };
+}
+
+/* ------------------------ a link worth handing over ------------------------ */
+
+/**
+ * Whether a URL may be handed to a player app at all: plain HTTPS and no embedded
+ * credentials. Every link is checked against this before a "Play with VLC" button acts on
+ * it, so a malformed or hostile resolve response can never become a navigation.
+ */
+export function isDirectMediaUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
 }
