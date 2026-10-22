@@ -2,15 +2,18 @@
 
 import { Clapperboard } from "lucide-react";
 import { Button, EmptyState } from "@/components/ui";
+import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 
-/** A provider outage is not a 404 — offer a retry instead. */
+/**
+ * A provider outage is not a 404 — offer a retry instead. Shared by /movies/[slug] and
+ * /series/[slug]; the underlying error is never rendered.
+ */
 export default function MovieDetailError({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
   return (
     <EmptyState
       icon={<Clapperboard size={26} />}
       className="pt-24"
-      title="Couldn't load this film"
-      desc="The catalogue provider didn't answer. Check your connection and try again."
+      title={SOMETHING_WENT_WRONG}
       action={
         <Button variant="secondary" onClick={reset}>
           Try again

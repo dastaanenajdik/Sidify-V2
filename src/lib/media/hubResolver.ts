@@ -34,14 +34,23 @@ export interface ResolveMirrorDeps {
   dnsLookup?: DnsLookupFn;
   timeoutMs?: number;
   disableCache?: boolean;
+  /**
+   * Skip a cached result (e.g. its direct links expired) and resolve again. Honoured only
+   * once the cached entry is at least `MIN_REFRESH_AGE_MS` old, so a client cannot turn
+   * the endpoint into a tight upstream loop. A fresh result still refreshes the cache.
+   */
+  refresh?: boolean;
+  now?: () => number;
 }
 
 interface CacheEntry {
   value: MirrorResolveResult;
+  storedAt: number;
   expiresAt: number;
 }
 
 const RESOLVE_CACHE_TTL_MS = 10 * 60 * 1000;
+export const MIN_REFRESH_AGE_MS = 15 * 1000;
 const resolveCache = new Map<string, CacheEntry>();
 
 export function clearMirrorResolveCache(): void {
@@ -285,11 +294,23 @@ export async function resolveHubMirror(
 ): Promise<MirrorResolveResult> {
   const hops: MirrorHop[] = [];
   const cacheKey = `${input.shortUrl}|${input.fileName || ""}|${input.label || ""}`;
+  const now = deps.now ?? Date.now;
 
   if (!deps.disableCache) {
     const hit = resolveCache.get(cacheKey);
-    if (hit && hit.expiresAt > Date.now()) return hit.value;
+    if (hit && hit.expiresAt > now()) {
+      const refreshAllowed = deps.refresh === true && now() - hit.storedAt >= MIN_REFRESH_AGE_MS;
+      if (!refreshAllowed) return hit.value;
+    }
   }
+
+  const remember = (result: MirrorResolveResult): MirrorResolveResult => {
+    if (!deps.disableCache) {
+      const storedAt = now();
+      resolveCache.set(cacheKey, { value: result, storedAt, expiresAt: storedAt + RESOLVE_CACHE_TTL_MS });
+    }
+    return result;
+  };
 
   // Validate initial shortUrl strictly before making any outbound connection
   let validatedEntryUrl: URL;
@@ -381,10 +402,7 @@ export async function resolveHubMirror(
         externalFallbackUrl: currentUrl,
         hops,
       };
-      if (!deps.disableCache) {
-        resolveCache.set(cacheKey, { value: result, expiresAt: Date.now() + RESOLVE_CACHE_TTL_MS });
-      }
-      return result;
+      return remember(result);
     }
 
     // Hop 2: HubDrive intermediate page -> extract HubCloud URL
@@ -455,10 +473,7 @@ export async function resolveHubMirror(
           externalFallbackUrl: hcRes.url,
           hops,
         };
-        if (!deps.disableCache) {
-          resolveCache.set(cacheKey, { value: result, expiresAt: Date.now() + RESOLVE_CACHE_TTL_MS });
-        }
-        return result;
+        return remember(result);
       }
 
       const fallbackLink = classifyResolvedSource({
@@ -513,10 +528,7 @@ export async function resolveHubMirror(
       externalFallbackUrl: hcRes.url,
       hops,
     };
-    if (!deps.disableCache) {
-      resolveCache.set(cacheKey, { value: result, expiresAt: Date.now() + RESOLVE_CACHE_TTL_MS });
-    }
-    return result;
+    return remember(result);
   } catch (err) {
     const sf = err instanceof SafeFetchError ? err : null;
     const reason = sf?.code || "network_error";

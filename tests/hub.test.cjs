@@ -309,6 +309,7 @@ test('parseHubDetailHtml supports both live .episode-item and .season-item serie
 
   assert.equal(detail.seasons.length, 1);
   assert.equal(detail.seasons[0].seasonNumber, 2);
+  assert.equal(detail.title.seasonCount, 2, 'S01 (offered only as a ZIP pack) still counts as a season');
   assert.equal(detail.seasons[0].episodes.length, 1);
   assert.equal(detail.seasons[0].episodes[0].releases.length, 2, 'merged 2160p and 1080p releases onto S02E01');
 });

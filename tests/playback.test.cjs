@@ -1,0 +1,540 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const ts = require('typescript');
+const fs = require('node:fs');
+const Module = require('node:module');
+const path = require('node:path');
+
+/**
+ * "Try Play (beta)", quality picker, season tabs and external-player helpers. All of it is
+ * framework-free, so it compiles and runs here without React or a DOM.
+ */
+const moduleCache = new Map();
+
+function loadTs(targetPath) {
+  const filename = path.resolve(__dirname, targetPath);
+  if (moduleCache.has(filename)) return moduleCache.get(filename).exports;
+
+  const compiled = new Module(filename, module);
+  compiled.filename = filename;
+  compiled.paths = Module._nodeModulePaths(path.dirname(filename));
+  moduleCache.set(filename, compiled);
+
+  const originalLoad = Module._load;
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request.startsWith('.') && parent && parent.filename) {
+      const candidateTs = path.resolve(path.dirname(parent.filename), `${request}.ts`);
+      if (fs.existsSync(candidateTs)) return loadTs(candidateTs);
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  try {
+    const source = fs.readFileSync(filename, 'utf8');
+    const output = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
+    }).outputText;
+    compiled._compile(output, filename);
+    return compiled.exports;
+  } finally {
+    Module._load = originalLoad;
+  }
+}
+
+const Hints = loadTs('../src/lib/media/releaseHints.ts');
+const Caps = loadTs('../src/lib/media/browserCaps.ts');
+const Ext = loadTs('../src/lib/media/externalPlayers.ts');
+const Plan = loadTs('../src/lib/media/playbackPlan.ts');
+const Tabs = loadTs('../src/lib/media/seasonTabs.ts');
+const Resolver = loadTs('../src/lib/media/hubResolver.ts');
+const UserError = loadTs('../src/lib/media/userError.ts');
+
+/* -------------------------------- fixtures ------------------------------- */
+
+let seq = 0;
+function release(over = {}) {
+  seq += 1;
+  const id = over.id || `rel-${seq}`;
+  return {
+    id,
+    title: over.title || `Release ${id}`,
+    fileName: over.fileName || `Show.${over.quality || ''}.mkv`,
+    quality: over.quality,
+    size: over.size,
+    sizeBytes: over.sizeBytes,
+    container: over.container ?? 'MKV',
+    isPack: over.isPack,
+    seasonNumber: over.seasonNumber,
+    mirrors:
+      over.mirrors ||
+      [
+        { id: `${id}-m1`, label: 'HubCloud', shortUrl: `https://greenmotors.club/?id=${id}-hc`, host: 'greenmotors.club' },
+        { id: `${id}-m2`, label: 'HubDrive', shortUrl: `https://greenmotors.club/?id=${id}-hd`, host: 'greenmotors.club' },
+      ],
+  };
+}
+
+function link(url, over = {}) {
+  return { server: over.server || 'FSL Server', url, playable: Boolean(over.playable), delivery: over.delivery || 'download', container: over.container ?? 'MKV', streamType: over.streamType };
+}
+
+function resolved(links) {
+  return { status: 'resolved', links, hops: [] };
+}
+
+/* ------------------------------ release hints ---------------------------- */
+
+test('parseReleaseHints reads codec hints from real 4KHDHub-style file names', () => {
+  const h = Hints.parseReleaseHints(
+    'Marvels The Punisher S02E07 2160p NF WEB-DL DoVi HDR 10bit HEVC [Hindi DDP 5.1 + English DDP 5.1 Atmos] x265 (SiC-4kHDHub.com).mkv'
+  );
+  assert.equal(h.video, 'hevc');
+  assert.equal(h.tenBit, true);
+  assert.equal(h.hdr, 'dv');
+  assert.deepEqual(h.audio, ['eac3']);
+  assert.equal(h.atmos, true);
+  assert.equal(h.container, 'MKV');
+  assert.deepEqual(Hints.hintChips(h), ['HEVC', '10-bit', 'DV', 'DDP', 'Atmos']);
+
+  const mixed = Hints.parseReleaseHints("Marvel's The Punisher S01 1080p NF WEB-DL 10bit HEVC [Hindi DDP 5.1 + English DD 5.1] x265.zip");
+  assert.deepEqual(mixed.audio, ['eac3', 'ac3']);
+  assert.equal(mixed.container, 'ZIP');
+
+  const web = Hints.parseReleaseHints('Movie.2024.1080p.WEB-DL.AAC2.0.H.264.mp4');
+  assert.equal(web.video, 'h264');
+  assert.deepEqual(web.audio, ['aac']);
+  assert.equal(web.container, 'MP4');
+
+  const remux = Hints.parseReleaseHints('Film (2026) 2160p UHD BluRay REMUX DV HDR10P HEVC TrueHD 7.1 Atmos');
+  assert.equal(remux.remux, true);
+  assert.equal(remux.hdr, 'dv');
+  assert.deepEqual(remux.audio, ['truehd']);
+
+  assert.deepEqual(Hints.parseReleaseHints('Show S01E01 720p x264 DD+5.1').audio, ['eac3']);
+  assert.deepEqual(Hints.parseReleaseHints('Show E-AC-3 vs EAC3').audio, ['eac3']);
+  assert.deepEqual(Hints.parseReleaseHints('Film DTS-HD MA 5.1 x264').audio, ['dts']);
+  assert.equal(Hints.parseReleaseHints('Old.DVDRip.XviD').hdr, undefined, 'DVD is not Dolby Vision');
+});
+
+test('compatibilityNotes are hedged hints built from file names + reported capabilities', () => {
+  const chrome = { h264: true, hevc: false, av1: true, vp9: true, aac: true, ac3: false, eac3: false, opus: true, mkv: true };
+  const edge = { ...chrome, hevc: true, ac3: true, eac3: true };
+  const hints = Hints.parseReleaseHints('S02E01 2160p HEVC [Hindi DDP 5.1]');
+
+  const chromeNotes = Hints.compatibilityNotes(hints, chrome);
+  assert.equal(chromeNotes.length, 2);
+  assert.ok(chromeNotes.every((n) => /may/.test(n)), 'never a definitive claim');
+  assert.ok(chromeNotes.some((n) => /HEVC/.test(n)));
+  assert.ok(chromeNotes.some((n) => /Dolby/.test(n)));
+
+  assert.deepEqual(Hints.compatibilityNotes(hints, edge), []);
+  assert.deepEqual(Hints.compatibilityNotes(hints, null), []);
+  assert.equal(Hints.compatibilityNotes(Hints.parseReleaseHints('x264 AAC'), chrome).length, 0);
+});
+
+test('probeBrowserCapabilities maps canPlayType self-reports; MKV "" stays unknown', () => {
+  const chromeLike = {
+    canPlayType(type) {
+      if (/avc1|mp4a|vp9|vp09|av01|opus/.test(type)) return 'probably';
+      if (type === 'video/x-matroska') return 'maybe';
+      return '';
+    },
+  };
+  const caps = Caps.probeBrowserCapabilities(chromeLike);
+  assert.deepEqual(caps, { h264: true, hevc: false, av1: true, vp9: true, aac: true, ac3: false, eac3: false, opus: true, mkv: true });
+
+  const safariLike = { canPlayType: (type) => (/hvc1|avc1|mp4a|ac-3|ec-3/.test(type) ? 'probably' : '') };
+  const safari = Caps.probeBrowserCapabilities(safariLike);
+  assert.equal(safari.hevc, true);
+  assert.equal(safari.eac3, true);
+  assert.equal(safari.mkv, null, '"" is unknown, not a verdict');
+});
+
+/* ---------------------------- external players --------------------------- */
+
+test('detectClientPlatform covers Android, iPhone, iPadOS desktop mode, Mac and Windows', () => {
+  assert.equal(Ext.detectClientPlatform({ userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/130' }), 'android');
+  assert.equal(Ext.detectClientPlatform({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' }), 'ios');
+  assert.equal(
+    Ext.detectClientPlatform({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605', maxTouchPoints: 5 }),
+    'ios'
+  );
+  assert.equal(Ext.detectClientPlatform({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', maxTouchPoints: 0 }), 'mac');
+  assert.equal(Ext.detectClientPlatform({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130' }), 'desktop');
+  assert.equal(Ext.detectClientPlatform(null), 'desktop');
+});
+
+test('external player links are platform-specific, encoded, and never offered for non-HTTPS URLs', () => {
+  const url = 'https://cdn.example.com/files/Show.S01E01.mkv?token=a1b2#frag';
+  assert.equal(
+    Ext.androidIntentUrl(url, {
+      packageName: 'org.videolan.vlc',
+      title: 'My Show S01E01',
+      browserFallbackUrl: 'https://play.google.com/store/apps/details?id=org.videolan.vlc',
+    }),
+    'intent://cdn.example.com/files/Show.S01E01.mkv?token=a1b2#Intent;scheme=https;action=android.intent.action.VIEW;type=video/*;package=org.videolan.vlc;S.title=My%20Show%20S01E01;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dorg.videolan.vlc;end'
+  );
+
+  const android = Ext.externalPlayerOptions(url, { platform: 'android', title: 'My Show' });
+  assert.deepEqual(android.map((o) => o.id), ['vlc', 'mx', 'android-chooser']);
+  assert.ok(android[1].href.includes('package=com.mxtech.videoplayer.ad'));
+  assert.ok(!android[2].href.includes('package='), 'chooser lets Android pick any player');
+
+  const ios = Ext.externalPlayerOptions(url, { platform: 'ios' });
+  assert.equal(ios[0].href, `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent('https://cdn.example.com/files/Show.S01E01.mkv?token=a1b2')}`);
+  assert.ok(ios[1].href.startsWith('infuse://x-callback-url/play?url=https%3A%2F%2F'));
+
+  const desktop = Ext.externalPlayerOptions(url, { platform: 'desktop', title: 'My Show: S01E01' });
+  assert.equal(desktop.length, 1);
+  assert.equal(desktop[0].file.fileName, 'My.Show.S01E01.m3u');
+  assert.equal(desktop[0].file.content, '#EXTM3U\n#EXTINF:-1,My Show: S01E01\nhttps://cdn.example.com/files/Show.S01E01.mkv?token=a1b2\n');
+
+  assert.deepEqual(Ext.externalPlayerOptions('http://insecure.example.com/a.mkv', { platform: 'android' }), []);
+  assert.deepEqual(Ext.externalPlayerOptions('javascript:alert(1)', { platform: 'desktop' }), []);
+});
+
+/* ------------------------------ ordering --------------------------------- */
+
+test('releases sort best quality first, keep page order within a tier, and packs never play', () => {
+  const r720 = release({ quality: '720p' });
+  const r2160a = release({ quality: '2160p' });
+  const r1080 = release({ quality: '1080p' });
+  const r2160b = release({ quality: '2160p' });
+  const unknown = release({ quality: undefined });
+  const pack = release({ quality: '2160p', isPack: true, container: 'ZIP' });
+  const zipNoFlag = release({ quality: '1080p', container: 'ZIP' });
+  const noMirrors = release({ quality: '2160p', mirrors: [] });
+
+  const sorted = Plan.sortByQuality([r720, r2160a, r1080, unknown, r2160b]);
+  assert.deepEqual(sorted.map((r) => r.id), [r2160a.id, r2160b.id, r1080.id, r720.id, unknown.id]);
+
+  const playable = Plan.playableReleases([r720, pack, r2160a, zipNoFlag, noMirrors, r1080]);
+  assert.deepEqual(playable.map((r) => r.id), [r2160a.id, r1080.id, r720.id]);
+
+  const downloadable = Plan.downloadableReleases([r720, pack, noMirrors]);
+  assert.deepEqual(downloadable.map((r) => r.id), [pack.id, r720.id]);
+
+  assert.deepEqual(Plan.qualityTiers([r720, r2160a, r2160b, unknown]), ['2160p', '720p', 'Other']);
+  assert.equal(
+    Plan.sizeRangeLabel([{ sizeBytes: 1.19 * 1024 ** 3 }, { sizeBytes: 6.94 * 1024 ** 3 }, { size: '?' }]),
+    '1.19 GB – 6.94 GB'
+  );
+  assert.equal(Plan.sizeRangeLabel([{ size: '700 MB' }]), '700 MB');
+});
+
+test('streamCandidates keep direct files + HLS, drop landing pages/archives, dedupe, verified first, PixelDrain last', () => {
+  const candidates = Plan.streamCandidates([
+    link('https://pixeldrain.com/api/file/AbC?download', { server: 'PixelServer' }),
+    link('https://hubcloud.one/drive/page', { server: 'HubCloud Page', delivery: 'external', container: 'PAGE' }),
+    link('https://pub-x.r2.dev/Show.S01.zip', { container: 'ZIP' }),
+    link('https://fsl.example.net/Show.mkv', { server: 'FSL Server' }),
+    link('https://fsl.example.net/Show.mkv', { server: 'FSL Server (dup)' }),
+    link('https://cdn.example.com/master.m3u8', { server: 'HLS', playable: true, delivery: 'stream', container: 'HLS', streamType: 'hls' }),
+    link('http://plain.example.com/a.mkv'),
+  ]);
+
+  assert.deepEqual(
+    candidates.map((c) => [c.server, c.kind, c.verified]),
+    [
+      ['HLS', 'hls', true],
+      ['FSL Server', 'file', false],
+      ['PixelServer', 'file', false],
+    ]
+  );
+  const pixel = candidates[2];
+  assert.equal(pixel.url, 'https://pixeldrain.com/api/file/AbC', 'inline form for the media element');
+  assert.equal(pixel.sourceUrl, 'https://pixeldrain.com/api/file/AbC?download', 'original kept for download / copy');
+  assert.equal(Plan.inlineStreamUrl('https://cdn.example.com/a.mkv?download'), 'https://cdn.example.com/a.mkv?download');
+});
+
+test('classifyMediaError separates file-level (decode) from server-level (network) failures', () => {
+  assert.equal(Plan.classifyMediaError(3, false), 'decode');
+  assert.equal(Plan.classifyMediaError(4, true), 'decode');
+  assert.equal(Plan.classifyMediaError(4, false), 'network');
+  assert.equal(Plan.classifyMediaError(2, false), 'network');
+  assert.equal(Plan.classifyMediaError(undefined, false), 'network');
+  // Real Chromium messages (captured from headless Chrome 153 against generated media):
+  assert.equal(
+    Plan.classifyMediaError(4, false, 'PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS: FFmpegDemuxer: no supported streams'),
+    'decode',
+    'HEVC + E-AC-3 MKV: same encode on another server will not decode either'
+  );
+  assert.equal(Plan.classifyMediaError(4, false, 'MEDIA_ELEMENT_ERROR: Format error'), 'network', '403 / 404 / DNS failure');
+  assert.equal(
+    Plan.classifyMediaError(4, false, 'PipelineStatus::DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer: open context failed'),
+    'network',
+    'non-media body (e.g. an HTML page) is the server, not the encode'
+  );
+  assert.equal(Plan.isFileLevelFailure('no-picture'), true);
+  assert.equal(Plan.isFileLevelFailure('timeout'), false);
+});
+
+/* --------------------------- fallback controller ------------------------- */
+
+function harness({ links, outcomes = {}, blocked = new Set(), refreshLinks = {}, throwOn = new Set() }) {
+  const calls = { resolve: [], attempts: [], statuses: [] };
+  return {
+    calls,
+    options: {
+      resolve: async (mirror, rel, { refresh }) => {
+        calls.resolve.push(`${mirror.shortUrl}${refresh ? ' (refresh)' : ''}`);
+        if (throwOn.has(mirror.shortUrl)) throw new Error('network down');
+        if (blocked.has(mirror.shortUrl)) return { status: 'blocked', reason: 'captcha', links: [], hops: [] };
+        const table = refresh && refreshLinks[mirror.shortUrl] ? refreshLinks : links;
+        return resolved((table[mirror.shortUrl] || []).map((u) => link(u)));
+      },
+      attempt: async (candidate) => {
+        calls.attempts.push(candidate.url);
+        const outcome = outcomes[candidate.url];
+        return outcome ? { ok: false, failure: outcome } : { ok: true };
+      },
+      onStatus: (s) => calls.statuses.push(s.phase),
+    },
+  };
+}
+
+test('Try Play starts at the highest quality and falls back when a file cannot be decoded', async () => {
+  const uhd = release({ id: 'uhd', quality: '2160p' });
+  const fhd = release({ id: 'fhd', quality: '1080p' });
+  const hd = release({ id: 'hd', quality: '720p' });
+  const { calls, options } = harness({
+    links: {
+      [uhd.mirrors[0].shortUrl]: ['https://fsl.example/uhd.mkv', 'https://pixeldrain.com/api/file/UHD?download'],
+      [uhd.mirrors[1].shortUrl]: ['https://other.example/uhd.mkv'],
+      [fhd.mirrors[0].shortUrl]: ['https://fsl.example/fhd.mkv'],
+      [hd.mirrors[0].shortUrl]: ['https://fsl.example/hd.mkv'],
+    },
+    outcomes: { 'https://fsl.example/uhd.mkv': 'no-picture' },
+  });
+
+  const session = new Plan.PlaybackSession();
+  const result = await Plan.runPlaybackFallback(session, Plan.playableReleases([hd, uhd, fhd]), options);
+
+  assert.equal(result.status, 'playing');
+  assert.equal(result.release.id, 'fhd');
+  assert.equal(result.releaseIndex, 1);
+  // A file-level failure skips the other servers AND the other mirror of the same encode.
+  assert.deepEqual(calls.attempts, ['https://fsl.example/uhd.mkv', 'https://fsl.example/fhd.mkv']);
+  assert.deepEqual(calls.resolve, [uhd.mirrors[0].shortUrl, fhd.mirrors[0].shortUrl]);
+  assert.equal(calls.statuses.at(-1), 'playing');
+  assert.equal(session.reResolveUsed, false);
+});
+
+test('server-level failures try the next server, then the next mirror, with only ONE re-resolve per session', async () => {
+  const uhd = release({ id: 'u2', quality: '2160p' });
+  const fhd = release({ id: 'f2', quality: '1080p' });
+  const [m1, m2] = uhd.mirrors;
+  const { calls, options } = harness({
+    links: {
+      [m1.shortUrl]: ['https://a.example/u.mkv', 'https://b.example/u.mkv'],
+      [m2.shortUrl]: ['https://c.example/u.mkv'],
+      [fhd.mirrors[0].shortUrl]: ['https://d.example/f.mkv'],
+      [fhd.mirrors[1].shortUrl]: ['https://e.example/f.mkv'],
+    },
+    refreshLinks: { [m1.shortUrl]: ['https://a.example/u.mkv', 'https://a2.example/u-fresh.mkv'] },
+    outcomes: {
+      'https://a.example/u.mkv': 'network',
+      'https://b.example/u.mkv': 'timeout',
+      'https://a2.example/u-fresh.mkv': 'network',
+      'https://c.example/u.mkv': 'network',
+      'https://d.example/f.mkv': 'network',
+    },
+  });
+
+  const session = new Plan.PlaybackSession();
+  const result = await Plan.runPlaybackFallback(session, [uhd, fhd], options);
+
+  assert.equal(result.status, 'playing');
+  assert.equal(result.candidate.url, 'https://e.example/f.mkv');
+  assert.deepEqual(calls.attempts, [
+    'https://a.example/u.mkv',
+    'https://b.example/u.mkv',
+    'https://a2.example/u-fresh.mkv', // the single refresh, already-tried URL skipped
+    'https://c.example/u.mkv',
+    'https://d.example/f.mkv',
+    'https://e.example/f.mkv',
+  ]);
+  assert.equal(calls.resolve.filter((r) => r.endsWith('(refresh)')).length, 1, 'max one re-resolve');
+  assert.equal(session.reResolveUsed, true);
+});
+
+test('CAPTCHA / access-controlled mirrors are skipped — never re-resolved or retried', async () => {
+  const fhd = release({ id: 'f3', quality: '1080p' });
+  const [gated, open] = fhd.mirrors;
+  const { calls, options } = harness({
+    blocked: new Set([gated.shortUrl]),
+    links: { [open.shortUrl]: ['https://ok.example/f.mkv'] },
+  });
+
+  const session = new Plan.PlaybackSession();
+  const result = await Plan.runPlaybackFallback(session, [fhd], options);
+  assert.equal(result.status, 'playing');
+  assert.deepEqual(calls.resolve, [gated.shortUrl, open.shortUrl]);
+  assert.ok(session.blockedMirrors.has(gated.shortUrl));
+  assert.equal(session.reResolveUsed, false);
+
+  // Later runs in the same session don't touch the blocked mirror at all.
+  calls.resolve.length = 0;
+  await Plan.runPlaybackFallback(session, [fhd], options);
+  assert.ok(!calls.resolve.includes(gated.shortUrl));
+});
+
+test('a link that dies mid-playback is refreshed once and resumed in the same session', async () => {
+  const fhd = release({ id: 'f4', quality: '1080p', mirrors: [{ id: 'x', label: 'HubCloud', shortUrl: 'https://greenmotors.club/?id=f4', host: 'greenmotors.club' }] });
+  const { calls, options } = harness({
+    links: { 'https://greenmotors.club/?id=f4': ['https://cdn.example/f4.mkv?token=old'] },
+    refreshLinks: { 'https://greenmotors.club/?id=f4': ['https://cdn.example/f4.mkv?token=new'] },
+  });
+
+  const session = new Plan.PlaybackSession();
+  const first = await Plan.runPlaybackFallback(session, [fhd], options);
+  assert.equal(first.candidate.url, 'https://cdn.example/f4.mkv?token=old');
+
+  // The token expires: recovery re-runs the same session from the same release.
+  const recovery = await Plan.runPlaybackFallback(session, [fhd], { ...options, startIndex: 0 });
+  assert.equal(recovery.status, 'playing');
+  assert.equal(recovery.candidate.url, 'https://cdn.example/f4.mkv?token=new');
+  assert.deepEqual(calls.resolve, [
+    'https://greenmotors.club/?id=f4',
+    'https://greenmotors.club/?id=f4',
+    'https://greenmotors.club/?id=f4 (refresh)',
+  ]);
+
+  // A second expiry in the same session does NOT trigger another re-resolve.
+  const again = await Plan.runPlaybackFallback(session, [fhd], options);
+  assert.equal(again.status, 'failed');
+  assert.equal(calls.resolve.filter((r) => r.endsWith('(refresh)')).length, 1);
+});
+
+test('fallback stops on abort, on the attempt cap, and reports when nothing was playable', async () => {
+  const releases = ['2160p', '1080p', '720p', '480p'].map((quality, i) =>
+    release({ id: `cap${i}`, quality, mirrors: [{ id: `m${i}`, label: 'M', shortUrl: `https://greenmotors.club/?id=cap${i}`, host: 'greenmotors.club' }] })
+  );
+  const links = Object.fromEntries(releases.map((r, i) => [r.mirrors[0].shortUrl, [`https://a.example/${i}.mkv`, `https://b.example/${i}.mkv`]]));
+  const outcomes = Object.fromEntries(Object.values(links).flat().map((u) => [u, 'network']));
+
+  // Attempt cap
+  const capped = harness({ links, outcomes });
+  const capSession = new Plan.PlaybackSession(Date.now(), 3);
+  const capResult = await Plan.runPlaybackFallback(capSession, releases, capped.options);
+  assert.deepEqual(capResult, { status: 'failed', reason: 'limit' });
+  assert.equal(capped.calls.attempts.length, 3);
+
+  // Abort during the first attempt
+  const controller = new AbortController();
+  const aborting = harness({ links, outcomes });
+  const abortResult = await Plan.runPlaybackFallback(new Plan.PlaybackSession(), releases, {
+    ...aborting.options,
+    signal: controller.signal,
+    attempt: async () => {
+      controller.abort();
+      return { ok: false, failure: 'aborted' };
+    },
+  });
+  assert.deepEqual(abortResult, { status: 'aborted' });
+
+  // Wall-clock budget
+  let clock = 0;
+  const slow = harness({ links, outcomes });
+  const budgetSession = new Plan.PlaybackSession(0, 50, 1000);
+  const budgetResult = await Plan.runPlaybackFallback(budgetSession, releases, {
+    ...slow.options,
+    now: () => clock,
+    attempt: async () => {
+      clock += 600;
+      return { ok: false, failure: 'network' };
+    },
+  });
+  assert.equal(budgetResult.status, 'failed');
+  assert.equal(budgetResult.reason, 'limit');
+
+  // Nothing resolvable at all (and resolver throwing) → no-sources, never an exception
+  const empty = harness({ links: {}, throwOn: new Set([releases[0].mirrors[0].shortUrl]) });
+  const none = await Plan.runPlaybackFallback(new Plan.PlaybackSession(), releases, empty.options);
+  assert.deepEqual(none, { status: 'failed', reason: 'no-sources' });
+
+  // startIndex: "try the next quality" starts lower
+  const fromIndex = harness({ links });
+  const lower = await Plan.runPlaybackFallback(new Plan.PlaybackSession(), releases, { ...fromIndex.options, startIndex: 2 });
+  assert.equal(lower.release.quality, '720p');
+});
+
+/* ------------------------------ season tabs ------------------------------ */
+
+test('buildSeasonTabs keeps each season’s downloads inside its own tab', () => {
+  const s1Pack1080 = release({ id: 'p1', quality: '1080p', isPack: true, container: 'ZIP', seasonNumber: 1 });
+  const s1Pack2160 = release({ id: 'p2', quality: '2160p', isPack: true, container: 'ZIP', seasonNumber: 1 });
+  const s3Pack = release({ id: 'p3', quality: '720p', isPack: true, container: 'ZIP', seasonNumber: 3 });
+  const loose = release({ id: 'p4', quality: '1080p', container: 'MKV' });
+  const seasons = [
+    { id: 's2', seasonNumber: 2, name: 'Season 2', episodes: [{ id: 'e1', seasonNumber: 2, episodeNumber: 1, title: 'Episode 1' }] },
+    { id: 's1', seasonNumber: 1, name: 'Season 1', episodes: [] },
+  ];
+
+  const tabs = Tabs.buildSeasonTabs(seasons, [s1Pack1080, loose, s3Pack, s1Pack2160]);
+  assert.deepEqual(tabs.map((t) => [t.key, t.label]), [
+    ['s1', 'Season 1'],
+    ['s2', 'Season 2'],
+    ['s3', 'Season 3'],
+    ['other', 'More downloads'],
+  ]);
+  assert.deepEqual(tabs[0].packs.map((p) => p.id), ['p2', 'p1'], 'best quality first');
+  assert.equal(tabs[1].packs.length, 0);
+  assert.equal(tabs[1].season.episodes.length, 1);
+  assert.equal(tabs[2].season, null, 'pack-only season still gets a tab');
+  assert.deepEqual(tabs[3].packs.map((p) => p.id), ['p4']);
+
+  assert.equal(Tabs.buildSeasonTabs([], []).length, 0);
+  assert.equal(Tabs.seasonLabel(0), 'Specials');
+  assert.equal(Tabs.episodeCode(2, 5), 'S02E05');
+});
+
+/* --------------------------- resolver refresh ---------------------------- */
+
+test('resolve refresh skips a cached result only once it is old enough (no upstream tight loops)', async () => {
+  Resolver.clearMirrorResolveCache();
+  const PUBLIC_DNS = async () => [{ address: '104.21.58.178', family: 4 }];
+  let fetches = 0;
+  let generation = 0;
+  const fetchImpl = async (url) => {
+    fetches += 1;
+    if (url.startsWith('https://hubcloud.one/drive/')) {
+      generation += 1;
+      return new Response(`<a href="https://fsl.example.net/file-${generation}.mkv">Download [FSL Server]</a>`, {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    }
+    return new Response('nope', { status: 404 });
+  };
+  let clock = 1_000_000;
+  const deps = { fetchImpl, dnsLookup: PUBLIC_DNS, now: () => clock };
+  const input = { shortUrl: 'https://hubcloud.one/drive/abc', fileName: 'Show.S01E01.1080p.mkv' };
+
+  const first = await Resolver.resolveHubMirror(input, deps);
+  assert.equal(first.links[0].url, 'https://fsl.example.net/file-1.mkv');
+  assert.equal(first.links[0].playable, false, 'MKV is still never claimed verified-playable');
+  assert.equal(fetches, 1);
+
+  await Resolver.resolveHubMirror(input, deps);
+  assert.equal(fetches, 1, 'plain repeat is served from cache');
+
+  clock += 5_000;
+  const tooSoon = await Resolver.resolveHubMirror(input, { ...deps, refresh: true });
+  assert.equal(fetches, 1, `refresh within ${Resolver.MIN_REFRESH_AGE_MS}ms returns the cached result`);
+  assert.equal(tooSoon.links[0].url, 'https://fsl.example.net/file-1.mkv');
+
+  clock += Resolver.MIN_REFRESH_AGE_MS;
+  const fresh = await Resolver.resolveHubMirror(input, { ...deps, refresh: true });
+  assert.equal(fetches, 2);
+  assert.equal(fresh.links[0].url, 'https://fsl.example.net/file-2.mkv');
+
+  const cachedAgain = await Resolver.resolveHubMirror(input, deps);
+  assert.equal(cachedAgain.links[0].url, 'https://fsl.example.net/file-2.mkv', 'fresh result replaced the cache');
+  assert.equal(fetches, 2);
+  Resolver.clearMirrorResolveCache();
+});
+
+test('user-facing failure copy is a single plain sentence', () => {
+  assert.equal(UserError.SOMETHING_WENT_WRONG, 'Something went wrong');
+});

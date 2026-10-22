@@ -62,12 +62,24 @@ export const mediaApi = {
       json<{ seasons: Season[] }>(r)
     ),
 
-  resolveMirror: async (params: { url: string; fileName?: string; label?: string }): Promise<MirrorResolveResult> => {
+  /**
+   * Resolve a mirror short-link into direct links (server-side HTML hops only — media is
+   * never proxied). `refresh: true` requests one fresh resolution after cached links failed.
+   */
+  resolveMirror: async (params: {
+    url: string;
+    fileName?: string;
+    label?: string;
+    refresh?: boolean;
+    signal?: AbortSignal;
+  }): Promise<MirrorResolveResult> => {
+    const { signal, ...body } = params;
     const res = await fetch("/api/media/resolve", {
       method: "POST",
       headers: { "content-type": "application/json" },
       credentials: "omit",
-      body: JSON.stringify(params),
+      body: JSON.stringify(body),
+      signal,
     });
     const payload = (await res.json().catch(() => null)) as MirrorResolveResult | { error?: string; code?: string } | null;
     if (payload && "hops" in payload && Array.isArray(payload.hops)) {
