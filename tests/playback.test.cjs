@@ -44,6 +44,8 @@ function loadTs(targetPath) {
 const Hints = loadTs('../src/lib/media/releaseHints.ts');
 const Caps = loadTs('../src/lib/media/browserCaps.ts');
 const Ext = loadTs('../src/lib/media/externalPlayers.ts');
+const Launch = loadTs('../src/lib/media/externalLaunch.ts');
+const ExtStream = loadTs('../src/lib/media/externalStream.ts');
 const Plan = loadTs('../src/lib/media/playbackPlan.ts');
 const Tabs = loadTs('../src/lib/media/seasonTabs.ts');
 const Resolver = loadTs('../src/lib/media/hubResolver.ts');
@@ -259,6 +261,122 @@ test('externalPlayerLink picks a streamable file, skips landing pages and archiv
 
   const downloadOnly = Plan.externalPlayerLink([link('https://pixeldrain.com/api/file/AbC?download', { server: 'PixelServer' })]);
   assert.equal(downloadOnly.url, 'https://pixeldrain.com/api/file/AbC?download', 'the exact resolved link for a player app');
+});
+
+test('detectClientPlatform keeps Android Chrome "Desktop site" mode on android while keeping Linux PCs on desktop', () => {
+  const linuxDesktopModeUa = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36';
+  assert.equal(
+    Ext.detectClientPlatform({ userAgent: linuxDesktopModeUa, maxTouchPoints: 5, hasFinePointer: false }),
+    'android',
+    'coarse touch Linux is an Android phone in Desktop-site mode'
+  );
+  assert.equal(
+    Ext.detectClientPlatform({ userAgent: linuxDesktopModeUa, uaDataPlatform: 'Android', maxTouchPoints: 5, hasFinePointer: true }),
+    'android',
+    'Client Hints Android stays on android'
+  );
+  assert.equal(
+    Ext.detectClientPlatform({ userAgent: linuxDesktopModeUa, maxTouchPoints: 5, hasFinePointer: true }),
+    'desktop',
+    'touchscreen Linux laptop with mouse/trackpad stays desktop'
+  );
+  assert.equal(Ext.detectClientPlatform({ userAgent: linuxDesktopModeUa, maxTouchPoints: 0 }), 'desktop');
+});
+
+test('externalPlayerLinks returns EVERY streamable server link per quality with direct CDN ahead of two-step/rate-limited hosts', () => {
+  const links = Plan.externalPlayerLinks([
+    link('https://hubcloud.one/drive/page', { delivery: 'external', container: 'PAGE' }),
+    link('https://pub-x.r2.dev/Show.S01.zip', { container: 'ZIP' }),
+    link('https://pixeldrain.com/api/file/AbC?download', { server: 'PixelServer', container: 'MKV' }),
+    link('https://gpdl.hubcdn.fans/?id=tok123', { server: 'Download [10Gbps]', container: 'MKV' }),
+    link('https://pub-abc.r2.dev/Movie.2026.1080p.mkv', { server: 'FSL Server', container: 'MKV' }),
+  ]);
+
+  assert.deepEqual(
+    links.map((item) => item.server),
+    ['FSL Server', 'Download [10Gbps]', 'PixelServer'],
+    'FSL / R2 direct CDN leads, all valid stream links kept, landing pages & archives dropped'
+  );
+});
+
+test('resolveAllReleaseStreams resolves every quality concurrently, skips blocked mirrors, and keeps every server link', async () => {
+  const q480 = release({ id: 'q480', quality: '480p', mirrors: [{ label: 'M1', shortUrl: 'https://m.example/480' }] });
+  const q2160 = release({
+    id: 'q2160',
+    quality: '2160p',
+    mirrors: [
+      { label: 'Blocked', shortUrl: 'https://m.example/2160-blocked' },
+      { label: 'Backup', shortUrl: 'https://m.example/2160-ok' },
+    ],
+  });
+  const q1080 = release({ id: 'q1080', quality: '1080p', mirrors: [{ label: 'M1', shortUrl: 'https://m.example/1080' }] });
+  const q720 = release({ id: 'q720', quality: '720p', mirrors: [{ label: 'M1', shortUrl: 'https://m.example/720-manual' }] });
+  const pack = release({ id: 'pack', quality: '2160p', isPack: true, container: 'ZIP' });
+
+  const calls = [];
+  const fakeResolve = async ({ url }) => {
+    calls.push(url);
+    if (url.endsWith('/2160-blocked')) {
+      return { status: 'blocked', reason: 'captcha', links: [], hops: [] };
+    }
+    if (url.endsWith('/2160-ok')) {
+      return {
+        status: 'resolved',
+        links: [
+          link('https://pixeldrain.com/api/file/2160?download', { server: 'PixelServer' }),
+          link('https://pub-1.r2.dev/Movie.2160p.mkv', { server: 'FSL Server' }),
+        ],
+        hops: [],
+      };
+    }
+    if (url.endsWith('/1080')) {
+      return {
+        status: 'resolved',
+        links: [link('https://pub-1.r2.dev/Movie.1080p.mkv', { server: 'FSL Server' })],
+        hops: [],
+      };
+    }
+    if (url.endsWith('/720-manual')) {
+      return {
+        status: 'partial',
+        links: [link('https://hubcloud.one/drive/720', { delivery: 'external', container: 'PAGE' })],
+        hops: [],
+      };
+    }
+    return {
+      status: 'resolved',
+      links: [link('https://pub-1.r2.dev/Movie.480p.mp4', { server: 'Direct MP4', container: 'MP4', playable: true })],
+      hops: [],
+    };
+  };
+
+  const seen = [];
+  const outcomes = await ExtStream.resolveAllReleaseStreams([q480, pack, q720, q2160, q1080], {
+    label: 'My Movie',
+    resolve: fakeResolve,
+    onResult: (rel, res) => seen.push([rel.id, res.status]),
+  });
+
+  assert.equal(outcomes.size, 4, 'all 4 non-archive qualities resolved (not capped at 3), ZIP pack excluded');
+  assert.deepEqual(
+    outcomes.get('q2160').links.map((l) => l.server),
+    ['FSL Server', 'PixelServer'],
+    'blocked mirror skipped, backup mirror resolved with all server links'
+  );
+  assert.equal(outcomes.get('q1080').status, 'ready');
+  assert.deepEqual(outcomes.get('q720'), { status: 'manual', url: 'https://hubcloud.one/drive/720' });
+  assert.equal(outcomes.get('q480').links[0].url, 'https://pub-1.r2.dev/Movie.480p.mp4');
+  assert.equal(calls.filter((u) => u.endsWith('/2160-blocked')).length, 1, 'blocked mirror hit at most once');
+
+  // Every resolved link builds a pure, side-effect-free <a href> handoff on mobile.
+  const handoff = Launch.buildVlcHandoff(outcomes.get('q1080').links[0].url, {
+    title: 'My Movie (1080p)',
+    env: { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/131.0', maxTouchPoints: 5 },
+  });
+  assert.equal(handoff.plan.mode, 'app');
+  assert.ok(handoff.plan.href.startsWith('intent://pub-1.r2.dev/Movie.1080p.mkv#Intent;'));
+  assert.ok(handoff.plan.href.includes('package=org.videolan.vlc'));
+  assert.deepEqual(handoff.others.map((o) => o.id), ['mx', 'android-chooser']);
 });
 
 /* ------------------------------ ordering --------------------------------- */

@@ -180,10 +180,15 @@ export function downloadLinks(links: readonly ResolvedMirrorLink[]): ResolvedMir
 }
 
 /**
- * The one link to hand a player app: the direct file it can stream itself — HLS manifest or
- * any container, including the ones the browser can't decode — never a landing page or a
- * pack. Browser-compatible links win when both are offered, so a phone streams a smaller
- * file when one exists.
+ * Links worth handing to an external player app (VLC, MX Player, Infuse, IINA): every
+ * direct HTTPS media stream or file — including MKV / HEVC / Dolby that HTML5 `<video>`
+ * cannot decode — while strictly excluding host landing pages (`delivery === "external"`),
+ * season archive packs (`ZIP`/`RAR`/`7Z`), non-HTTPS schemes and embedded credentials.
+ *
+ * Ordering puts verified browser streams (HLS / MP4 / WebM) first, then true byte-range
+ * direct CDN servers (`FSL Server`, R2, direct media file paths), then other servers, and
+ * rate-limited hosts (PixelDrain) last — keeping every valid server option so the user can
+ * tap whichever link works best on their network.
  */
 export interface ExternalPlayerLink {
   url: string;
@@ -192,13 +197,68 @@ export interface ExternalPlayerLink {
   streamType?: ResolvedMirrorLink["streamType"];
 }
 
-export function externalPlayerLink(links: readonly ResolvedMirrorLink[]): ExternalPlayerLink | undefined {
-  const stream = streamCandidates(links)[0];
-  if (stream) {
-    return { url: stream.sourceUrl, server: stream.server, container: stream.container, streamType: stream.kind === "hls" ? "hls" : undefined };
+function isDirectCdnServer(url: string, server?: string): boolean {
+  if (/\bfsl\b/i.test(server || "")) return true;
+  if (/r2\.cloudflarestorage\.com|r2\.dev/i.test(url)) return true;
+  try {
+    const pathname = new URL(url).pathname;
+    if (/\.(?:mkv|mp4|webm|m3u8|avi|ts|m4v|mov)$/i.test(pathname)) return true;
+  } catch {
+    /* ignore */
   }
-  const file = downloadLinks(links).find((link) => !ARCHIVE_CONTAINERS.has(String(link.container || "").toUpperCase()));
-  return file ? { url: file.url, server: file.server, container: file.container, streamType: file.streamType } : undefined;
+  return false;
+}
+
+function isSafeHttpsMediaUrl(url: unknown): url is string {
+  if (typeof url !== "string" || !url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
+export function externalPlayerLinks(links: readonly ResolvedMirrorLink[]): ExternalPlayerLink[] {
+  const seen = new Set<string>();
+  const ranked: (ExternalPlayerLink & {
+    verified: boolean;
+    directCdn: boolean;
+    rateLimited: boolean;
+    order: number;
+  })[] = [];
+
+  links.forEach((link, order) => {
+    if (!link || link.delivery === "external") return;
+    if (ARCHIVE_CONTAINERS.has(String(link.container || "").toUpperCase())) return;
+    if (!isSafeHttpsMediaUrl(link.url)) return;
+    if (seen.has(link.url)) return;
+    seen.add(link.url);
+    ranked.push({
+      url: link.url,
+      server: link.server || "Server",
+      container: link.container,
+      streamType: link.streamType === "hls" ? "hls" : link.streamType,
+      verified: Boolean(link.playable),
+      directCdn: isDirectCdnServer(link.url, link.server),
+      rateLimited: isRateLimitedHost(link.url),
+      order,
+    });
+  });
+
+  return ranked
+    .sort(
+      (a, b) =>
+        Number(b.verified) - Number(a.verified) ||
+        Number(b.directCdn) - Number(a.directCdn) ||
+        Number(a.rateLimited) - Number(b.rateLimited) ||
+        a.order - b.order
+    )
+    .map(({ verified: _v, directCdn: _d, rateLimited: _r, order: _o, ...item }) => item);
+}
+
+export function externalPlayerLink(links: readonly ResolvedMirrorLink[]): ExternalPlayerLink | undefined {
+  return externalPlayerLinks(links)[0];
 }
 
 /**

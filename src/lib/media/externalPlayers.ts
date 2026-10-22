@@ -7,9 +7,12 @@
  * contacts the media host; the user's own device opens the URL. Whether a link works
  * depends on which apps are installed, so the UI always keeps "Copy URL" next to them.
  *
- * `vlcLaunchPlan()` is the one-tap variant behind the "Play with VLC" button: it returns
- * exactly what this device needs to start VLC — an app link on phones, a saved playlist on
- * computers (a browser cannot launch a desktop app).
+ * IMPORTANT BROWSER GESTURE RULE:
+ * On Android and iOS, custom-scheme / `intent:` links MUST sit inside a real `<a href>`
+ * that is ALREADY rendered in the DOM before the user taps it. Calling `anchor.click()`
+ * after an async `fetch()` loses transient user activation, so mobile browsers silently
+ * block the app launch. Every resolved VLC link in the UI therefore renders `<a href>`
+ * directly from `vlcLaunchPlan()`.
  */
 
 export type ClientPlatform = "android" | "ios" | "mac" | "desktop";
@@ -17,24 +20,32 @@ export type ClientPlatform = "android" | "ios" | "mac" | "desktop";
 export interface PlatformEnv {
   userAgent?: string;
   platform?: string;
+  /** `navigator.userAgentData?.platform` — stays `"Android"` even in Chrome's "Desktop site" mode. */
+  uaDataPlatform?: string;
   maxTouchPoints?: number;
   /**
-   * `window.matchMedia("(pointer: fine)")` — a mouse is the main pointer. Apple Silicon Macs
-   * report `maxTouchPoints > 1` *and* the same "Macintosh" UA as an iPad in desktop mode, so
-   * touch alone would send a laptop down the iOS path (a `vlc-x-callback:` link that does
-   * nothing). iPads report a coarse pointer, so they keep the app links.
+   * `window.matchMedia("(pointer: fine)")` — a mouse/trackpad is the main pointer.
+   *   - Apple Silicon Macs report `maxTouchPoints > 1` *and* the same "Macintosh" UA as an
+   *     iPad in desktop mode, so fine pointer keeps laptops on `mac` while iPads stay `ios`.
+   *   - Android Chrome with "Desktop site" enabled sends an `X11; Linux x86_64` UA while
+   *     reporting touch points and `hasFinePointer === false`, so coarse touch Linux stays on
+   *     `android` instead of saving an unusable `.m3u` file on a phone.
    */
   hasFinePointer?: boolean;
 }
 
-/** Coarse platform from the user agent. iPadOS desktop-mode UAs count as iOS. */
+/** Coarse platform from browser signals. Mobile browsers in "Desktop site" mode stay mobile. */
 export function detectClientPlatform(env: PlatformEnv | null | undefined): ClientPlatform {
   const ua = env?.userAgent || "";
-  if (/Android/i.test(ua)) return "android";
-  if (/iPhone|iPad|iPod/i.test(ua)) return "ios";
+  const uaDataPlatform = env?.uaDataPlatform || "";
+  if (/Android/i.test(uaDataPlatform) || /Android/i.test(ua)) return "android";
+  if (/iOS/i.test(uaDataPlatform) || /iPhone|iPad|iPod/i.test(ua)) return "ios";
   const touch = (env?.maxTouchPoints ?? 0) > 1;
   if (/Macintosh|Mac OS X/i.test(ua) || /^Mac/i.test(env?.platform || "")) {
     return touch && !env?.hasFinePointer ? "ios" : "mac";
+  }
+  if ((/Linux|X11/i.test(ua) || /^Linux/i.test(env?.platform || "")) && touch && env?.hasFinePointer === false) {
+    return "android";
   }
   return "desktop";
 }
@@ -118,7 +129,7 @@ export function externalPlayerOptions(
   options: { title?: string; platform: ClientPlatform }
 ): ExternalPlayerOption[] {
   const { title, platform } = options;
-  if (!/^https:\/\//i.test(url)) return [];
+  if (!isDirectMediaUrl(url)) return [];
 
   const playlist: ExternalPlayerOption = {
     id: "m3u",
@@ -161,33 +172,34 @@ export function externalPlayerOptions(
   return [playlist];
 }
 
-/* ------------------------- one-tap "Play with VLC" ------------------------- */
+/* ------------------------- direct "Play in VLC" plan ----------------------- */
 
 export interface VlcLaunchPlan {
-  /** `app` opens the VLC app through its URL scheme, `playlist` saves a file for it. */
+  /** `app` opens the VLC app through a real `<a href>`, `playlist` saves an `.m3u` file for it. */
   mode: "app" | "playlist";
-  /** App link — Android `intent:` / iOS `vlc-x-callback:`. Only in `app` mode. */
+  /** App link — Android `intent:` / iOS `vlc-x-callback:`. Rendered directly as `<a href>`. */
   href?: string;
-  /** `.m3u` to save and double-click. Only in `playlist` mode (no browser can launch an app). */
+  /** `.m3u` to save and open in desktop VLC. Only in `playlist` mode. */
   file?: NonNullable<ExternalPlayerOption["file"]>;
-  /** One line telling the user what will happen next. */
+  /** One line telling the user what happens next. */
   note: string;
 }
 
 /**
- * How to start VLC on this device with one tap. Phones get VLC's own link (which is also
- * what an `href` can carry, so it stays inside the user's tap); computers get a playlist
- * file, because a web page cannot launch a desktop app.
+ * How to launch VLC for an ALREADY-RESOLVED direct HTTPS stream URL on this device.
+ * Phones get VLC's own app scheme (`intent:` on Android, `vlc-x-callback:` on iOS) so
+ * rendering it inside `<a href={plan.href}>` opens VLC directly inside the user's tap;
+ * computers get a one-entry `.m3u` playlist file that opens in VLC.
  */
 export function vlcLaunchPlan(url: string, options: { title?: string; platform: ClientPlatform }): VlcLaunchPlan | null {
   const { title, platform } = options;
-  if (!/^https:\/\//i.test(url)) return null;
+  if (!isDirectMediaUrl(url)) return null;
 
   if (platform === "android") {
-    return { mode: "app", href: androidVlcUrl(url, title), note: "VLC opens and streams it." };
+    return { mode: "app", href: androidVlcUrl(url, title), note: "Opens and streams directly in VLC." };
   }
   if (platform === "ios") {
-    return { mode: "app", href: iosVlcUrl(url), note: "VLC opens and streams it." };
+    return { mode: "app", href: iosVlcUrl(url), note: "Opens and streams directly in VLC." };
   }
   const file = playlistFile(url, title);
   return { mode: "playlist", file, note: `Saved ${file.fileName} — open it to play in VLC.` };
@@ -197,8 +209,8 @@ export function vlcLaunchPlan(url: string, options: { title?: string; platform: 
 
 /**
  * Whether a URL may be handed to a player app at all: plain HTTPS and no embedded
- * credentials. Every link is checked against this before a "Play with VLC" button acts on
- * it, so a malformed or hostile resolve response can never become a navigation.
+ * credentials. Every link is checked against this before a VLC button acts on it, so a
+ * malformed or hostile resolve response can never become a navigation.
  */
 export function isDirectMediaUrl(url: string | null | undefined): boolean {
   if (!url) return false;

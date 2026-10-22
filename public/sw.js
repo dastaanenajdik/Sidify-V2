@@ -6,8 +6,8 @@
  * app shell must drop it, so both cache names move forward and activate() deletes the
  * previous ones. Installed PWAs pick this up at most one reload after the deploy thanks to
  * `src/lib/pwa.ts` (updateViaCache: none + controllerchange reload). */
-const SHELL_CACHE = "sidify-shell-v6";
-const STATIC_CACHE = "sidify-static-v6";
+const SHELL_CACHE = "sidify-shell-v7";
+const STATIC_CACHE = "sidify-static-v7";
 
 const APP_SHELL = [
   "./",

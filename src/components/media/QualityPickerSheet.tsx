@@ -6,13 +6,20 @@ import { Sheet } from "@/components/ui";
 import { copyText } from "@/lib/clipboard";
 import { MediaApiError, mediaApi } from "@/lib/media/client";
 import { redactUrl, reportMediaDiagnostic } from "@/lib/media/diagnostics";
-import { downloadLinks, downloadableReleases, landingPageUrl, streamCandidates } from "@/lib/media/playbackPlan";
+import {
+  downloadLinks,
+  downloadableReleases,
+  externalPlayerLink,
+  isArchiveRelease,
+  landingPageUrl,
+} from "@/lib/media/playbackPlan";
 import { hintChips, parseReleaseHints } from "@/lib/media/releaseHints";
 import type { MediaReleaseItem, ResolvedMirrorLink } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { cx } from "@/lib/format";
 import { useUi } from "@/store/ui";
 import { ExternalPlayerLinks } from "./ExternalPlayerLinks";
+import { VlcPlayButton } from "./VlcPlayButton";
 import type { WatchTarget } from "./watch";
 
 /**
@@ -247,7 +254,7 @@ function ReleaseSummary({ release }: { release: MediaReleaseItem }) {
 
 function LinkList({ links, title }: { links: ResolvedMirrorLink[]; title: string }) {
   const pushToast = useUi((s) => s.pushToast);
-  const preferred = streamCandidates(links)[0]?.sourceUrl ?? links[0]?.url;
+  const preferred = externalPlayerLink(links)?.url;
 
   const copy = async (url: string) => {
     try {
@@ -261,40 +268,54 @@ function LinkList({ links, title }: { links: ResolvedMirrorLink[]; title: string
   return (
     <div className="space-y-3">
       <ul className="space-y-1.5" aria-label="Download links">
-        {links.map((link) => (
-          <li
-            key={link.url}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-[12px] bg-fill/60 px-3 py-2.5"
-          >
-            <span className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate text-[13.5px] font-semibold text-fg">{link.server}</span>
-              {link.container && (
-                <span className="rounded bg-fill-2 px-1.5 py-0.5 text-[10.5px] font-bold text-fg-2 uppercase">{link.container}</span>
-              )}
-            </span>
-            <span className="flex shrink-0 items-center gap-1.5">
-              <a
-                href={link.url}
-                target="_blank"
-                rel="noreferrer noopener"
-                download
-                className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-semibold text-on-primary hover:opacity-90"
-              >
-                <Download size={13} aria-hidden="true" /> Download
-              </a>
-              <button
-                type="button"
-                onClick={() => void copy(link.url)}
-                aria-label={`Copy ${link.server} link`}
-                className={cx(
-                  "inline-flex h-8 items-center gap-1 rounded-full bg-fill-2 px-3 text-[12.5px] font-semibold text-fg hover:bg-fill-3"
+        {links.map((link) => {
+          const canStreamLink = !isArchiveRelease({ container: link.container });
+          return (
+            <li
+              key={link.url}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-[12px] bg-fill/60 px-3 py-2.5"
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate text-[13.5px] font-semibold text-fg">{link.server}</span>
+                {link.container && (
+                  <span className="rounded bg-fill-2 px-1.5 py-0.5 text-[10.5px] font-bold text-fg-2 uppercase">
+                    {link.container}
+                  </span>
                 )}
-              >
-                <Copy size={12} aria-hidden="true" /> Copy
-              </button>
-            </span>
-          </li>
-        ))}
+              </span>
+              <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+                {canStreamLink && (
+                  <VlcPlayButton
+                    url={link.url}
+                    title={title}
+                    label="VLC"
+                    iconSize={13}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full bg-fill-2 px-3 text-[12.5px] font-semibold text-fg transition-colors hover:bg-fill-3"
+                  />
+                )}
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  download
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-semibold text-on-primary hover:opacity-90"
+                >
+                  <Download size={13} aria-hidden="true" /> Download
+                </a>
+                <button
+                  type="button"
+                  onClick={() => void copy(link.url)}
+                  aria-label={`Copy ${link.server} link`}
+                  className={cx(
+                    "inline-flex h-8 items-center gap-1 rounded-full bg-fill-2 px-3 text-[12.5px] font-semibold text-fg hover:bg-fill-3"
+                  )}
+                >
+                  <Copy size={12} aria-hidden="true" /> Copy
+                </button>
+              </span>
+            </li>
+          );
+        })}
       </ul>
 
       <p className="text-[11.5px] leading-relaxed text-fg-3">
