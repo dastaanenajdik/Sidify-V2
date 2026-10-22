@@ -112,7 +112,7 @@ Environment variables:
 | `LYRICS_OVH_BASE` | optional | Secondary lyrics provider (defaults to `https://api.lyrics.ovh`) |
 | `MEDIA_PROVIDER` | optional | `auto` (default) · `demo` · `tmdb` — which movies/series adapter answers |
 | `TMDB_READ_ACCESS_TOKEN` / `TMDB_API_KEY` | optional | Official TMDb metadata (either one). Without it the demo catalogue is used |
-| `TMDB_LANGUAGE`, `TMDB_REGION` | optional | Metadata language (default `en-US`) and availability region (default `US`) |
+| `TMDB_LANGUAGE`, `TMDB_REGION` | optional | Metadata language (default `en-US`) and availability region (default `IN`) |
 | `MEDIA_PLAYBACK_MANIFEST` | optional | JSON map of **authorized** HLS/MP4 URLs, `{"movie/<slug>":[{"url":"https://…","type":"hls"}]}` |
 
 ---
@@ -141,7 +141,7 @@ Two adapters implement it:
 | Adapter | When | Notes |
 |---|---|---|
 | `demoProvider.ts` + `demoCatalog.ts` | default, no credentials | Fictional titles, original synopses, generated SVG artwork. Every card carries a **Demo** badge and every response is marked `demo: true`. |
-| `tmdbProvider.ts` | `TMDB_READ_ACCESS_TOKEN` or `TMDB_API_KEY` set | Official TMDb v3 API — metadata, artwork, YouTube trailer keys and official JustWatch availability links. Terms require the attribution line rendered on detail pages. |
+| `tmdbProvider.ts` | `TMDB_READ_ACCESS_TOKEN` or `TMDB_API_KEY` set | Official TMDb v3 API — real metadata, artwork, YouTube trailer keys and JustWatch availability links/searches (India by default). Terms require the attribution line rendered on detail pages. |
 
 Routes:
 
@@ -166,9 +166,10 @@ this feature. A title becomes playable only when:
 2. the operator lists an HTTPS HLS/MP4 URL in `MEDIA_PLAYBACK_MANIFEST`.
 
 Otherwise the detail page states that no playback source is configured and shows the
-official trailer plus the rights holder's availability links. Non-HTTPS manifest entries
-are discarded (`src/lib/media/playback.ts`). HLS plays natively in Safari/iOS; other
-browsers need an MP4 rendition from the same source.
+official trailer plus TMDb/JustWatch availability links (or a region-scoped JustWatch
+search when provider listings are missing). Sidify does not provide movie downloads.
+Non-HTTPS manifest entries are discarded (`src/lib/media/playback.ts`). HLS plays
+natively in Safari/iOS; other browsers need an MP4 rendition from the same source.
 
 Watchlist entries persist in `localStorage` (`src/store/watchlist.ts`), rehydrated like
 the other Sidify stores, so no account is required.

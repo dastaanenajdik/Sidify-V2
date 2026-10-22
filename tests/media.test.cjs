@@ -24,6 +24,7 @@ function load(relative) {
 const Q = load('../src/lib/media/query.ts');
 const D = load('../src/lib/media/demoCatalog.ts');
 const P = load('../src/lib/media/playback.ts');
+const A = load('../src/lib/media/availability.ts');
 
 const title = (over) => ({
   id: 'x',
@@ -41,6 +42,17 @@ const sample = [
   title({ id: '2', slug: 'b', title: 'Mumbai Rain', year: 2019, rating: 7.1, popularity: 90, genres: [{ id: 'drama', name: 'Drama' }], language: 'hi' }),
   title({ id: '3', slug: 'c', title: 'Ashfall', year: 2012, rating: 6.4, popularity: 10, genres: [{ id: 'drama', name: 'Drama' }], language: 'en' }),
 ];
+
+/* ------------------------- official availability ------------------------ */
+
+test('JustWatch fallback links are region-scoped HTTPS searches, not media files', () => {
+  const url = new URL(A.justWatchSearchUrl('Dune: Part Two', 2024, 'IN'));
+  assert.equal(url.origin, 'https://www.justwatch.com');
+  assert.equal(url.pathname, '/in/search');
+  assert.equal(url.searchParams.get('q'), 'Dune: Part Two 2024');
+  assert.equal(new URL(A.justWatchSearchUrl('Amélie')).pathname, '/in/search');
+  assert.equal(new URL(A.justWatchSearchUrl('Film', undefined, 'bad')).pathname, '/in/search');
+});
 
 /* ------------------------------- matching -------------------------------- */
 
