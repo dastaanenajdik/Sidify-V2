@@ -122,9 +122,9 @@ function Browse({ kind }: { kind: MediaKind }) {
         <div className="mx-4 mb-4 flex items-start gap-2.5 rounded-[12px] bg-raised/80 px-3.5 py-3 text-[12.5px] leading-relaxed text-fg-2 desk:mx-8">
           <Info size={15} className="mt-[1px] shrink-0 text-fg-2" aria-hidden="true" />
           <p className="min-w-0 flex-1">
-            <span className="font-semibold text-fg">Demo catalogue.</span> These are placeholder titles used while no metadata
-            provider is configured. Add <code className="rounded bg-fill px-1 py-[1px] text-[11.5px]">TMDB_API_KEY</code> to show
-            real films and series, with official availability lookups for licensed services.
+            <span className="font-semibold text-fg">Demo titles.</span> These are placeholder entries shown while no catalogue
+            could answer. Configure a metadata provider in the server environment to list real films and series with official
+            availability lookups.
           </p>
           <button
             type="button"
@@ -215,9 +215,6 @@ function Browse({ kind }: { kind: MediaKind }) {
             )}
           </section>
 
-          {first?.provider.attribution && !first.provider.demo && (
-            <p className="px-4 pt-8 text-[11.5px] leading-relaxed text-fg-3 desk:px-8">{first.provider.attribution}</p>
-          )}
         </>
       )}
     </div>

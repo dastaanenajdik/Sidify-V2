@@ -3,11 +3,14 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   serverExternalPackages: ["youtubei.js"],
   // Movies & series artwork. Cards draw generated SVG art when a title has no poster,
-  // but the licensed provider's CDN has to be allow-listed for next/image consumers.
+  // but the providers' CDNs have to be allow-listed for next/image consumers:
+  // TMDb posters, YouTube stills and Internet Archive item thumbnails.
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "image.tmdb.org" },
       { protocol: "https", hostname: "i.ytimg.com" },
+      { protocol: "https", hostname: "archive.org" },
+      { protocol: "https", hostname: "*.archive.org" },
     ],
   },
   // Expose the Vercel commit SHA to the client so Settings → About can show which build a

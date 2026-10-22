@@ -7,7 +7,9 @@
  */
 
 import { cache } from "react";
+import { ArchiveMediaProvider } from "./archiveProvider";
 import { DemoMediaProvider } from "./demoProvider";
+import { MergedMediaProvider } from "./mergedProvider";
 import type { MediaProvider } from "./provider";
 import { dedupeSources, manifestSources } from "./playback";
 import { railsFor } from "./query";
@@ -25,27 +27,46 @@ import type {
 
 /* ------------------------------- choosing -------------------------------- */
 
-let demoProvider: DemoMediaProvider | null = null;
-let tmdbProvider: TmdbMediaProvider | null = null;
+export type MediaProviderId = "demo" | "tmdb" | "archive" | "merged";
+
+const providers = new Map<MediaProviderId, MediaProvider>();
 
 /**
- * `MEDIA_PROVIDER=demo` forces the bundled catalogue, `=tmdb` requires credentials,
- * and the default (`auto`) uses TMDb when a key/token is present.
+ * Provider selection (`MEDIA_PROVIDER`):
+ *   auto / merged – TMDb metadata *and* free Internet Archive playback (default).
+ *                   Without a TMDb key the archive catalogue becomes the main shelf.
+ *   tmdb          – TMDb only; requires credentials, free shelf still available.
+ *   archive       – Internet Archive only: real, free, lawfully streamable films.
+ *   demo          – the bundled placeholder catalogue.
+ *
+ * `MEDIA_ARCHIVE=off` disables the free shelf and falls back to TMDb/demo.
  */
-export function mediaProviderId(): "demo" | "tmdb" {
+export function mediaProviderId(): MediaProviderId {
   const preference = (process.env.MEDIA_PROVIDER || "auto").toLowerCase();
   if (preference === "demo") return "demo";
   if (preference === "tmdb") return "tmdb";
-  return tmdbConfigured() ? "tmdb" : "demo";
+  if (preference === "archive" || preference === "internet-archive" || preference === "ia") return "archive";
+  if (preference === "merged") return "merged";
+  if ((process.env.MEDIA_ARCHIVE || "").toLowerCase() === "off") return tmdbConfigured() ? "tmdb" : "demo";
+  return "merged";
 }
 
 export function getMediaProvider(): MediaProvider {
-  if (mediaProviderId() === "tmdb") {
-    tmdbProvider ??= new TmdbMediaProvider();
-    return tmdbProvider;
-  }
-  demoProvider ??= new DemoMediaProvider();
-  return demoProvider;
+  const id = mediaProviderId();
+  const cached = providers.get(id);
+  if (cached) return cached;
+
+  const provider: MediaProvider =
+    id === "tmdb"
+      ? new TmdbMediaProvider()
+      : id === "archive"
+        ? new ArchiveMediaProvider()
+        : id === "demo"
+          ? new DemoMediaProvider()
+          : new MergedMediaProvider();
+
+  providers.set(id, provider);
+  return provider;
 }
 
 export function mediaProviderInfo(): ProviderInfo {
@@ -72,20 +93,33 @@ export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<M
   const provider = getMediaProvider();
   const filtered = isFiltered(query);
 
-  const [page, facets, trending, recent, topRated, popular] = await Promise.all([
+  const [page, facets, trending, recent, topRated, popular, free] = await Promise.all([
     provider.browse(kind, query),
     provider.getFacets(kind),
     provider[kind === "movie" ? "getTrendingMovies" : "getTrendingSeries"](12),
     provider[kind === "movie" ? "getNewMovieReleases" : "getNewSeriesReleases"](12),
     provider[kind === "movie" ? "getTopRatedMovies" : "getTopRatedSeries"](12),
     provider[kind === "movie" ? "getPopularMovies" : "getPopularSeries"](12),
+    // Free-to-watch films (public-domain archive titles) get their own shelf.
+    kind === "movie" && provider.getFreeToWatch ? provider.getFreeToWatch(12).catch(() => []) : Promise.resolve([]),
   ]);
+
+  const rails = railsFor(kind, { trending, recent, topRated, popular });
+  if (free.length > 0) {
+    // Keep the free shelf visible high up, but never above "Trending now".
+    rails.splice(Math.min(1, rails.length), 0, {
+      id: "free",
+      title: "Free to watch",
+      subtitle: "Public-domain films that stream in full",
+      items: free,
+    });
+  }
 
   return {
     ...page,
     kind,
     featured: pickFeatured(trending.length ? trending : page.items),
-    rails: filtered ? [] : railsFor(kind, { trending, recent, topRated, popular }),
+    rails: filtered ? [] : rails,
     facets,
     provider: provider.info,
     filtered,

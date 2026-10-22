@@ -65,6 +65,11 @@ export function MediaHero({ title }: { title: MediaTitle }) {
                   Demo title
                 </span>
               )}
+              {title.free && !title.demo && (
+                <span className="rounded-full bg-primary px-2 py-[3px] text-[10px] font-bold tracking-[0.06em] text-on-primary uppercase">
+                  Free to stream
+                </span>
+              )}
             </div>
 
             <h2 className="line-clamp-2 text-[32px] leading-[1.05] font-extrabold tracking-[-0.8px] desk:text-[46px] desk:tracking-[-1.2px]">

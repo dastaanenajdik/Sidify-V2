@@ -34,9 +34,24 @@ export interface TrailerRef {
  */
 export interface PlaybackSource {
   url: string;
-  /** `hls` for `.m3u8`, `mp4` for progressive files. */
-  type: "hls" | "mp4";
+  /**
+   * `hls` for `.m3u8`, `mp4` for progressive files, `embed` for an official
+   * third-party player (the Internet Archive's own embed) rendered in an iframe.
+   */
+  type: "hls" | "mp4" | "embed";
   label?: string;
+  /** Short, provider-supplied credit or caveat shown under the player. */
+  note?: string;
+}
+
+/** A download the provider itself offers (e.g. archive.org's item downloads). */
+export interface MediaDownload {
+  label: string;
+  url: string;
+  /** `page` for a download-options page, `file` for a direct file. */
+  kind: "page" | "file";
+  format?: string;
+  sizeBytes?: number;
 }
 
 /** Official availability / "where to watch" page supplied by the provider. */
@@ -80,6 +95,8 @@ export interface MediaTitle {
   popularity?: number;
   officialUrl?: string | null;
   watchProviders?: WatchProviderLink[];
+  /** True for freely available titles that stream without a subscription. */
+  free?: boolean;
   /** True for catalogue entries that are placeholder data, not a real title. */
   demo?: boolean;
 }
@@ -168,6 +185,8 @@ export interface MediaDetail {
   related: MediaTitle[];
   /** Only authorized URLs; empty when no licensed playback is configured. */
   playback: PlaybackSource[];
+  /** Downloads offered by the provider itself, e.g. archive.org's item files. */
+  downloads?: MediaDownload[];
   provider: ProviderInfo;
   attribution?: string;
 }

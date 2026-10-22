@@ -47,6 +47,11 @@ export function PosterCard({ title, className, eager }: { title: MediaTitle; cla
               <span className="sr-only">out of 10</span>
             </span>
           )}
+          {title.free && !title.demo && (
+            <span className="absolute bottom-2 left-2 rounded-full bg-primary px-1.5 py-[2px] text-[9px] font-bold tracking-[0.06em] text-on-primary uppercase shadow-sm">
+              Free
+            </span>
+          )}
           {title.demo && (
             <span className="absolute bottom-2 left-2 rounded-full bg-white/15 px-1.5 py-[2px] text-[9px] font-bold tracking-[0.06em] text-white/90 uppercase backdrop-blur-md">
               Demo
