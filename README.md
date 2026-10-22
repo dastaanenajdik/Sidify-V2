@@ -207,6 +207,10 @@ MEDIA_PLAYBACK_MANIFEST='{"movie/hub-moana-movie-8014":[{"url":"https://test-str
 - **External players** (`externalPlayers.ts`) are best-effort per platform — Android `intent:` links for VLC / MX Player / app chooser, iOS VLC / Infuse URL schemes, IINA on macOS, an `.m3u` playlist for desktop players — always next to **Copy URL**.
 - **No media through Sidify's servers.** `/api/media/resolve` only fetches small HTML hops; the browser (or the external app) loads the media URL directly. Nothing is proxied or transcoded, so this works unchanged on Vercel.
 - **User-facing errors** in the movies & series UI are always just "Something went wrong" (with Try again / alternatives). Resolver hops and upstream reasons stay in API responses and server logs.
+- **Diagnostics for developers.** Failures are logged to the browser console as `[Sidify media] …`. Logged: the resolve call's HTTP status / content type, the media error code and message, `readyState` / `networkState`, and the HLS error category. URLs are cut to host + file name, so no tokens are logged.
+- **Protected preview deployments.** The browser's resolve call sends same-origin cookies (`credentials: "same-origin"`), so Vercel Deployment Protection's `_vercel_jwt` cookie lets it reach `/api/media/resolve`. With `omit`, every resolve on a protected preview got Vercel's 401 page. The route never reads those cookies or forwards them upstream.
+- **When only the host page resolves** (`partial`: no direct server links found), the Download popup offers **Open download page** — the validated HubCloud / HubDrive page — rather than an error.
+- **Autoplay.** If the browser refuses autoplay with sound (Safari / iOS when `play()` runs after resolving the link), playback starts muted with a **Turn sound on** button. It is not counted as a broken link.
 
 ---
 

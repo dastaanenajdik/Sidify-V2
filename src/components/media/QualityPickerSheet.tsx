@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, ChevronRight, Copy, Download, ExternalLink, Loader2 } from "lucide-react";
 import { Sheet } from "@/components/ui";
 import { copyText } from "@/lib/clipboard";
-import { mediaApi } from "@/lib/media/client";
-import { downloadLinks, downloadableReleases, streamCandidates } from "@/lib/media/playbackPlan";
+import { MediaApiError, mediaApi } from "@/lib/media/client";
+import { redactUrl, reportMediaDiagnostic } from "@/lib/media/diagnostics";
+import { downloadLinks, downloadableReleases, landingPageUrl, streamCandidates } from "@/lib/media/playbackPlan";
 import { hintChips, parseReleaseHints } from "@/lib/media/releaseHints";
 import type { MediaReleaseItem, ResolvedMirrorLink } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
@@ -36,6 +37,8 @@ type ResolveState =
   | { phase: "idle" }
   | { phase: "loading" }
   | { phase: "done"; links: ResolvedMirrorLink[] }
+  /** No direct links, but the host's own download page was validated — open it to continue. */
+  | { phase: "manual"; url: string }
   | { phase: "error"; manualUrl?: string };
 
 function QualityPicker({ target }: { target: WatchTarget }) {
@@ -53,7 +56,8 @@ function QualityPicker({ target }: { target: WatchTarget }) {
     setSelected(release);
     setState({ phase: "loading" });
 
-    let manualUrl: string | undefined;
+    let landingUrl: string | undefined;
+    let fallbackUrl: string | undefined;
     // Mirror fallback: the first mirror that yields direct links wins.
     for (const mirror of release.mirrors) {
       try {
@@ -69,12 +73,29 @@ function QualityPicker({ target }: { target: WatchTarget }) {
           setState({ phase: "done", links });
           return;
         }
-        manualUrl ??= result.externalFallbackUrl;
-      } catch {
+        landingUrl ??= landingPageUrl(result);
+        fallbackUrl ??= result.externalFallbackUrl;
+        reportMediaDiagnostic("download: mirror gave no direct links", {
+          stage: "resolve-result",
+          quality: release.quality,
+          mirror: redactUrl(mirror.shortUrl),
+          status: result.status,
+          reason: result.reason,
+          links: result.links.length,
+        });
+      } catch (err) {
         if (controller.signal.aborted) return;
+        reportMediaDiagnostic("download: mirror resolve failed", {
+          stage: "resolve-api",
+          quality: release.quality,
+          mirror: redactUrl(mirror.shortUrl),
+          httpStatus: err instanceof MediaApiError ? err.status : undefined,
+          code: err instanceof MediaApiError ? err.code : (err as Error)?.name,
+        });
       }
     }
-    setState({ phase: "error", manualUrl: manualUrl ?? release.mirrors[0]?.shortUrl });
+    if (landingUrl) setState({ phase: "manual", url: landingUrl });
+    else setState({ phase: "error", manualUrl: fallbackUrl ?? release.mirrors[0]?.shortUrl });
   };
 
   const back = () => {
@@ -145,6 +166,31 @@ function QualityPicker({ target }: { target: WatchTarget }) {
                   Open mirror page <ExternalLink size={12} aria-hidden="true" />
                 </a>
               )}
+            </div>
+          </div>
+        )}
+
+        {state.phase === "manual" && (
+          <div className="rounded-[12px] bg-fill px-3.5 py-3">
+            <p className="text-[13px] leading-relaxed text-fg-2">
+              A direct link isn&apos;t ready for this one. Continue on the download page.
+            </p>
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              <a
+                href={state.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-semibold text-on-primary hover:opacity-90"
+              >
+                Open download page <ExternalLink size={12} aria-hidden="true" />
+              </a>
+              <button
+                type="button"
+                onClick={() => void resolve(selected)}
+                className="inline-flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-[12.5px] font-semibold text-fg hover:bg-fill-3"
+              >
+                Try again
+              </button>
             </div>
           </div>
         )}

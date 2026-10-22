@@ -1,16 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
-import { AlertCircle, Download, Loader2, RotateCcw, SkipForward, VolumeX } from "lucide-react";
+import { AlertCircle, Download, Loader2, RotateCcw, SkipForward, Volume2, VolumeX } from "lucide-react";
 import { Sheet } from "@/components/ui";
 import { probeBrowserCapabilities } from "@/lib/media/browserCaps";
-import { mediaApi } from "@/lib/media/client";
-import { attachPlaybackSource } from "@/lib/media/hlsPlayer";
+import { MediaApiError, mediaApi } from "@/lib/media/client";
+import { redactUrl, reportMediaDiagnostic } from "@/lib/media/diagnostics";
+import { attachPlaybackSource, type HlsFatalInfo } from "@/lib/media/hlsPlayer";
 import {
   PlaybackSession,
+  classifyHlsFatal,
   classifyMediaError,
   playableReleases,
   runPlaybackFallback,
+  streamCandidates,
   type AttemptOutcome,
   type PlaybackStatus,
   type StreamCandidate,
@@ -154,6 +157,8 @@ function BetaPlayer({
   const [skipped, setSkipped] = useState<number[]>([]);
   const [lastUrl, setLastUrl] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  /** The browser refused autoplay with sound, so playback started muted (one tap restores it). */
+  const [mutedByPolicy, setMutedByPolicy] = useState(false);
 
   const resetVideo = useCallback(() => {
     const teardown = hlsTeardownRef.current;
@@ -176,7 +181,7 @@ function BetaPlayer({
 
   /** Load one candidate and wait for real playback events to decide. */
   const attempt = useCallback(
-    (candidate: StreamCandidate, startAt: number | undefined, signal: AbortSignal): Promise<AttemptOutcome> => {
+    (candidate: StreamCandidate, quality: string, startAt: number | undefined, signal: AbortSignal): Promise<AttemptOutcome> => {
       const video = videoRef.current;
       if (!video || signal.aborted) return Promise.resolve({ ok: false, failure: "aborted" });
       resetVideo();
@@ -184,6 +189,7 @@ function BetaPlayer({
       return new Promise<AttemptOutcome>((resolve) => {
         let settled = false;
         let metadata = false;
+        let hlsFatal: HlsFatalInfo | undefined;
 
         const finish = (result: AttemptOutcome) => {
           if (settled) return;
@@ -193,7 +199,43 @@ function BetaPlayer({
           video.removeEventListener("loadeddata", onData);
           video.removeEventListener("error", onError);
           signal.removeEventListener("abort", onAbort);
+          if (!result.ok && result.failure !== "aborted") {
+            // Specifics go to DevTools only; the player itself just says "Something went wrong".
+            reportMediaDiagnostic("Try Play: link did not play", {
+              failure: result.failure,
+              quality,
+              server: candidate.server,
+              kind: candidate.kind,
+              file: redactUrl(candidate.url),
+              mediaErrorCode: video.error?.code ?? null,
+              mediaErrorMessage: video.error?.message?.replace(/https?:\/\/\S+/g, "<url>").slice(0, 160) || undefined,
+              readyState: video.readyState,
+              networkState: video.networkState,
+              metadataLoaded: metadata,
+              hlsErrorKind: hlsFatal?.kind,
+              hlsErrorDetails: hlsFatal?.details,
+              hlsHttpStatus: hlsFatal?.httpStatus,
+            });
+          }
           resolve(result);
+        };
+        /**
+         * play() rejections never decide the outcome — media events do. The exception is the
+         * autoplay policy (NotAllowedError: Safari/iOS refuse sound when play() runs after an
+         * async step such as resolving the link). That isn't a broken link, so retry muted —
+         * muted playback is always allowed — and offer a one-tap "Turn sound on".
+         */
+        const startPlayback = () => {
+          void video.play().catch((err: unknown) => {
+            if ((err as { name?: string } | null)?.name !== "NotAllowedError") return;
+            if (signal.aborted || video.muted || (settled && liveUrlRef.current !== candidate.url)) return;
+            video.muted = true;
+            setMutedByPolicy(true);
+            reportMediaDiagnostic("Try Play: autoplay with sound was blocked, playing muted", { quality, server: candidate.server });
+            void video.play().catch(() => {
+              /* events decide */
+            });
+          });
         };
         const onMetadata = () => {
           metadata = true;
@@ -210,9 +252,7 @@ function BetaPlayer({
           if (video.videoWidth > 0 && video.videoHeight > 0) {
             liveUrlRef.current = candidate.url;
             finish({ ok: true });
-            void video.play().catch(() => {
-              /* autoplay can be refused — the native controls stay usable */
-            });
+            startPlayback();
           } else {
             finish({ ok: false, failure: "no-picture" });
           }
@@ -236,8 +276,10 @@ function BetaPlayer({
           void attachPlaybackSource({
             video,
             source: { url: candidate.url, type: "hls" },
-            onFatalError: () => {
-              if (!settled) finish({ ok: false, failure: "network" });
+            onFatalError: (_reason, info) => {
+              hlsFatal = info;
+              // A segment that won't decode is a codec problem, not a network one.
+              if (!settled) finish({ ok: false, failure: classifyHlsFatal(info?.kind) });
               else if (liveUrlRef.current === candidate.url) lateFailureRef.current();
             },
           }).then((handle) => {
@@ -248,9 +290,7 @@ function BetaPlayer({
           video.src = candidate.url;
           video.load();
         }
-        void video.play().catch(() => {
-          /* loading continues; events decide the outcome */
-        });
+        startPlayback();
       });
     },
     [resetVideo]
@@ -270,15 +310,42 @@ function BetaPlayer({
       const result = await runPlaybackFallback(session, releases, {
         startIndex,
         signal: controller.signal,
-        resolve: (mirror, release, { refresh }) =>
-          mediaApi.resolveMirror({
-            url: mirror.shortUrl,
-            fileName: release.fileName,
-            label: release.title,
-            refresh,
-            signal: controller.signal,
-          }),
-        attempt: (candidate) => attempt(candidate, startAt, controller.signal),
+        resolve: async (mirror, release, { refresh }) => {
+          try {
+            const result = await mediaApi.resolveMirror({
+              url: mirror.shortUrl,
+              fileName: release.fileName,
+              label: release.title,
+              refresh,
+              signal: controller.signal,
+            });
+            if (!streamCandidates(result.links).length) {
+              reportMediaDiagnostic("Try Play: mirror gave no links to try", {
+                stage: "resolve-result",
+                quality: release.quality,
+                mirror: redactUrl(mirror.shortUrl),
+                status: result.status,
+                reason: result.reason,
+                links: result.links.length,
+                refresh,
+              });
+            }
+            return result;
+          } catch (err) {
+            if (!controller.signal.aborted) {
+              reportMediaDiagnostic("Try Play: mirror resolve failed", {
+                stage: "resolve-api",
+                quality: release.quality,
+                mirror: redactUrl(mirror.shortUrl),
+                httpStatus: err instanceof MediaApiError ? err.status : undefined,
+                code: err instanceof MediaApiError ? err.code : (err as Error)?.name,
+                refresh,
+              });
+            }
+            throw err;
+          }
+        },
+        attempt: (candidate, release) => attempt(candidate, release.quality || "file", startAt, controller.signal),
         onStatus: (next) => {
           if (controller.signal.aborted) return;
           setStatus(next);
@@ -360,13 +427,30 @@ function BetaPlayer({
         resumeAtRef.current = video.currentTime;
       }
     };
+    // Unmuted from the native controls → hide "Turn sound on".
+    const onVolume = () => {
+      if (!video.muted) setMutedByPolicy(false);
+    };
     video.addEventListener("error", onLateError);
     video.addEventListener("timeupdate", onTime);
+    video.addEventListener("volumechange", onVolume);
     return () => {
       video.removeEventListener("error", onLateError);
       video.removeEventListener("timeupdate", onTime);
+      video.removeEventListener("volumechange", onVolume);
     };
   }, []);
+
+  /** Runs inside the click, so the browser allows sound again. */
+  const unmute = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = false;
+    setMutedByPolicy(false);
+    void video.play().catch(() => {
+      /* native controls stay usable */
+    });
+  };
 
   const currentTime = () => {
     const video = videoRef.current;
@@ -493,7 +577,16 @@ function BetaPlayer({
             </div>
           )}
 
-          <div className="mt-3">
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            {outcome === "playing" && mutedByPolicy && (
+              <button
+                type="button"
+                onClick={unmute}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-semibold text-on-primary hover:opacity-90"
+              >
+                <Volume2 size={13} aria-hidden="true" /> Turn sound on
+              </button>
+            )}
             <button
               type="button"
               aria-expanded={helpOpen}

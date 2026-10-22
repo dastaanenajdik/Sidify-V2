@@ -165,6 +165,15 @@ export function downloadLinks(links: readonly ResolvedMirrorLink[]): ResolvedMir
   return links.filter((link) => link && link.delivery !== "external" && /^https:\/\//i.test(link.url));
 }
 
+/**
+ * The validated host page (HubCloud / HubDrive) that a `partial` resolution returns when it
+ * found no direct server links. Opening it is a working manual download path — the old
+ * release cards showed it as a plain "Open" link, so it isn't presented as an error.
+ */
+export function landingPageUrl(result: Pick<MirrorResolveResult, "links"> | null | undefined): string | undefined {
+  return result?.links?.find((link) => link?.delivery === "external" && /^https:\/\//i.test(link.url))?.url;
+}
+
 /* --------------------------- attempt outcomes ---------------------------- */
 
 export type AttemptFailure = "network" | "decode" | "no-picture" | "timeout";
@@ -198,6 +207,15 @@ export function classifyMediaError(
   if (code === 3 || metadataLoaded) return "decode";
   if (message && UNSUPPORTED_TRACKS_RE.test(message)) return "decode";
   return "network";
+}
+
+/**
+ * Classify a fatal HLS failure (see `HlsFatalInfo.kind` in hlsPlayer.ts). Segments that
+ * arrived but won't decode — or a browser with no HLS support at all — fail the same way
+ * on every server, so they are file-level. Only transport failures try the next server.
+ */
+export function classifyHlsFatal(kind: string | undefined): AttemptFailure {
+  return kind === "media" || kind === "unsupported" ? "decode" : "network";
 }
 
 /* ------------------------------ the loop -------------------------------- */
