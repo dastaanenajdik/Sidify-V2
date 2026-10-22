@@ -3,7 +3,8 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Info, SearchX, X } from "lucide-react";
+import { AlertTriangle, Clock, Info, SearchX, WifiOff, X } from "lucide-react";
+import { MediaApiError } from "@/lib/media/client";
 import { useMediaBrowse } from "@/lib/media/hooks";
 import { SORTS } from "@/lib/media/query";
 import type { MediaKind, MediaSort, MediaTitle } from "@/lib/media/types";
@@ -25,6 +26,36 @@ export default function MediaBrowsePage({ kind }: { kind: MediaKind }) {
       <Browse kind={kind} />
     </Suspense>
   );
+}
+
+function describeBrowseError(err: unknown): { icon: React.ReactNode; title: string; desc: string } {
+  const apiErr = err instanceof MediaApiError ? err : null;
+  const code = apiErr?.code;
+  const status = apiErr?.status;
+
+  if (code === "timeout" || status === 504) {
+    return {
+      icon: <Clock size={26} />,
+      title: "Catalogue request timed out",
+      desc: "The upstream movie source took too long to answer. Wait a moment and retry.",
+    };
+  }
+  if (code === "captcha" || code === "access_control" || status === 403) {
+    return {
+      icon: <AlertTriangle size={26} />,
+      title: "Upstream access restricted",
+      desc:
+        apiErr?.message ||
+        "The upstream source returned an access-control or automated challenge page that Sidify will not bypass.",
+    };
+  }
+  return {
+    icon: <WifiOff size={26} />,
+    title: "Provider unavailable right now",
+    desc:
+      apiErr?.message ||
+      "The upstream catalogue host could not be reached from this server network. Check outbound connectivity or retry shortly.",
+  };
 }
 
 function Browse({ kind }: { kind: MediaKind }) {
@@ -100,6 +131,7 @@ function Browse({ kind }: { kind: MediaKind }) {
   const demo = first?.provider.demo;
   const loading = query.isPending;
   const errored = query.isError;
+  const errorInfo = errored ? describeBrowseError(query.error) : null;
 
   return (
     <div className="fade-up">
@@ -122,9 +154,8 @@ function Browse({ kind }: { kind: MediaKind }) {
         <div className="mx-4 mb-4 flex items-start gap-2.5 rounded-[12px] bg-raised/80 px-3.5 py-3 text-[12.5px] leading-relaxed text-fg-2 desk:mx-8">
           <Info size={15} className="mt-[1px] shrink-0 text-fg-2" aria-hidden="true" />
           <p className="min-w-0 flex-1">
-            <span className="font-semibold text-fg">Demo titles.</span> These are placeholder entries shown while no catalogue
-            could answer. Configure a metadata provider in the server environment to list real films and series with official
-            availability lookups.
+            <span className="font-semibold text-fg">Demo mode enabled.</span> Showing placeholder entries because{" "}
+            <code className="text-fg">MEDIA_PROVIDER=demo</code> is active.
           </p>
           <button
             type="button"
@@ -157,13 +188,14 @@ function Browse({ kind }: { kind: MediaKind }) {
 
       {loading ? (
         <GridSkeleton />
-      ) : errored ? (
+      ) : errored && errorInfo ? (
         <EmptyState
-          title="Couldn't load the catalogue"
-          desc="The provider didn't answer. Check your connection and try again."
+          icon={errorInfo.icon}
+          title={errorInfo.title}
+          desc={errorInfo.desc}
           action={
-            <Button variant="secondary" onClick={() => void query.refetch()}>
-              Try again
+            <Button variant="secondary" onClick={() => void query.refetch()} disabled={query.isFetching}>
+              {query.isFetching ? "Retrying…" : "Try again"}
             </Button>
           }
         />
@@ -171,11 +203,13 @@ function Browse({ kind }: { kind: MediaKind }) {
         <EmptyState
           icon={<SearchX size={26} />}
           title={`No ${noun === "movie" ? "movies" : "series"} match`}
-          desc="Try a different search, or loosen the filters."
+          desc="Try a different search query, or clear active filters."
           action={
-            <Button variant="secondary" onClick={clearFilters}>
-              Clear filters
-            </Button>
+            value.q || value.genre || value.year || value.language || value.sort !== "trending" ? (
+              <Button variant="secondary" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            ) : undefined
           }
         />
       ) : (
@@ -214,7 +248,6 @@ function Browse({ kind }: { kind: MediaKind }) {
               </div>
             )}
           </section>
-
         </>
       )}
     </div>

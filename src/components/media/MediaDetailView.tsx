@@ -1,22 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  AlertCircle,
   Bookmark,
   Calendar,
   Check,
   ChevronDown,
   Clock,
+  Copy,
   Download,
   ExternalLink,
+  HardDrive,
+  Loader2,
   Play,
+  RefreshCw,
   Star,
 } from "lucide-react";
+import { copyText } from "@/lib/clipboard";
 import { mediaArt } from "@/lib/media/art";
+import { mediaApi, MediaApiError } from "@/lib/media/client";
+import { attachPlaybackSource, type HlsPlaybackMode } from "@/lib/media/hlsPlayer";
 import { useSeasonEpisodes } from "@/lib/media/hooks";
-import type { Episode, MediaDetail, PlaybackSource, Season } from "@/lib/media/types";
+import type {
+  Episode,
+  MediaDetail,
+  MediaMirror,
+  MediaReleaseItem,
+  MirrorResolveResult,
+  PlaybackSource,
+  ResolvedMirrorLink,
+  Season,
+} from "@/lib/media/types";
 import { SectionHeader, Shelf } from "@/components/ui";
+import { useUi } from "@/store/ui";
 import { useWatchlist } from "@/store/watchlist";
 import { cx, formatBytes } from "@/lib/format";
 import { PosterCard, posterShelfClass } from "./PosterCard";
@@ -24,13 +42,51 @@ import { TrailerSheet } from "./TrailerSheet";
 
 /** Everything on a /movies/[slug] or /series/[slug] page. */
 export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
-  const { title, seasons, related, playback } = detail;
+  const { title, seasons, related } = detail;
   const [trailerOpen, setTrailerOpen] = useState(false);
+  const [backdropBroken, setBackdropBroken] = useState(false);
+  const [posterBroken, setPosterBroken] = useState(false);
+
+  // Dynamic browser-compatible streams resolved during the session (appended to initial sources)
+  const [resolvedStreams, setResolvedStreams] = useState<PlaybackSource[]>([]);
+  const [activeStreamIndex, setActiveStreamIndex] = useState(0);
+
   const saved = useWatchlist((s) => s.items.some((item) => item.id === `${title.kind}:${title.slug}`));
   const toggle = useWatchlist((s) => s.toggle);
 
-  const backdrop = mediaArt(title.backdrop ?? title.poster, { seed: title.slug, accent: title.accent, ratio: "backdrop" });
-  const poster = mediaArt(title.poster, { seed: title.slug, accent: title.accent });
+  const allPlayback: PlaybackSource[] = [...detail.playback, ...resolvedStreams];
+  const releases = detail.releases ?? [];
+
+  const handlePlayResolvedStream = (link: ResolvedMirrorLink, labelPrefix?: string) => {
+    if (!link.playable || !link.streamType) return;
+    const streamSource: PlaybackSource = {
+      url: link.url,
+      type: link.streamType,
+      label: labelPrefix ? `${labelPrefix} · ${link.server}` : link.server,
+      note: link.codecNote,
+    };
+
+    const existingIdx = allPlayback.findIndex((s) => s.url === streamSource.url);
+    if (existingIdx >= 0) {
+      setActiveStreamIndex(existingIdx);
+    } else {
+      const nextIndex = detail.playback.length + resolvedStreams.length;
+      setResolvedStreams((prev) => [...prev, streamSource]);
+      setActiveStreamIndex(nextIndex);
+    }
+
+    setTimeout(() => {
+      document.getElementById("play")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 60);
+  };
+
+  const backdrop = backdropBroken
+    ? mediaArt(null, { seed: title.slug, accent: title.accent, ratio: "backdrop" })
+    : mediaArt(title.backdrop ?? title.poster, { seed: title.slug, accent: title.accent, ratio: "backdrop" });
+  const poster = posterBroken
+    ? mediaArt(null, { seed: title.slug, accent: title.accent })
+    : mediaArt(title.poster, { seed: title.slug, accent: title.accent });
+
   const meta = [
     title.year,
     title.kind === "movie"
@@ -55,6 +111,7 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
           aria-hidden="true"
           decoding="async"
           draggable={false}
+          onError={() => setBackdropBroken(true)}
           className="absolute inset-0 h-full w-full object-cover"
         />
         <div
@@ -68,7 +125,13 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
           <div className="flex flex-col gap-5 desk:flex-row desk:items-end desk:gap-8">
             <div className="w-[118px] shrink-0 overflow-hidden rounded-[12px] shadow-[0_18px_50px_-14px_rgba(0,0,0,0.8)] ring-1 ring-white/15 desk:w-[216px]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={poster} alt={`${title.title} poster`} decoding="async" className="aspect-[2/3] w-full object-cover" />
+              <img
+                src={poster}
+                alt={`${title.title} poster`}
+                decoding="async"
+                onError={() => setPosterBroken(true)}
+                className="aspect-[2/3] w-full object-cover"
+              />
             </div>
             <div className="min-w-0 flex-1">
               <div className="mb-1.5 flex flex-wrap items-center gap-2">
@@ -106,12 +169,19 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
               <p className="mt-3 max-w-[680px] text-[14px] leading-relaxed text-white/85 desk:text-[15px]">{title.overview}</p>
 
               <div className="mt-5 flex flex-wrap items-center gap-2.5">
-                {playback.length > 0 ? (
+                {allPlayback.length > 0 ? (
                   <a
                     href="#play"
                     className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[15px] font-semibold text-black transition-transform active:scale-[0.97] hover:opacity-90"
                   >
                     <Play size={16} fill="currentColor" aria-hidden="true" /> Play
+                  </a>
+                ) : releases.length > 0 ? (
+                  <a
+                    href="#qualities"
+                    className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[15px] font-semibold text-black transition-transform active:scale-[0.97] hover:opacity-90"
+                  >
+                    <HardDrive size={16} aria-hidden="true" /> Qualities &amp; mirrors ({releases.length})
                   </a>
                 ) : title.trailer ? (
                   <button
@@ -123,7 +193,7 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
                   </button>
                 ) : null}
 
-                {playback.length > 0 && title.trailer && (
+                {(allPlayback.length > 0 || releases.length > 0) && title.trailer && (
                   <button
                     type="button"
                     onClick={() => setTrailerOpen(true)}
@@ -149,28 +219,53 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
             </div>
           </div>
         </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16" style={{ background: "linear-gradient(180deg, transparent, var(--bg))" }} aria-hidden="true" />
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-16"
+          style={{ background: "linear-gradient(180deg, transparent, var(--bg))" }}
+          aria-hidden="true"
+        />
       </header>
 
-      <div className="mt-6">
-        <PlaybackSection playback={playback} detail={detail} />
+      <div className="mt-6 space-y-8">
+        {(allPlayback.length > 0 || releases.length === 0) && (
+          <PlaybackSection
+            playback={allPlayback}
+            active={activeStreamIndex}
+            onSelectActive={setActiveStreamIndex}
+            detail={detail}
+          />
+        )}
+
+        {releases.length > 0 && (
+          <ReleasesSection
+            releases={releases}
+            kind={title.kind}
+            officialUrl={title.officialUrl}
+            onPlayStream={handlePlayResolvedStream}
+          />
+        )}
+
+        {title.kind === "series" && seasons.length > 0 && (
+          <SeasonsSection slug={title.slug} seasons={seasons} onPlayStream={handlePlayResolvedStream} />
+        )}
+
+        {related.length > 0 && (
+          <section className="mb-8">
+            <SectionHeader title="More like this" />
+            <Shelf>
+              {related.map((item) => (
+                <PosterCard key={`${item.kind}-${item.id}`} title={item} className={posterShelfClass} />
+              ))}
+            </Shelf>
+          </section>
+        )}
       </div>
 
-      {title.kind === "series" && seasons.length > 0 && <SeasonsSection slug={title.slug} seasons={seasons} />}
-
-      {related.length > 0 && (
-        <section className="mb-8">
-          <SectionHeader title="More like this" />
-          <Shelf>
-            {related.map((item) => (
-              <PosterCard key={`${item.kind}-${item.id}`} title={item} className={posterShelfClass} />
-            ))}
-          </Shelf>
-        </section>
-      )}
-
-      <div className="px-4 pb-4 desk:px-8">
-        <Link href={title.kind === "movie" ? "/movies" : "/series"} className="inline-flex items-center gap-1 text-[13px] font-semibold text-playing hover:opacity-80">
+      <div className="mt-6 px-4 pb-4 desk:px-8">
+        <Link
+          href={title.kind === "movie" ? "/movies" : "/series"}
+          className="inline-flex items-center gap-1 text-[13px] font-semibold text-playing hover:opacity-80"
+        >
           ← Back to all {title.kind === "movie" ? "movies" : "series"}
         </Link>
       </div>
@@ -188,17 +283,94 @@ function formatRuntime(minutes: number): string {
 
 /* ------------------------------- playback -------------------------------- */
 
-/**
- * Authorized playback only.
- *
- * URLs come from the operator's manifest or a licensed provider — never from a
- * scraper. With none configured we say so plainly and point at the official trailer /
- * availability links instead of inventing a stream.
- */
-function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; detail: MediaDetail }) {
+function MediaStreamPlayer({
+  source,
+  poster,
+  onModeChange,
+  onStreamError,
+}: {
+  source: PlaybackSource;
+  poster?: string;
+  onModeChange: (url: string, mode: HlsPlaybackMode) => void;
+  onStreamError: (url: string, message: string) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    let disposed = false;
+    let teardown: (() => void) | undefined;
+
+    void attachPlaybackSource({
+      video: videoEl,
+      source,
+      onMode: (mode) => {
+        if (!disposed) onModeChange(source.url, mode);
+      },
+      onFatalError: (reason) => {
+        if (!disposed) onStreamError(source.url, reason);
+      },
+    }).then((handle) => {
+      if (disposed) {
+        handle.destroy();
+      } else {
+        teardown = handle.destroy;
+      }
+    });
+
+    return () => {
+      disposed = true;
+      teardown?.();
+    };
+  }, [source, onModeChange, onStreamError]);
+
+  return (
+    <video
+      key={source.url}
+      ref={videoRef}
+      controls
+      playsInline
+      preload="metadata"
+      poster={poster}
+      onError={() =>
+        onStreamError(
+          source.url,
+          "Browser video element rejected this stream (unsupported audio/video codec, expired direct URL, or cross-origin media policy). Open the link in VLC / IINA / MPV or download directly."
+        )
+      }
+      className="aspect-video w-full bg-black"
+    >
+      Your browser cannot play this media stream natively.
+    </video>
+  );
+}
+
+function PlaybackSection({
+  playback,
+  active,
+  onSelectActive,
+  detail,
+}: {
+  playback: PlaybackSource[];
+  active: number;
+  onSelectActive: (idx: number) => void;
+  detail: MediaDetail;
+}) {
   const { title } = detail;
-  const [active, setActive] = useState(0);
+  const pushToast = useUi((s) => s.pushToast);
+  const [failedReasons, setFailedReasons] = useState<Record<string, string>>({});
+  const [streamModes, setStreamModes] = useState<Record<string, HlsPlaybackMode>>({});
   const downloads = detail.downloads ?? [];
+
+  const handleStreamError = (url: string, reason: string) => {
+    setFailedReasons((prev) => (prev[url] === reason ? prev : { ...prev, [url]: reason }));
+  };
+
+  const handleModeChange = (url: string, mode: HlsPlaybackMode) => {
+    setStreamModes((prev) => (prev[url] === mode ? prev : { ...prev, [url]: mode }));
+  };
 
   if (playback.length === 0) {
     const links = title.watchProviders ?? [];
@@ -206,19 +378,14 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
       <section aria-labelledby="where-to-watch" className="px-4 desk:px-8">
         <div className="rounded-[16px] bg-raised/70 p-4 ring-1 ring-edge desk:p-5">
           <h2 id="where-to-watch" className="t-title">
-            Where to watch
+            Playback &amp; availability
           </h2>
           <p className="mt-1.5 max-w-[680px] text-[13.5px] leading-relaxed text-fg-2">
-            No authorized playback source is configured for this title, so there is no in-site player.{" "}
+            No verified browser-compatible stream is currently loaded for this title.{" "}
             {links.length > 0
-              ? "Use the availability options below to find licensed streaming, rental or purchase services."
-              : "No official availability information is available for this title."}
+              ? "Use the availability links below to locate official streaming options."
+              : "Check the release mirrors or official page if available."}
           </p>
-          {!title.trailer && (
-            <p className="mt-2 text-[12.5px] leading-relaxed text-fg-3">
-              Official trailers appear here when the catalogue provider supplies one.
-            </p>
-          )}
           {links.length > 0 && (
             <>
               <ul className="mt-3 flex flex-wrap gap-2">
@@ -247,7 +414,7 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
               rel="noreferrer noopener"
               className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-playing hover:opacity-80"
             >
-              Official page <ExternalLink size={12} aria-hidden="true" />
+              Source page <ExternalLink size={12} aria-hidden="true" />
             </a>
           )}
         </div>
@@ -255,8 +422,20 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
     );
   }
 
-  const source = playback[Math.min(active, playback.length - 1)];
+  const boundedIndex = Math.min(active, playback.length - 1);
+  const source = playback[boundedIndex];
   const embed = source.type === "embed";
+  const failureMessage = failedReasons[source.url];
+  const activeMode = streamModes[source.url];
+
+  const copyStreamUrl = async () => {
+    try {
+      await copyText(source.url);
+      pushToast({ title: "Copied stream URL to clipboard", kind: "ok" });
+    } catch {
+      pushToast({ title: "Clipboard unavailable", desc: "Right-click Open stream URL to copy.", kind: "warn" });
+    }
+  };
 
   return (
     <section id="play" aria-labelledby="authorized-playback" className="px-4 desk:px-8">
@@ -271,36 +450,68 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
             className="aspect-video w-full bg-black"
           />
         ) : (
-          <video
-            controls
-            playsInline
-            preload="metadata"
+          <MediaStreamPlayer
+            source={source}
             poster={title.backdrop ?? title.poster ?? undefined}
-            className="aspect-video w-full bg-black"
-          >
-            <source src={source.url} type={source.type === "hls" ? "application/vnd.apple.mpegurl" : "video/mp4"} />
-            Your browser can&apos;t play this authorized stream.
-          </video>
+            onModeChange={handleModeChange}
+            onStreamError={handleStreamError}
+          />
         )}
       </div>
+
+      {failureMessage && (
+        <div
+          role="alert"
+          className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-[12px] bg-danger/12 px-3.5 py-2.5 text-[12.5px] text-fg ring-1 ring-danger/30"
+        >
+          <span>{failureMessage}</span>
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void copyStreamUrl()}
+              className="inline-flex items-center gap-1 rounded-full bg-fill-2 px-3 py-1.5 text-[12px] font-semibold hover:bg-fill-3"
+            >
+              <Copy size={12} aria-hidden="true" /> Copy stream URL
+            </button>
+            <a
+              href={source.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="inline-flex items-center gap-1 rounded-full bg-fill-2 px-3 py-1.5 text-[12px] font-semibold hover:bg-fill-3"
+            >
+              Open stream URL <ExternalLink size={12} aria-hidden="true" />
+            </a>
+          </div>
+        </div>
+      )}
+
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <h2 id="authorized-playback" className="text-[13px] font-semibold text-fg-2">
-          {embed ? "Free stream" : "Authorized playback"}
+          {source.label || (embed ? "Embedded player" : "Browser stream")}
         </h2>
+        {!embed && activeMode && activeMode !== "unsupported" && (
+          <span className="rounded-full bg-fill px-2.5 py-0.5 text-[11px] font-semibold text-fg-3">
+            {activeMode === "native-hls"
+              ? "Native HLS"
+              : activeMode === "mse-hls"
+                ? "HLS · hls.js MSE"
+                : `Direct ${source.type.toUpperCase()}`}
+          </span>
+        )}
         {playback.length > 1 &&
           playback.map((item, index) => (
             <button
               key={item.url}
               type="button"
-              onClick={() => setActive(index)}
-              aria-pressed={index === active}
+              onClick={() => onSelectActive(index)}
+              aria-pressed={index === boundedIndex}
               aria-label={`Playback option ${index + 1}`}
               className={cx(
-                "h-6 min-w-6 rounded-full px-2 text-[12px] font-semibold tabular-nums transition-colors",
-                index === active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
+                "h-6 min-w-6 rounded-full px-2.5 text-[12px] font-semibold tabular-nums transition-colors",
+                index === boundedIndex ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
               )}
             >
-              {index + 1}
+              {item.label ? `${index + 1}. ${item.label}` : index + 1}
             </button>
           ))}
       </div>
@@ -329,19 +540,319 @@ function PlaybackSection({ playback, detail }: { playback: PlaybackSource[]; det
           </ul>
         </div>
       )}
-
-      <p className="mt-1.5 text-[11.5px] leading-relaxed text-fg-3">
-        {playback.some((item) => item.type === "hls")
-          ? "HLS plays natively in Safari and on iOS/iPadOS; other browsers need an MP4 rendition."
-          : "Playback happens in-page."}
-      </p>
     </section>
+  );
+}
+
+/* --------------------- qualities & mirror resolution --------------------- */
+
+function ReleasesSection({
+  releases,
+  kind,
+  officialUrl,
+  onPlayStream,
+}: {
+  releases: MediaReleaseItem[];
+  kind: "movie" | "series";
+  officialUrl?: string | null;
+  onPlayStream: (link: ResolvedMirrorLink, labelPrefix?: string) => void;
+}) {
+  return (
+    <section id="qualities" aria-labelledby="qualities-heading">
+      <SectionHeader
+        title={<span id="qualities-heading">{kind === "series" ? "Season packs & releases" : "Available qualities & mirrors"}</span>}
+        subtitle={`${releases.length} ${releases.length === 1 ? "release" : "releases"} · Only verified MP4/WebM/HLS streams open in the in-page player`}
+        trailing={
+          officialUrl ? (
+            <a
+              href={officialUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2 hover:text-fg"
+            >
+              Source page <ExternalLink size={12} aria-hidden="true" />
+            </a>
+          ) : undefined
+        }
+      />
+      <div className="space-y-2.5 px-4 desk:px-8">
+        {releases.map((rel) => (
+          <ReleaseCard key={rel.id} release={rel} onPlayStream={onPlayStream} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ReleaseCard({
+  release,
+  compact = false,
+  onPlayStream,
+}: {
+  release: MediaReleaseItem;
+  compact?: boolean;
+  onPlayStream: (link: ResolvedMirrorLink, labelPrefix?: string) => void;
+}) {
+  const pushToast = useUi((s) => s.pushToast);
+  const [states, setStates] = useState<
+    Record<
+      string,
+      {
+        loading: boolean;
+        result?: MirrorResolveResult;
+        error?: string;
+      }
+    >
+  >({});
+
+  const resolveMirror = async (mirror: MediaMirror) => {
+    setStates((prev) => ({
+      ...prev,
+      [mirror.id]: { loading: true },
+    }));
+
+    try {
+      const result = await mediaApi.resolveMirror({
+        url: mirror.shortUrl,
+        fileName: release.fileName,
+        label: release.title,
+      });
+      setStates((prev) => ({
+        ...prev,
+        [mirror.id]: { loading: false, result },
+      }));
+    } catch (err) {
+      const message = err instanceof MediaApiError ? err.message : "Could not resolve this mirror right now.";
+      setStates((prev) => ({
+        ...prev,
+        [mirror.id]: { loading: false, error: message },
+      }));
+    }
+  };
+
+  const handleCopy = async (url: string) => {
+    try {
+      await copyText(url);
+      pushToast({ title: "Copied direct link to clipboard", kind: "ok" });
+    } catch {
+      pushToast({ title: "Clipboard unavailable", desc: "Right-click Download / Open to copy the link.", kind: "warn" });
+    }
+  };
+
+  return (
+    <div
+      className={cx(
+        "rounded-[14px] ring-1 ring-edge",
+        compact ? "bg-fill/60 p-3" : "bg-raised/70 p-4"
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        {release.quality && (
+          <span className="rounded-full bg-primary px-2.5 py-0.5 text-[11px] font-bold text-on-primary">
+            {release.quality}
+          </span>
+        )}
+        {release.container && (
+          <span
+            className={cx(
+              "rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase",
+              release.container === "MP4" || release.container === "WEBM" || release.container === "M3U8"
+                ? "bg-emerald-500/20 text-emerald-300"
+                : "bg-fill-2 text-fg-2"
+            )}
+          >
+            {release.container}
+          </span>
+        )}
+        {release.size && (
+          <span className="rounded-full bg-fill px-2.5 py-0.5 text-[11.5px] font-semibold text-fg">
+            {release.size}
+          </span>
+        )}
+        {(release.tags ?? []).map((tag) => (
+          <span key={tag} className="rounded-full bg-fill px-2 py-0.5 text-[11px] font-medium text-fg-2">
+            {tag}
+          </span>
+        ))}
+        {release.languages && <span className="text-[11.5px] text-fg-2">· {release.languages}</span>}
+      </div>
+
+      <p className="mt-1.5 text-[13.5px] font-semibold text-fg">{release.title}</p>
+      {release.fileName && release.fileName !== release.title && (
+        <p className="mt-0.5 break-all text-[12px] text-fg-3">{release.fileName}</p>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {release.mirrors.map((mirror) => {
+          const st = states[mirror.id];
+          return (
+            <button
+              key={mirror.id}
+              type="button"
+              disabled={st?.loading}
+              onClick={() => void resolveMirror(mirror)}
+              className="inline-flex h-8.5 items-center gap-1.5 rounded-full bg-fill-2 px-3.5 text-[12.5px] font-semibold text-fg transition-colors hover:bg-fill-3 disabled:opacity-60"
+            >
+              {st?.loading ? (
+                <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw size={12} aria-hidden="true" />
+              )}
+              {st?.loading ? `Resolving ${mirror.label}…` : st?.result ? `Re-resolve ${mirror.label}` : `Resolve ${mirror.label}`}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Per-mirror resolution outputs */}
+      {release.mirrors.map((mirror) => {
+        const st = states[mirror.id];
+        if (!st || st.loading) return null;
+
+        if (st.error) {
+          return (
+            <div
+              key={`${mirror.id}-err`}
+              className="mt-3 rounded-[10px] bg-fill p-3 text-[12.5px] text-fg-2 ring-1 ring-edge"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 font-medium text-fg">
+                  <AlertCircle size={14} className="text-danger" aria-hidden="true" />
+                  {mirror.label}: {st.error}
+                </span>
+                <a
+                  href={mirror.shortUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 rounded-full bg-fill-2 px-3 py-1 text-[12px] font-semibold text-fg hover:bg-fill-3"
+                >
+                  Open mirror page <ExternalLink size={11} aria-hidden="true" />
+                </a>
+              </div>
+            </div>
+          );
+        }
+
+        const res = st.result;
+        if (!res) return null;
+        const fallbackHref = res.externalFallbackUrl || mirror.shortUrl;
+
+        return (
+          <div key={`${mirror.id}-out`} className="mt-3 space-y-2 rounded-[10px] bg-fill p-3 ring-1 ring-edge">
+            {res.message && <p className="text-[12px] leading-relaxed text-fg-2">{res.message}</p>}
+
+            {res.links.length > 0 ? (
+              <div className="space-y-2">
+                {res.links.map((link) => (
+                  <div
+                    key={link.url}
+                    className="flex flex-col gap-2 rounded-[8px] bg-surface/70 p-2.5 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[12.5px] font-semibold text-fg">{link.server}</span>
+                        {link.container && (
+                          <span className="rounded bg-fill-2 px-1.5 py-0.5 text-[10.5px] font-bold text-fg-2">
+                            {link.container}
+                          </span>
+                        )}
+                        <span
+                          className={cx(
+                            "rounded px-1.5 py-0.5 text-[10.5px] font-semibold",
+                            link.playable ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/15 text-amber-300"
+                          )}
+                        >
+                          {link.playable
+                            ? link.streamType === "hls"
+                              ? "HLS manifest candidate"
+                              : `Stream candidate (${link.streamType?.toUpperCase()})`
+                            : link.delivery === "external"
+                              ? "External page"
+                              : "Direct download / External player"}
+                        </span>
+                      </div>
+                      {(link.unsupportedReason || link.codecNote) && (
+                        <p className="mt-1 text-[11.5px] leading-relaxed text-fg-3">
+                          {link.unsupportedReason || link.codecNote}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                      {link.playable && (
+                        <button
+                          type="button"
+                          onClick={() => onPlayStream(link, release.quality || release.title)}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3 text-[12px] font-semibold text-on-primary hover:opacity-90"
+                        >
+                          <Play size={12} fill="currentColor" aria-hidden="true" />{" "}
+                          {link.streamType === "hls" ? "Load in HLS player" : "Play in player"}
+                        </button>
+                      )}
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-full bg-fill-2 px-3 text-[12px] font-semibold text-fg hover:bg-fill-3"
+                      >
+                        {link.delivery === "external" ? (
+                          <>
+                            Open <ExternalLink size={12} aria-hidden="true" />
+                          </>
+                        ) : (
+                          <>
+                            <Download size={12} aria-hidden="true" /> Download
+                          </>
+                        )}
+                      </a>
+                      {link.delivery !== "external" && (
+                        <button
+                          type="button"
+                          onClick={() => void handleCopy(link.url)}
+                          aria-label={`Copy direct URL from ${link.server}`}
+                          title="Copy direct stream/download URL for VLC / MPV / IINA"
+                          className="inline-flex h-8 items-center gap-1 rounded-full bg-fill-2 px-2.5 text-[12px] font-semibold text-fg-2 hover:bg-fill-3 hover:text-fg"
+                        >
+                          <Copy size={12} aria-hidden="true" /> Copy URL
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-fg-2">
+                <span>
+                  Automatic extraction stopped ({res.reason || res.status}). You can open the validated upstream link directly.
+                </span>
+                <a
+                  href={fallbackHref}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 rounded-full bg-fill-2 px-3 py-1.5 font-semibold text-fg hover:bg-fill-3"
+                >
+                  Open {mirror.label} <ExternalLink size={11} aria-hidden="true" />
+                </a>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
 /* -------------------------------- seasons -------------------------------- */
 
-function SeasonsSection({ slug, seasons }: { slug: string; seasons: Season[] }) {
+function SeasonsSection({
+  slug,
+  seasons,
+  onPlayStream,
+}: {
+  slug: string;
+  seasons: Season[];
+  onPlayStream: (link: ResolvedMirrorLink, labelPrefix?: string) => void;
+}) {
   const [open, setOpen] = useState<number | null>(seasons[0]?.seasonNumber ?? null);
   return (
     <section className="mb-9" aria-labelledby="seasons-heading">
@@ -357,6 +868,7 @@ function SeasonsSection({ slug, seasons }: { slug: string; seasons: Season[] }) 
             season={season}
             open={open === season.seasonNumber}
             onToggle={() => setOpen((current) => (current === season.seasonNumber ? null : season.seasonNumber))}
+            onPlayStream={onPlayStream}
           />
         ))}
       </div>
@@ -369,12 +881,15 @@ function SeasonRow({
   season,
   open,
   onToggle,
+  onPlayStream,
 }: {
   slug: string;
   season: Season;
   open: boolean;
   onToggle: () => void;
+  onPlayStream: (link: ResolvedMirrorLink, labelPrefix?: string) => void;
 }) {
+  const [openEpisodeId, setOpenEpisodeId] = useState<string | null>(null);
   const needsFetch = open && season.episodes.length === 0;
   const { data, isLoading, isError } = useSeasonEpisodes(slug, season.seasonNumber, needsFetch);
   const episodes: Episode[] = season.episodes.length > 0 ? season.episodes : (data?.seasons[0]?.episodes ?? []);
@@ -415,37 +930,78 @@ function SeasonRow({
           ) : episodes.length === 0 ? (
             <p className="py-2 text-[13px] text-fg-2">No episode metadata for this season.</p>
           ) : (
-            <ol className="space-y-0.5" aria-label={`${season.name} episodes`}>
-              {episodes.map((episode) => (
-                <li key={episode.id}>
-                  <div className="flex gap-3 rounded-[8px] px-1 py-2.5 transition-colors hover:bg-fill/60">
-                    <span className="w-5 shrink-0 pt-0.5 text-right text-[12.5px] font-semibold text-fg-3 tabular-nums">
-                      {episode.episodeNumber}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-baseline gap-x-2">
-                        <span className="text-[14px] font-medium">{episode.title}</span>
-                        {episode.runtimeMinutes ? (
-                          <span className="flex items-center gap-1 text-[11.5px] text-fg-3">
-                            <Clock size={11} aria-hidden="true" /> {episode.runtimeMinutes} min
-                          </span>
-                        ) : null}
-                        {episode.airDate ? (
-                          <span className="flex items-center gap-1 text-[11.5px] text-fg-3">
-                            <Calendar size={11} aria-hidden="true" /> {episode.airDate.slice(0, 10)}
-                          </span>
-                        ) : null}
-                        {episode.rating ? (
-                          <span className="flex items-center gap-1 text-[11.5px] text-fg-3">
-                            <Star size={10} fill="currentColor" aria-hidden="true" /> {episode.rating.toFixed(1)}
-                          </span>
-                        ) : null}
+            <ol className="space-y-1.5" aria-label={`${season.name} episodes`}>
+              {episodes.map((episode) => {
+                const epReleases = episode.releases ?? [];
+                const isEpExpanded = openEpisodeId === episode.id;
+
+                return (
+                  <li key={episode.id} className="rounded-[10px] bg-fill/40 px-2.5 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex min-w-0 flex-1 gap-3">
+                        <span className="w-5 shrink-0 pt-0.5 text-right text-[12.5px] font-semibold text-fg-3 tabular-nums">
+                          {episode.episodeNumber}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-baseline gap-x-2">
+                            <span className="text-[14px] font-medium">{episode.title}</span>
+                            {episode.size && <span className="text-[11.5px] text-fg-2">{episode.size}</span>}
+                            {episode.runtimeMinutes ? (
+                              <span className="flex items-center gap-1 text-[11.5px] text-fg-3">
+                                <Clock size={11} aria-hidden="true" /> {episode.runtimeMinutes} min
+                              </span>
+                            ) : null}
+                            {episode.airDate ? (
+                              <span className="flex items-center gap-1 text-[11.5px] text-fg-3">
+                                <Calendar size={11} aria-hidden="true" /> {episode.airDate.slice(0, 10)}
+                              </span>
+                            ) : null}
+                            {episode.rating ? (
+                              <span className="flex items-center gap-1 text-[11.5px] text-fg-3">
+                                <Star size={10} fill="currentColor" aria-hidden="true" /> {episode.rating.toFixed(1)}
+                              </span>
+                            ) : null}
+                          </div>
+                          {episode.overview && (
+                            <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-relaxed text-fg-2">{episode.overview}</p>
+                          )}
+                        </div>
                       </div>
-                      {episode.overview && <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-relaxed text-fg-2">{episode.overview}</p>}
+
+                      {epReleases.length > 0 && (
+                        <button
+                          type="button"
+                          aria-expanded={isEpExpanded}
+                          onClick={() => setOpenEpisodeId(isEpExpanded ? null : episode.id)}
+                          className="rounded-full bg-fill-2 px-3 py-1 text-[12px] font-semibold text-fg hover:bg-fill-3"
+                        >
+                          {isEpExpanded
+                            ? "Hide mirrors"
+                            : `${epReleases.length} ${epReleases.length === 1 ? "quality" : "qualities"}`}
+                        </button>
+                      )}
                     </div>
-                  </div>
-                </li>
-              ))}
+
+                    {isEpExpanded && epReleases.length > 0 && (
+                      <div className="mt-2.5 space-y-2 pl-8">
+                        {epReleases.map((rel) => (
+                          <ReleaseCard
+                            key={rel.id}
+                            release={rel}
+                            compact
+                            onPlayStream={(link) =>
+                              onPlayStream(
+                                link,
+                                `S${String(episode.seasonNumber).padStart(2, "0")}E${String(episode.episodeNumber).padStart(2, "0")} ${rel.quality || ""}`.trim()
+                              )
+                            }
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ol>
           )}
         </div>

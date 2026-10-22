@@ -110,11 +110,12 @@ Environment variables:
 | `DATABASE_URL` | runtime, optional | Likes, playlists, downloads, listening history, Listen Together rooms, `/api/health` |
 | `LRCLIB_BASE` | optional | Self-hosted lyrics mirror (defaults to `https://lrclib.net`) |
 | `LYRICS_OVH_BASE` | optional | Secondary lyrics provider (defaults to `https://api.lyrics.ovh`) |
-| `MEDIA_PROVIDER` | optional | `auto`/`merged` (default) · `tmdb` · `archive` · `demo` — which movies/series adapter answers |
-| `MEDIA_ARCHIVE` | optional | `off` hides the free Internet Archive shelf and playback |
-| `TMDB_READ_ACCESS_TOKEN` / `TMDB_API_KEY` | optional | Official TMDb metadata (either one). Without it the demo catalogue is used |
+| `MEDIA_PROVIDER` | optional | `auto` / `4khdhub` (default) · `merged` · `tmdb` · `archive` · `demo` — active movies/series provider adapter |
+| `FOURKHDHUB_BASE_URL` | optional | Override upstream catalogue base URL when domains rotate (HTTPS public host only; defaults to `https://4khdhub.one`) |
+| `FOURKHDHUB_EXTRA_HOSTS` | optional | Optional comma-separated public hostnames appended to the strict mirror/catalogue allowlist |
+| `TMDB_READ_ACCESS_TOKEN` / `TMDB_API_KEY` | optional | Official TMDb metadata credentials (used when `MEDIA_PROVIDER=tmdb` or `merged`) |
 | `TMDB_LANGUAGE`, `TMDB_REGION` | optional | Metadata language (default `en-US`) and availability region (default `IN`) |
-| `MEDIA_PLAYBACK_MANIFEST` | optional | JSON map of **authorized** HLS/MP4 URLs, `{"movie/<slug>":[{"url":"https://…","type":"hls"}]}` |
+| `MEDIA_PLAYBACK_MANIFEST` | optional | JSON map of verified HTTPS HLS/MP4/WebM URLs, `{"movie/<slug>":[{"url":"https://…","type":"hls"}]}` |
 
 ---
 
@@ -137,73 +138,65 @@ getMovieDetails(slug)  getSeriesDetails(slug)  getSeriesSeasons(slug, season?)
 getRelated(kind, slug, limit)  getPlaybackSources?(kind, slug)
 ```
 
-Three adapters implement it, and `mergedProvider.ts` routes between them:
+Four adapters implement it, plus an optional `mergedProvider.ts` router:
 
 | Adapter | When | Notes |
 |---|---|---|
-| `demoProvider.ts` + `demoCatalog.ts` | `MEDIA_PROVIDER=demo`, or no free/metadata source answers | Fictional titles, original synopses, generated SVG artwork. Every card carries a **Demo** badge and every response is marked `demo: true`. |
-| `tmdbProvider.ts` | `TMDB_READ_ACCESS_TOKEN` or `TMDB_API_KEY` set | Official TMDb v3 API — real metadata, artwork, YouTube trailer keys and JustWatch availability links/searches (India by default). Terms require the attribution line rendered on detail pages. |
-| `archiveProvider.ts` | always available (default catalogue when no TMDb key) | Internet Archive Scrape API: real public-domain / openly licensed films from `feature_films`, `film_noir`, `sci-fi_horror`, `silent_films` and related collections. Supplies posters, ratings, genres and — uniquely — **lawful playback**: archive.org's own `/embed/<id>` player and `/download/<id>` files. Falls back to a verified snapshot (`archive.ts`) if archive.org is unreachable, so the shelf never breaks. |
-| `mergedProvider.ts` | `MEDIA_PROVIDER=auto` (default) | TMDb metadata plus the archive: a "Free to watch" shelf, archive results merged into search, `ia-<identifier>` slugs routed to the archive provider, and free playback attached to a TMDb title when the same film (title + year) exists in the archive. Every call degrades instead of throwing. |
+| `hubProvider.ts` + `hubScraper.ts` + `hubResolver.ts` | `MEDIA_PROVIDER=auto` / `4khdhub` (default) | Server-side catalogue & mirror resolver using `safeFetch.ts` (explicit host allowlist, manual redirect validation, private/IMDS IP blocking, 2 MiB body cap, per-hop timeouts, bounded retries, zero credential forwarding) and sanitized `cheerio` parsing. Never substitutes Demo or Archive data on upstream failure. |
+| `demoProvider.ts` + `demoCatalog.ts` | `MEDIA_PROVIDER=demo` | Explicit placeholder catalogue; every card carries a **Demo** badge. |
+| `tmdbProvider.ts` | `MEDIA_PROVIDER=tmdb` (requires key) | Official TMDb v3 API — metadata, artwork, YouTube trailer keys and JustWatch availability links. |
+| `archiveProvider.ts` | `MEDIA_PROVIDER=archive` | Internet Archive Scrape API + `/embed/<id>` and `/download/<id>` endpoints. Note: upload to an Internet Archive collection is not proof of public-domain status. |
+| `mergedProvider.ts` | `MEDIA_PROVIDER=merged` | Explicit opt-in router combining TMDb metadata with Internet Archive items. |
 
-Routes:
+Routes & root-level JSON response shapes:
 
 ```text
-GET /api/media/browse?type=movie|series&q=&genre=&year=&language=&sort=&page=
-GET /api/media/search?q=&type=movie|series|all&limit=
-GET /api/media/title/movie|series/<slug>
-GET /api/media/seasons/<slug>?season=2
+GET  /api/media/browse?type=movie|series&q=&genre=&year=&language=&sort=&page=
+       -> { kind, items, page, totalPages, totalResults, pageSize, featured, rails, facets, provider, filtered }
+GET  /api/media/search?q=&type=movie|series|all&limit=
+       -> { query, items, provider }
+GET  /api/media/title/movie|series/<slug>
+       -> { title, seasons, related, playback, downloads?, releases?, provider, attribution? }
+GET  /api/media/seasons/<slug>?season=2
+       -> { seasons }
+POST /api/media/resolve   (JSON: { url, fileName?, label? })
+       -> { status: "resolved" | "partial" | "blocked" | "error", links, externalFallbackUrl?, reason?, message?, hops }
 ```
 
-`src/lib/media/query.ts` holds the framework-free filtering, sorting, pagination,
-facet and "more like this" maths (covered by `tests/media.test.cjs`), so a new adapter
-only has to map its catalogue onto the models in `src/lib/media/types.ts`.
-
-### Playback policy
-
-There is **no** scraper, torrent, DRM bypass or third-party file host anywhere in this
-feature — no `4khdhub`/`hubcloud`/`greenmotors` style resolution, no CORS-proxy scraping
-of protected pages. A title becomes playable only when:
-
-1. a provider that actually holds the rights returns `getPlaybackSources(...)`:
-   the Internet Archive does, for public-domain / openly licensed items, using its own
-   embed player and download endpoints; TMDb does not, because it licenses metadata,
-   not streams;
-2. a TMDb title has an unambiguous archive match (same normalised title, year within
-   ±1) — then the archive player is attached and labelled as a free copy; or
-3. the operator lists an HTTPS HLS/MP4 URL in `MEDIA_PLAYBACK_MANIFEST`.
-
-Otherwise the detail page states that no playback source is configured and shows the
-official trailer plus TMDb/JustWatch availability links (or a region-scoped JustWatch
-search when provider listings are missing). Downloads are only ever the archive's own
-files, linked from the item's download page. Non-HTTPS manifest entries are discarded
-(`src/lib/media/playback.ts`). HLS plays natively in Safari/iOS; other browsers need an
-MP4 rendition from the same source.
-
-Watchlist entries persist in `localStorage` (`src/store/watchlist.ts`), rehydrated like
-the other Sidify stores, so no account is required.
-
-### Connecting a real catalogue
+Manual verification (`curl` + `jq`, normal internet environment with `npm run dev`):
 
 ```bash
-# .env.local
-MEDIA_PROVIDER=auto               # merged: TMDb metadata + free archive films
-TMDB_READ_ACCESS_TOKEN="…"        # optional; enables the rich metadata catalogue
+# 1. Search (root `.items`)
+curl -s "http://localhost:3000/api/media/search?q=inception&type=movie" \
+  | jq '{query, provider: .provider.id, count: (.items | length), first: .items[0] | {slug, title, year, poster}}'
+
+# 2. Movie detail (root `.title`, `.releases`)
+curl -s "http://localhost:3000/api/media/title/movie/hub-moana-movie-8014" \
+  | jq '{title: .title.title, year: .title.year, releases: (.releases | map({quality, size, container, mirrors: (.mirrors | length)}))}'
+
+# 3. Series detail (root `.title`, `.releases` season packs, `.seasons`)
+curl -s "http://localhost:3000/api/media/title/series/hub-marvels-the-punisher-series-2288" \
+  | jq '{title: .title.title, packCount: (.releases | length), seasons: (.seasons | map({seasonNumber, episodes: (.episodes | length)}))}'
+
+# 4. Multi-hop mirror resolution (root `.status`, `.hops`, `.links`)
+BODY=$(curl -s "http://localhost:3000/api/media/title/movie/hub-moana-movie-8014" \
+  | jq -c '{url: .releases[0].mirrors[0].shortUrl, fileName: .releases[0].fileName, label: .releases[0].mirrors[0].label}')
+curl -s -X POST "http://localhost:3000/api/media/resolve" \
+  -H "Content-Type: application/json" \
+  -d "$BODY" \
+  | jq '{status, reason, hops: (.hops | map({step, host, status})), links}'
+
+# 5. Browser HLS player check (`Native HLS` on Safari, `HLS · hls.js MSE` on Chrome/Firefox)
+MEDIA_PLAYBACK_MANIFEST='{"movie/hub-moana-movie-8014":[{"url":"https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8","type":"hls","label":"HLS Test Stream"}]}' npm run dev
 ```
 
-With no keys at all, `/movies` serves the Internet Archive catalogue, so free films,
-posters, playback and downloads work out of the box. Restart `npm run dev` (or
-redeploy) — the demo notice disappears and detail pages get real posters, trailers and
-availability links. `MEDIA_PROVIDER=archive` serves only free films; `MEDIA_ARCHIVE=off`
-switches the free shelf and archive playback off.
+### Playback & media container policy
 
-The server needs outbound HTTPS to `archive.org` (and `api.themoviedb.org` when TMDb is
-configured). If archive.org is blocked the shelf falls back to the verified snapshot in
-`src/lib/media/archive.ts`; playback still works because the browser loads the archive's
-embed player directly.
-
-To add another provider, implement the same interface and route to it in
-`getMediaProvider()` (`src/lib/media/service.ts`).
+- **Server-side fetch security (`src/lib/media/safeFetch.ts`)**: No public CORS proxies are used. Outbound requests run server-side over HTTPS (port 443 only), verify every hop against explicit `catalogue` / `mirror` host allowlists, resolve DNS ahead of socket connect to block private/loopback/link-local/CGNAT/IMDS addresses, cap streamed HTML at 2 MiB, enforce timeouts and bounded retries, and strip all caller cookies/credentials.
+- **No access-control or CAPTCHA bypass**: Public Base64/ROT13 redirect tokens (`s('o', '...')`) and standard HTTP redirects are inspected statically without executing script code. If any hop encounters a CAPTCHA/Turnstile challenge or 401/403 restriction, resolution stops immediately (`status: "blocked"`) and surfaces the last validated HTTPS link as an external fallback.
+- **Browser-compatible playback truth (`src/lib/media/hubResolver.ts` + `src/lib/media/hlsPlayer.ts`)**:
+  - `.mkv` releases (including extensionless PixelDrain/R2 download URLs paired with `.mkv` filenames) and `.zip` season archives are never passed to `<video>` — they are marked `playable: false, delivery: "download"` with direct download and URL-copy controls for external players (VLC / IINA / MPV).
+  - `.m3u8` URLs are treated strictly as HLS manifest candidates (never claimed guaranteed-playable from file extension alone): `hlsPlayer.ts` first probes `video.canPlayType("application/vnd.apple.mpegurl")` (Safari / iOS native HLS), falls back to `hls.js` over MediaSource Extensions (`Hls.isSupported()`) on Chrome / Firefox / Edge with bounded 1-attempt recovery, and surfaces a diagnostic alert + Copy/Open URL fallback if MSE is unsupported, CORS blocks manifest/segment requests, or segment codecs fail to decode.
 
 ---
 

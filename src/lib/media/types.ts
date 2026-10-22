@@ -9,7 +9,7 @@
 export type MediaKind = "movie" | "series";
 
 export interface Genre {
-  /** Provider genre id as a string, e.g. "18" (TMDb drama) or "drama" (demo). */
+  /** Provider genre id as a string, e.g. "18" (TMDb drama) or "drama" (catalogue). */
   id: string;
   name: string;
 }
@@ -29,22 +29,23 @@ export interface TrailerRef {
 }
 
 /**
- * An authorized playback source — a URL the operator/licensed provider is allowed
- * to stream. Providers that do not license playback return an empty list.
+ * A browser-playable stream source. Non-stream containers such as `.mkv` or `.zip`
+ * must NOT be represented as `PlaybackSource` — represent them as downloads or
+ * `ResolvedMirrorLink` entries with `playable: false`.
  */
 export interface PlaybackSource {
   url: string;
   /**
-   * `hls` for `.m3u8`, `mp4` for progressive files, `embed` for an official
-   * third-party player (the Internet Archive's own embed) rendered in an iframe.
+   * `hls` for `.m3u8`, `mp4` / `webm` for progressive browser-compatible files,
+   * `embed` for an official third-party player rendered in an iframe.
    */
-  type: "hls" | "mp4" | "embed";
+  type: "hls" | "mp4" | "webm" | "embed";
   label?: string;
-  /** Short, provider-supplied credit or caveat shown under the player. */
+  /** Short caveat or technical note shown under the player. */
   note?: string;
 }
 
-/** A download the provider itself offers (e.g. archive.org's item downloads). */
+/** A download offered for a title or item. */
 export interface MediaDownload {
   label: string;
   url: string;
@@ -52,6 +53,76 @@ export interface MediaDownload {
   kind: "page" | "file";
   format?: string;
   sizeBytes?: number;
+}
+
+/** Public mirror short-link attached to a specific release quality or episode. */
+export interface MediaMirror {
+  id: string;
+  label: string;
+  shortUrl: string;
+  host: string;
+}
+
+/** A parsed release quality, season pack, or episode encode with mirror short-links. */
+export interface MediaReleaseItem {
+  id: string;
+  title: string;
+  fileName: string;
+  quality?: string;
+  size?: string;
+  sizeBytes?: number;
+  container?: string;
+  languages?: string;
+  tags?: string[];
+  /** True for archive packs (`.zip`, `.rar`, `.7z`) that cannot play directly. */
+  isPack?: boolean;
+  seasonGroup?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  mirrors: MediaMirror[];
+}
+
+export type MirrorHopStatus = "ok" | "redirect" | "blocked" | "error";
+
+export type MirrorBlockReason =
+  | "captcha"
+  | "access_control"
+  | "disallowed_host"
+  | "blocked_ip"
+  | "insecure_protocol"
+  | "timeout"
+  | "response_too_large"
+  | "malformed_response"
+  | "network_error";
+
+export interface MirrorHop {
+  step: string;
+  host: string;
+  status: MirrorHopStatus;
+  httpStatus?: number;
+  reason?: MirrorBlockReason;
+  detail?: string;
+}
+
+export interface ResolvedMirrorLink {
+  server: string;
+  url: string;
+  /** True ONLY when verified as a browser-compatible stream (`mp4`, `webm`, `hls`). */
+  playable: boolean;
+  streamType?: "hls" | "mp4" | "webm";
+  delivery: "stream" | "download" | "external";
+  container?: string;
+  codecNote?: string;
+  unsupportedReason?: string;
+}
+
+export interface MirrorResolveResult {
+  status: "resolved" | "partial" | "blocked" | "error";
+  links: ResolvedMirrorLink[];
+  externalFallbackUrl?: string;
+  reason?: MirrorBlockReason;
+  message?: string;
+  hops: MirrorHop[];
 }
 
 /** Official availability / "where to watch" page supplied by the provider. */
@@ -111,6 +182,8 @@ export interface Episode {
   airDate?: string;
   still?: string | null;
   rating?: number;
+  size?: string;
+  releases?: MediaReleaseItem[];
 }
 
 export interface Season {
@@ -183,10 +256,12 @@ export interface MediaDetail {
   /** Empty for movies. */
   seasons: Season[];
   related: MediaTitle[];
-  /** Only authorized URLs; empty when no licensed playback is configured. */
+  /** Browser-compatible streams only; empty when none are verified. */
   playback: PlaybackSource[];
-  /** Downloads offered by the provider itself, e.g. archive.org's item files. */
+  /** Downloads offered directly by the provider. */
   downloads?: MediaDownload[];
+  /** Available quality encodes, season packs and mirror short-links. */
+  releases?: MediaReleaseItem[];
   provider: ProviderInfo;
   attribution?: string;
 }

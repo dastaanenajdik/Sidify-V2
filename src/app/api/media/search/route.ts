@@ -20,8 +20,16 @@ export async function GET(req: NextRequest) {
       headers: { "cache-control": "public, s-maxage=120, stale-while-revalidate=600" },
     });
   } catch (error) {
-    const status = error instanceof MediaProviderError ? (error.status === 501 ? 503 : error.status) : 502;
+    const providerError = error instanceof MediaProviderError ? error : null;
+    const status = providerError ? (providerError.status === 501 ? 503 : providerError.status) : 502;
+    const code = providerError?.code || (status === 504 ? "timeout" : "network_error");
     console.error("[api/media/search]", error);
-    return NextResponse.json({ error: "Search is unavailable right now." }, { status, headers: { "cache-control": "no-store" } });
+    return NextResponse.json(
+      {
+        error: code === "timeout" ? "Search timed out waiting for upstream catalogue." : "Search is unavailable right now.",
+        code,
+      },
+      { status, headers: { "cache-control": "no-store" } }
+    );
   }
 }

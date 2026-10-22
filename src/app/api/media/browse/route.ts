@@ -35,14 +35,22 @@ export async function GET(req: NextRequest) {
       headers: { "cache-control": "public, s-maxage=300, stale-while-revalidate=1800" },
     });
   } catch (error) {
-    const status = error instanceof MediaProviderError ? (error.status === 501 ? 503 : error.status) : 502;
+    const providerError = error instanceof MediaProviderError ? error : null;
+    const status = providerError ? (providerError.status === 501 ? 503 : providerError.status) : 502;
+    const code = providerError?.code || (status === 504 ? "timeout" : "network_error");
     console.error("[api/media/browse]", error);
     return NextResponse.json(
       {
         error:
-          error instanceof MediaProviderError
-            ? "The media catalogue is not available right now."
-            : "Could not load the media catalogue.",
+          code === "timeout"
+            ? "Upstream catalogue request timed out."
+            : code === "captcha" || code === "access_control"
+              ? "Upstream catalogue blocked automated access (challenge/restriction)."
+              : providerError
+                ? providerError.message
+                : "Could not load the media catalogue.",
+        code,
+        provider: providerError?.provider,
       },
       { status, headers: { "cache-control": "no-store" } }
     );

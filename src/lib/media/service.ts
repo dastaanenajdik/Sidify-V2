@@ -9,11 +9,12 @@
 import { cache } from "react";
 import { ArchiveMediaProvider } from "./archiveProvider";
 import { DemoMediaProvider } from "./demoProvider";
+import { FourKHDHubMediaProvider } from "./hubProvider";
 import { MergedMediaProvider } from "./mergedProvider";
 import type { MediaProvider } from "./provider";
 import { dedupeSources, manifestSources } from "./playback";
 import { railsFor } from "./query";
-import { TmdbMediaProvider, tmdbConfigured } from "./tmdbProvider";
+import { TmdbMediaProvider } from "./tmdbProvider";
 import type {
   MediaBrowse,
   MediaDetail,
@@ -27,28 +28,31 @@ import type {
 
 /* ------------------------------- choosing -------------------------------- */
 
-export type MediaProviderId = "demo" | "tmdb" | "archive" | "merged";
+export type MediaProviderId = "4khdhub" | "demo" | "tmdb" | "archive" | "merged";
 
 const providers = new Map<MediaProviderId, MediaProvider>();
 
 /**
  * Provider selection (`MEDIA_PROVIDER`):
- *   auto / merged – TMDb metadata *and* free Internet Archive playback (default).
- *                   Without a TMDb key the archive catalogue becomes the main shelf.
- *   tmdb          – TMDb only; requires credentials, free shelf still available.
- *   archive       – Internet Archive only: real, free, lawfully streamable films.
- *   demo          – the bundled placeholder catalogue.
- *
- * `MEDIA_ARCHIVE=off` disables the free shelf and falls back to TMDb/demo.
+ *   auto / 4khdhub / hub – Server-side 4KHDHub catalogue & mirror adapter (default).
+ *                          Does NOT silently replace results with Demo or Archive data
+ *                          if the upstream host is unreachable.
+ *   merged               – Explicit opt-in: TMDb metadata + Internet Archive items.
+ *   tmdb                 – Explicit opt-in: TMDb metadata only (requires credentials).
+ *   archive              – Explicit opt-in: Internet Archive items only.
+ *   demo                 – Explicit opt-in: bundled placeholder catalogue.
  */
 export function mediaProviderId(): MediaProviderId {
-  const preference = (process.env.MEDIA_PROVIDER || "auto").toLowerCase();
+  const preference = (process.env.MEDIA_PROVIDER || "auto").toLowerCase().trim();
   if (preference === "demo") return "demo";
   if (preference === "tmdb") return "tmdb";
   if (preference === "archive" || preference === "internet-archive" || preference === "ia") return "archive";
   if (preference === "merged") return "merged";
-  if ((process.env.MEDIA_ARCHIVE || "").toLowerCase() === "off") return tmdbConfigured() ? "tmdb" : "demo";
-  return "merged";
+  return "4khdhub";
+}
+
+export function clearMediaProviderCache(): void {
+  providers.clear();
 }
 
 export function getMediaProvider(): MediaProvider {
@@ -63,7 +67,9 @@ export function getMediaProvider(): MediaProvider {
         ? new ArchiveMediaProvider()
         : id === "demo"
           ? new DemoMediaProvider()
-          : new MergedMediaProvider();
+          : id === "merged"
+            ? new MergedMediaProvider()
+            : new FourKHDHubMediaProvider();
 
   providers.set(id, provider);
   return provider;
@@ -84,7 +90,7 @@ function isFiltered(query: MediaQuery): boolean {
   return Boolean(query.q?.trim() || query.genre || query.year || query.language) || (!!query.sort && query.sort !== "trending");
 }
 
-/** Featured title: the top trending entry, preferring one with a wide backdrop. */
+/** Featured title: the top trending entry, preferring one with backdrop/poster art. */
 function pickFeatured(items: import("./types").MediaTitle[]) {
   return items.find((item) => item.backdrop) ?? items[0] ?? null;
 }
@@ -93,6 +99,19 @@ export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<M
   const provider = getMediaProvider();
   const filtered = isFiltered(query);
 
+  if (filtered) {
+    const [page, facets] = await Promise.all([provider.browse(kind, query), provider.getFacets(kind)]);
+    return {
+      ...page,
+      kind,
+      featured: null,
+      rails: [],
+      facets,
+      provider: provider.info,
+      filtered: true,
+    };
+  }
+
   const [page, facets, trending, recent, topRated, popular, free] = await Promise.all([
     provider.browse(kind, query),
     provider.getFacets(kind),
@@ -100,17 +119,15 @@ export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<M
     provider[kind === "movie" ? "getNewMovieReleases" : "getNewSeriesReleases"](12),
     provider[kind === "movie" ? "getTopRatedMovies" : "getTopRatedSeries"](12),
     provider[kind === "movie" ? "getPopularMovies" : "getPopularSeries"](12),
-    // Free-to-watch films (public-domain archive titles) get their own shelf.
     kind === "movie" && provider.getFreeToWatch ? provider.getFreeToWatch(12).catch(() => []) : Promise.resolve([]),
   ]);
 
   const rails = railsFor(kind, { trending, recent, topRated, popular });
   if (free.length > 0) {
-    // Keep the free shelf visible high up, but never above "Trending now".
     rails.splice(Math.min(1, rails.length), 0, {
       id: "free",
-      title: "Free to watch",
-      subtitle: "Public-domain films that stream in full",
+      title: "Archive collection",
+      subtitle: "Community & archival uploads — rights vary by item",
       items: free,
     });
   }
@@ -119,10 +136,10 @@ export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<M
     ...page,
     kind,
     featured: pickFeatured(trending.length ? trending : page.items),
-    rails: filtered ? [] : rails,
+    rails,
     facets,
     provider: provider.info,
-    filtered,
+    filtered: false,
   };
 }
 

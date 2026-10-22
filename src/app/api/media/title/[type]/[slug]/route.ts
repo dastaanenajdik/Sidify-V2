@@ -6,7 +6,7 @@ import type { MediaKind } from "@/lib/media/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** GET /api/media/title/movie|series/<slug> — detail, seasons, related, authorized playback. */
+/** GET /api/media/title/movie|series/<slug> — detail, seasons, releases, related, playback. */
 export async function GET(_req: Request, { params }: { params: Promise<{ type: string; slug: string }> }) {
   const { type, slug } = await params;
   if (type !== "movie" && type !== "series") {
@@ -21,8 +21,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ type: s
       headers: { "cache-control": "public, s-maxage=600, stale-while-revalidate=3600" },
     });
   } catch (error) {
-    const status = error instanceof MediaProviderError ? (error.status === 501 ? 503 : error.status) : 502;
+    const providerError = error instanceof MediaProviderError ? error : null;
+    const status = providerError ? (providerError.status === 501 ? 503 : providerError.status) : 502;
+    const code = providerError?.code || (status === 504 ? "timeout" : "network_error");
     console.error("[api/media/title]", error);
-    return NextResponse.json({ error: "Could not load this title." }, { status, headers: { "cache-control": "no-store" } });
+    return NextResponse.json(
+      {
+        error: providerError?.message || "Could not load this title.",
+        code,
+      },
+      { status, headers: { "cache-control": "no-store" } }
+    );
   }
 }

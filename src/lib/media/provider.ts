@@ -62,12 +62,13 @@ export interface MediaProvider {
   getPlaybackSources?(kind: MediaKind, slug: string): Promise<PlaybackSource[]>;
 }
 
-/** Thrown when a provider is configured but rejects a request. */
+/** Thrown when a provider is configured but rejects or fails a request. */
 export class MediaProviderError extends Error {
   constructor(
     message: string,
     readonly status: number,
-    readonly provider: string
+    readonly provider: string,
+    readonly code?: string
   ) {
     super(message);
     this.name = "MediaProviderError";

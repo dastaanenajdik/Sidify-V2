@@ -16,10 +16,13 @@ import { cx } from "@/lib/format";
  */
 export function MediaHero({ title }: { title: MediaTitle }) {
   const [trailerOpen, setTrailerOpen] = useState(false);
+  const [backdropBroken, setBackdropBroken] = useState(false);
   const saved = useWatchlist((s) => s.items.some((item) => item.id === `${title.kind}:${title.slug}`));
   const toggle = useWatchlist((s) => s.toggle);
 
-  const backdrop = mediaArt(title.backdrop ?? title.poster, { seed: title.slug, accent: title.accent, ratio: "backdrop" });
+  const backdrop = backdropBroken
+    ? mediaArt(null, { seed: title.slug, accent: title.accent, ratio: "backdrop" })
+    : mediaArt(title.backdrop ?? title.poster, { seed: title.slug, accent: title.accent, ratio: "backdrop" });
   const meta = [
     title.year,
     title.runtimeMinutes ? (title.kind === "movie" ? `${title.runtimeMinutes} min` : `${title.runtimeMinutes} min episodes`) : "",
@@ -38,6 +41,7 @@ export function MediaHero({ title }: { title: MediaTitle }) {
           aria-hidden="true"
           decoding="async"
           draggable={false}
+          onError={() => setBackdropBroken(true)}
           className="absolute inset-0 h-full w-full object-cover"
         />
         <div

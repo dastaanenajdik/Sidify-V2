@@ -1,11 +1,20 @@
 "use client";
 
-import type { MediaBrowse, MediaDetail, MediaKind, MediaQuery, MediaSearchResponse, Season } from "./types";
+import type {
+  MediaBrowse,
+  MediaDetail,
+  MediaKind,
+  MediaQuery,
+  MediaSearchResponse,
+  MirrorResolveResult,
+  Season,
+} from "./types";
 
 export class MediaApiError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    readonly code?: string
   ) {
     super(message);
     this.name = "MediaApiError";
@@ -15,13 +24,15 @@ export class MediaApiError extends Error {
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
+    let code: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string };
-      if (body?.error) message = body.error;
+      const body = (await res.json()) as { error?: string; message?: string; code?: string; reason?: string };
+      if (body?.error || body?.message) message = body.error || body.message || message;
+      code = body?.code || body?.reason;
     } catch {
       /* keep the status message */
     }
-    throw new MediaApiError(message, res.status);
+    throw new MediaApiError(message, res.status, code);
   }
   return (await res.json()) as T;
 }
@@ -50,4 +61,23 @@ export const mediaApi = {
     fetch(`/api/media/seasons/${encodeURIComponent(slug)}?season=${seasonNumber}`).then((r) =>
       json<{ seasons: Season[] }>(r)
     ),
+
+  resolveMirror: async (params: { url: string; fileName?: string; label?: string }): Promise<MirrorResolveResult> => {
+    const res = await fetch("/api/media/resolve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "omit",
+      body: JSON.stringify(params),
+    });
+    const payload = (await res.json().catch(() => null)) as MirrorResolveResult | { error?: string; code?: string } | null;
+    if (payload && "hops" in payload && Array.isArray(payload.hops)) {
+      return payload;
+    }
+    const errMessage =
+      payload && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : `Mirror resolution failed (${res.status})`;
+    const errCode = payload && "code" in payload ? payload.code : undefined;
+    throw new MediaApiError(errMessage, res.status, errCode);
+  },
 };

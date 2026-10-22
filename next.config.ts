@@ -8,6 +8,8 @@ const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "image.tmdb.org" },
+      { protocol: "https", hostname: "catimages.org" },
+      { protocol: "https", hostname: "*.catimages.org" },
       { protocol: "https", hostname: "i.ytimg.com" },
       { protocol: "https", hostname: "archive.org" },
       { protocol: "https", hostname: "*.archive.org" },
