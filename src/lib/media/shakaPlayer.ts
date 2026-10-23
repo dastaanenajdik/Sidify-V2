@@ -11,6 +11,13 @@ import {
   registerShakaMp4MseParser,
   SIDIFY_MP4_MSE_MIME,
 } from "./shakaMp4Parser";
+import {
+  buildMediaStreamProxyUrl,
+  isAllowedStreamEntryHost,
+  MEDIA_STREAM_FINAL_URL_HEADER,
+  shouldProxyCrossOriginMediaUrl,
+  unwrapMediaStreamProxyUrl,
+} from "./streamProxyUrl";
 import type { PlaybackSource } from "./types";
 
 type PlaybackStreamType = PlaybackSource["type"];
@@ -51,6 +58,8 @@ export interface AttachShakaOptions {
   fileName?: string | null;
   startAt?: number | null;
   preferredAudioLanguages?: string[];
+  /** Explicit browser origin override (defaults to `window.location.origin` in browsers). */
+  proxyOrigin?: string | null;
   signal?: AbortSignal;
   loader?: ShakaLoader;
   onTracksChanged?: (tracks: {
@@ -308,6 +317,85 @@ export function resolveShakaMimeType(opts: {
   return null;
 }
 
+function getCurrentBrowserOrigin(): string | null {
+  if (typeof window === "undefined") return null;
+  const origin = window.location?.origin;
+  if (!origin || !/^https?:\/\//i.test(origin)) return null;
+  return origin;
+}
+
+/**
+ * Installs request & response filters on a Shaka `Player`'s `NetworkingEngine` so cross-origin
+ * mirror URLs (`*.r2.cloudflarestorage.com`, `pixel.hubcloud.ist`, `gpdl.hubcloud.ist`,
+ * `pixeldrain.com`, etc.) stream through same-origin `/api/media/stream` with HTTP `Range`
+ * and `302` redirect support — preventing browser CORS failures in MSE mode while preserving
+ * the upstream URL on `response.uri` for relative HLS/DASH segment resolution.
+ */
+export function installPlayerCrossOriginProxy(
+  player: ShakaNamespace.Player,
+  proxyOrigin: string | null,
+): () => void {
+  if (!proxyOrigin) return () => {};
+  const netEngine =
+    typeof player.getNetworkingEngine === "function" ? player.getNetworkingEngine() : null;
+  if (
+    !netEngine ||
+    typeof netEngine.registerRequestFilter !== "function" ||
+    typeof netEngine.registerResponseFilter !== "function"
+  ) {
+    return () => {};
+  }
+
+  const resolvedFinalUrls = new Map<string, string>();
+
+  const requestFilter: ShakaNamespace.extern.RequestFilter = (_type, request) => {
+    if (!request?.uris?.length) return;
+    request.uris = request.uris.map((rawUri) => {
+      const cachedFinal = resolvedFinalUrls.get(rawUri);
+      const targetUri = cachedFinal || rawUri;
+      if (shouldProxyCrossOriginMediaUrl(targetUri, proxyOrigin)) {
+        return buildMediaStreamProxyUrl(targetUri, proxyOrigin);
+      }
+      return rawUri;
+    });
+  };
+
+  const responseFilter: ShakaNamespace.extern.ResponseFilter = (_type, response) => {
+    if (!response) return;
+    const unwrappedOriginal =
+      unwrapMediaStreamProxyUrl(response.originalUri) ||
+      unwrapMediaStreamProxyUrl(response.uri);
+    if (!unwrappedOriginal) return;
+
+    const headerFinalUrl = response.headers?.[MEDIA_STREAM_FINAL_URL_HEADER]?.trim();
+    if (headerFinalUrl && /^https:\/\//i.test(headerFinalUrl)) {
+      try {
+        const finalHost = new URL(headerFinalUrl).hostname;
+        if (headerFinalUrl !== unwrappedOriginal && isAllowedStreamEntryHost(finalHost)) {
+          resolvedFinalUrls.set(unwrappedOriginal, headerFinalUrl);
+        }
+      } catch {
+        // Ignore malformed final URL header
+      }
+      response.uri = headerFinalUrl;
+    } else {
+      response.uri = unwrappedOriginal;
+    }
+  };
+
+  netEngine.registerRequestFilter(requestFilter);
+  netEngine.registerResponseFilter(responseFilter);
+
+  return () => {
+    try {
+      netEngine.unregisterRequestFilter?.(requestFilter);
+      netEngine.unregisterResponseFilter?.(responseFilter);
+    } catch {
+      // NetworkingEngine may already be destroyed
+    }
+  };
+}
+
 /**
  * Performs a lightweight 64-byte HTTP Range magic-header check for extensionless URLs
  * whose container wasn't labeled by the resolver.
@@ -315,15 +403,21 @@ export function resolveShakaMimeType(opts: {
 export async function sniffStreamMagicMime(
   url: string,
   outerSignal?: AbortSignal,
+  proxyOrigin?: string | null,
 ): Promise<string | null> {
   if (typeof fetch !== "function") return null;
+  const effectiveOrigin = proxyOrigin !== undefined ? proxyOrigin : getCurrentBrowserOrigin();
+  const fetchUrl = shouldProxyCrossOriginMediaUrl(url, effectiveOrigin)
+    ? buildMediaStreamProxyUrl(url, effectiveOrigin)
+    : url;
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 3500);
   const onOuterAbort = () => ctrl.abort();
   outerSignal?.addEventListener("abort", onOuterAbort, { once: true });
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(fetchUrl, {
       method: "GET",
       headers: { Range: "bytes=0-63" },
       signal: ctrl.signal,
@@ -565,6 +659,9 @@ export async function attachShakaPlayback(
     };
   }
 
+  const proxyOrigin =
+    options.proxyOrigin !== undefined ? options.proxyOrigin : getCurrentBrowserOrigin();
+
   let mimeType =
     resolveShakaMimeType({
       url: options.url,
@@ -572,7 +669,7 @@ export async function attachShakaPlayback(
       container: options.container,
       fileName: options.fileName,
     }) ||
-    (await sniffStreamMagicMime(options.url, options.signal)) ||
+    (await sniffStreamMagicMime(options.url, options.signal, proxyOrigin)) ||
     "video/mp4";
 
   if (options.signal?.aborted) {
@@ -585,6 +682,7 @@ export async function attachShakaPlayback(
 
   // Dynamically create a brand-new Shaka Player instance for this <video> element
   const player = new shaka.Player();
+  const removeCrossOriginProxy = installPlayerCrossOriginProxy(player, proxyOrigin);
   const sessionId = nextSessionId++;
   let destroyed = false;
 
@@ -653,6 +751,7 @@ export async function attachShakaPlayback(
   const teardown = async () => {
     if (destroyed) return;
     destroyed = true;
+    removeCrossOriginProxy();
     player.removeEventListener("error", onErrorEvent);
     player.removeEventListener("trackschanged", emitTracks);
     player.removeEventListener("variantchanged", emitTracks);

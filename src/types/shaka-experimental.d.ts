@@ -81,6 +81,37 @@ declare module "shaka-player/dist/shaka-player.experimental.js" {
         startTime: number | null;
       }
 
+      interface NetworkRequest {
+        uris: string[];
+        method: string;
+        body?: BufferSource | null;
+        headers: Record<string, string>;
+        allowCrossSiteCredentials: boolean;
+        retryParameters?: unknown;
+      }
+
+      interface NetworkResponse {
+        uri: string;
+        originalUri: string;
+        data: BufferSource;
+        status?: number;
+        headers: Record<string, string>;
+        timeMs?: number;
+        fromCache?: boolean;
+      }
+
+      type RequestFilter = (
+        type: number,
+        request: NetworkRequest,
+        context?: unknown,
+      ) => Promise<void> | void;
+
+      type ResponseFilter = (
+        type: number,
+        response: NetworkResponse,
+        context?: unknown,
+      ) => Promise<void> | void;
+
       interface TransmuxerOutput {
         data: Uint8Array;
         init: Uint8Array | null;
@@ -417,6 +448,12 @@ declare module "shaka-player/dist/shaka-player.experimental.js" {
       configure(config: Record<string, unknown> | string, value?: unknown): boolean;
       getConfiguration(): Record<string, unknown>;
       getMediaElement(): HTMLMediaElement | null;
+      getNetworkingEngine(): {
+        registerRequestFilter(filter: extern.RequestFilter): void;
+        unregisterRequestFilter(filter: extern.RequestFilter): void;
+        registerResponseFilter(filter: extern.ResponseFilter): void;
+        unregisterResponseFilter(filter: extern.ResponseFilter): void;
+      } | null;
       getAssetUri(): string | null;
       getLoadMode(): number;
       getManifestType(): string | null;
