@@ -1,16 +1,24 @@
 "use client";
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
-import { AlertCircle, Download, Loader2, RotateCcw, RotateCw, SkipForward, Volume2, VolumeX } from "lucide-react";
+import {
+  AlertCircle,
+  Captions,
+  Download,
+  Languages,
+  Loader2,
+  RotateCcw,
+  RotateCw,
+  SkipForward,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { Sheet } from "@/components/ui";
-import { probeBrowserCapabilities } from "@/lib/media/browserCaps";
 import { MediaApiError, mediaApi } from "@/lib/media/client";
 import { redactUrl, reportMediaDiagnostic } from "@/lib/media/diagnostics";
-import { attachPlaybackSource, type HlsFatalInfo } from "@/lib/media/hlsPlayer";
 import {
   PlaybackSession,
   audioVerdict,
-  classifyHlsFatal,
   classifyMediaError,
   playableReleases,
   runPlaybackFallback,
@@ -28,6 +36,15 @@ import {
   resumePosition,
   saveResumePoint,
 } from "@/lib/media/resumePoints";
+import {
+  attachShakaPlayback,
+  ensureShakaInitialized,
+  probeShakaCapabilities,
+  type ShakaAudioTrackOption,
+  type ShakaErrorEvent,
+  type ShakaPlaybackHandle,
+  type ShakaTextTrackOption,
+} from "@/lib/media/shakaPlayer";
 import type { MediaReleaseItem } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { cx } from "@/lib/format";
@@ -36,8 +53,8 @@ import { ExternalPlayerLinks } from "./ExternalPlayerLinks";
 import { VlcPlayButton } from "./VlcPlayButton";
 import type { WatchTarget } from "./watch";
 
-/** How long one link may take to show its first frame before we try the next one. */
-const ATTEMPT_TIMEOUT_MS = 15_000;
+/** How long one link may take to parse headers/cues and show its first frame before trying the next one. */
+const ATTEMPT_TIMEOUT_MS = 25_000;
 
 export function BetaBadge({
   tone = "amber",
@@ -67,9 +84,9 @@ interface BetaPlayerHandle {
 }
 
 /**
- * "Try Play (beta)": plays a release's resolved direct link in the browser, starting with
- * the highest quality and falling back to lower ones when a link fails. The browser
- * fetches the file straight from the host — nothing is proxied or transcoded by Sidify.
+ * "Try Play (beta)": plays a release's resolved direct link in the browser via Shaka Player,
+ * starting with the highest quality and handling complex containers & audio codecs
+ * (MKV, HLS, DASH, DDP 5.1 / E-AC-3, AC-3, multi-audio tracks).
  */
 export function BetaPlayerSheet({
   target,
@@ -129,8 +146,8 @@ type ReleaseFailure = "no-audio" | "failed";
 
 /** Seconds per tap of the ⟲ / ⟳ buttons and per ← / → key press. */
 const SEEK_STEP_SECONDS = 10;
-/** A playing file whose sound can't be confirmed within this window (stalls) is accepted. */
-const AUDIO_CHECK_DEADLINE_MS = 12_000;
+/** A playing progressive file whose sound can't be confirmed within this window is accepted. */
+const AUDIO_CHECK_DEADLINE_MS = 10_000;
 /** Save the position every this many seconds of playback (plus on pause / close / hide). */
 const SAVE_EVERY_SECONDS = 5;
 
@@ -189,8 +206,8 @@ function BetaPlayer({
 }) {
   const releases = useMemo(() => playableReleases(target.releases), [target.releases]);
   const mounted = useMounted();
-  const caps = useMemo(() => (mounted ? probeBrowserCapabilities() : null), [mounted]);
-  /** File names suggesting only audio this browser can't decode → tried after the others. */
+  const caps = useMemo(() => (mounted ? probeShakaCapabilities() : null), [mounted]);
+  /** File names suggesting only audio even Shaka + WASM Dolby cannot decode (e.g. lossless TrueHD/DTS-only) → tried after others. */
   const deferred = useMemo(
     () =>
       new Set(
@@ -205,7 +222,7 @@ function BetaPlayer({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sessionRef = useRef<PlaybackSession | null>(null);
-  const hlsTeardownRef = useRef<(() => void) | null>(null);
+  const shakaHandleRef = useRef<ShakaPlaybackHandle | null>(null);
   /** URL whose playback was established — late errors on it trigger recovery. */
   const liveUrlRef = useRef<string | null>(null);
   const activeIndexRef = useRef(0);
@@ -233,18 +250,27 @@ function BetaPlayer({
   const [silent, setSilent] = useState<SilentCandidate | null>(null);
   const [withoutSound, setWithoutSound] = useState(false);
   const [resumedFrom, setResumedFrom] = useState<number | null>(storedStart);
+  const [audioTracks, setAudioTracks] = useState<ShakaAudioTrackOption[]>([]);
+  const [textTracks, setTextTracks] = useState<ShakaTextTrackOption[]>([]);
 
   useEffect(() => {
     capsRef.current = caps;
     deferredRef.current = deferred;
   }, [caps, deferred]);
 
+  // Pre-initialize Shaka Player polyfills, transmuxers, and WASM Dolby decoder immediately
+  useEffect(() => {
+    void ensureShakaInitialized();
+  }, []);
+
   const resetVideo = useCallback(() => {
-    const teardown = hlsTeardownRef.current;
-    hlsTeardownRef.current = null;
+    const handle = shakaHandleRef.current;
+    shakaHandleRef.current = null;
     liveUrlRef.current = null;
-    if (teardown) {
-      teardown();
+    setAudioTracks([]);
+    setTextTracks([]);
+    if (handle) {
+      void handle.destroy();
       return;
     }
     const video = videoRef.current;
@@ -266,7 +292,10 @@ function BetaPlayer({
     saveResumePoint(resumeKey, video.currentTime, Number.isFinite(video.duration) ? video.duration : undefined);
   }, [resumeKey]);
 
-  /** Load one candidate and wait for real playback events — picture, then sound — to decide. */
+  /**
+   * Dynamically creates and attaches a fresh Shaka Player instance for `videoRef.current`
+   * and verifies video + audio playback before accepting the candidate.
+   */
   const attempt = useCallback(
     (candidate: StreamCandidate, release: MediaReleaseItem, startAt: number | undefined, signal: AbortSignal): Promise<AttemptOutcome> => {
       const video = videoRef.current as DecoderCounters | null;
@@ -278,8 +307,11 @@ function BetaPlayer({
       return new Promise<AttemptOutcome>((resolve) => {
         let settled = false;
         let metadata = false;
-        let hlsFatal: HlsFatalInfo | undefined;
+        let shakaReady = false;
+        let upgradingMp4 = false;
+        let shakaFatal: ShakaErrorEvent | undefined;
         let audioTimer: number | undefined;
+        let localHandle: ShakaPlaybackHandle | null = null;
 
         const finish = (result: AttemptOutcome) => {
           if (settled) return;
@@ -289,12 +321,20 @@ function BetaPlayer({
           setCheckingAudio(false);
           video.removeEventListener("loadedmetadata", onMetadata);
           video.removeEventListener("loadeddata", onData);
-          video.removeEventListener("error", onError);
+          video.removeEventListener("error", onVideoError);
           signal.removeEventListener("abort", onAbort);
+          if (!result.ok) {
+            if (localHandle && shakaHandleRef.current === localHandle) {
+              shakaHandleRef.current = null;
+            }
+            if (localHandle) {
+              void localHandle.destroy();
+              localHandle = null;
+            }
+          }
           if (!result.ok && result.failure !== "aborted") {
             if (releaseIndex >= 0) lastFailureRef.current[releaseIndex] = result.failure === "no-audio" ? "no-audio" : "failed";
-            // Specifics go to DevTools only; the player itself stays plain.
-            reportMediaDiagnostic("Try Play: link did not play", {
+            reportMediaDiagnostic("Try Play: Shaka candidate did not play", {
               failure: result.failure,
               quality,
               server: candidate.server,
@@ -307,19 +347,14 @@ function BetaPlayer({
               metadataLoaded: metadata,
               audioBytes: result.failure === "no-audio" ? (video.webkitAudioDecodedByteCount ?? null) : undefined,
               videoBytes: result.failure === "no-audio" ? (video.webkitVideoDecodedByteCount ?? null) : undefined,
-              hlsErrorKind: hlsFatal?.kind,
-              hlsErrorDetails: hlsFatal?.details,
-              hlsHttpStatus: hlsFatal?.httpStatus,
+              shakaErrorKind: shakaFatal?.kind,
+              shakaErrorCode: shakaFatal?.code,
+              shakaErrorDetail: shakaFatal?.detail,
             });
           }
           resolve(result);
         };
-        /**
-         * play() rejections never decide the outcome — media events do. The exception is the
-         * autoplay policy (NotAllowedError: Safari/iOS refuse sound when play() runs after an
-         * async step such as resolving the link). That isn't a broken link, so retry muted —
-         * muted playback is always allowed — and offer a one-tap "Turn sound on".
-         */
+
         const startPlayback = () => {
           void video.play().catch((err: unknown) => {
             if ((err as { name?: string } | null)?.name !== "NotAllowedError") return;
@@ -332,41 +367,101 @@ function BetaPlayer({
             });
           });
         };
+
         const accept = () => {
           liveUrlRef.current = candidate.url;
           finish({ ok: true });
         };
+
         /**
-         * The picture is up. Accept once the sound is confirmed to decode — or right away where
-         * the engine can't tell (no live decoder counters) or for "Play without sound".
+         * Verifies audio playback once the first video frame is rendered:
+         * - In Shaka MSE mode (MKV, HLS, DASH, MP4-MSE), Shaka's ManifestFilterer and our
+         *   Dolby-to-FLAC WASM transmuxer have already validated & bound the audio SourceBuffer,
+         *   so we accept immediately whenever Shaka has an active audio track (zero false link-jumping!).
+         * - In Shaka `src=` mode (progressive MP4/WebM), if the browser's `<video>` reports silent
+         *   audio (e.g. an unlabelled progressive MP4 with DDP 5.1), we upgrade that SAME link
+         *   in-place to Shaka MP4-MSE + Dolby WASM decoding before ever falling back!
          */
-        const checkAudio = () => {
-          if (!requireAudioRef.current || !capsRef.current?.audioCounters) {
+        const verifyAudioAndAccept = () => {
+          if (settled || !localHandle) return;
+          if (!requireAudioRef.current) {
             accept();
             return;
           }
-          window.clearTimeout(timer); // it's playing; only the sound check is left
+
+          if (localHandle.mode === "shaka-mse") {
+            if (localHandle.hasAudioTrack()) {
+              accept();
+            } else {
+              finish({ ok: false, failure: "no-audio" });
+            }
+            return;
+          }
+
+          if (!capsRef.current?.audioCounters) {
+            accept();
+            return;
+          }
+
+          window.clearTimeout(timer);
           setCheckingAudio(true);
           const fromTime = video.currentTime;
           const fromFrames = video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
           const deadline = Date.now() + AUDIO_CHECK_DEADLINE_MS;
+
           const tick = () => {
-            if (settled) return;
+            if (settled || upgradingMp4) return;
             const verdict = audioVerdict({
               progress: video.currentTime - fromTime,
               audioBytes: video.webkitAudioDecodedByteCount,
               videoBytes: video.webkitVideoDecodedByteCount,
               frames: (video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0) - fromFrames,
             });
-            if (verdict === "silent") finish({ ok: false, failure: "no-audio" });
-            else if (verdict === "audio" || verdict === "unknown" || Date.now() > deadline) accept();
-            else audioTimer = window.setTimeout(tick, 250);
+            if (verdict === "silent") {
+              if (localHandle && localHandle.mimeType === "video/mp4") {
+                upgradingMp4 = true;
+                setCheckingAudio(false);
+                void localHandle.upgradeProgressiveMp4ToMse(video.currentTime).then((upgraded) => {
+                  upgradingMp4 = false;
+                  if (settled) return;
+                  if (upgraded) {
+                    startPlayback();
+                    accept();
+                  } else {
+                    finish({ ok: false, failure: "no-audio" });
+                  }
+                });
+                return;
+              }
+              finish({ ok: false, failure: "no-audio" });
+            } else if (verdict === "audio" || verdict === "unknown" || Date.now() > deadline) {
+              accept();
+            } else {
+              audioTimer = window.setTimeout(tick, 250);
+            }
           };
           tick();
         };
+
+        const evaluateVideoFrame = () => {
+          if (settled || !shakaReady) return;
+          if (video.readyState < 2) return;
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            startPlayback();
+            verifyAudioAndAccept();
+          } else {
+            finish({ ok: false, failure: "no-picture" });
+          }
+        };
+
         const onMetadata = () => {
           metadata = true;
-          if (startAt && startAt > 1 && (!Number.isFinite(video.duration) || startAt < video.duration - 1)) {
+          if (
+            localHandle?.mode === "shaka-src" &&
+            startAt &&
+            startAt > 1 &&
+            (!Number.isFinite(video.duration) || startAt < video.duration - 1)
+          ) {
             try {
               video.currentTime = startAt;
             } catch {
@@ -374,17 +469,20 @@ function BetaPlayer({
             }
           }
         };
+
         const onData = () => {
-          // First frame available. No picture means the video track wasn't decoded.
-          if (video.videoWidth > 0 && video.videoHeight > 0) {
-            startPlayback();
-            checkAudio();
-          } else {
-            finish({ ok: false, failure: "no-picture" });
+          evaluateVideoFrame();
+        };
+
+        const onVideoError = () => {
+          if (upgradingMp4) return;
+          // In MSE mode, Shaka reports structured errors via onFatalError; only fall back here
+          // if the HTMLVideoElement itself entered a terminal error state.
+          if (video.error) {
+            finish({ ok: false, failure: classifyMediaError(video.error.code, metadata, video.error.message) });
           }
         };
-        const onError = () =>
-          finish({ ok: false, failure: classifyMediaError(video.error?.code, metadata, video.error?.message) });
+
         const onAbort = () => finish({ ok: false, failure: "aborted" });
         const timer = window.setTimeout(
           () => finish({ ok: false, failure: metadata && video.videoWidth === 0 ? "no-picture" : "timeout" }),
@@ -393,30 +491,57 @@ function BetaPlayer({
 
         video.addEventListener("loadedmetadata", onMetadata);
         video.addEventListener("loadeddata", onData);
-        video.addEventListener("error", onError);
+        video.addEventListener("error", onVideoError);
         signal.addEventListener("abort", onAbort);
         video.preload = "auto";
 
-        if (candidate.kind === "hls") {
-          // Existing HLS engine: native HLS (Safari) or hls.js over MSE.
-          void attachPlaybackSource({
-            video,
-            source: { url: candidate.url, type: "hls" },
-            onFatalError: (_reason, info) => {
-              hlsFatal = info;
-              // A segment that won't decode is a codec problem, not a network one.
-              if (!settled) finish({ ok: false, failure: classifyHlsFatal(info?.kind) });
-              else if (liveUrlRef.current === candidate.url) lateFailureRef.current();
-            },
-          }).then((handle) => {
-            if (settled && liveUrlRef.current !== candidate.url) handle.destroy();
-            else hlsTeardownRef.current = handle.destroy;
+        void attachShakaPlayback(video, {
+          url: candidate.url,
+          streamType: candidate.streamType ?? (candidate.kind === "hls" ? "hls" : undefined),
+          container: candidate.container ?? release.container,
+          fileName: release.fileName ?? release.title,
+          startAt,
+          signal,
+          onTracksChanged: ({ audio, text }) => {
+            if (signal.aborted) return;
+            setAudioTracks(audio);
+            setTextTracks(text);
+          },
+          onFatalError: (err) => {
+            shakaFatal = err;
+            if (!settled) {
+              finish({ ok: false, failure: err.kind });
+            } else if (liveUrlRef.current === candidate.url) {
+              lateFailureRef.current();
+            }
+          },
+        })
+          .then((handle) => {
+            if (settled) {
+              void handle.destroy();
+              return;
+            }
+            if (handle.mode === "unsupported") {
+              finish({ ok: false, failure: "decode" });
+              return;
+            }
+            localHandle = handle;
+            shakaHandleRef.current = handle;
+            shakaReady = true;
+            startPlayback();
+            if (video.readyState >= 1) onMetadata();
+            if (video.readyState >= 2) evaluateVideoFrame();
+          })
+          .catch((err: unknown) => {
+            if (signal.aborted || (err as { name?: string } | null)?.name === "AbortError") {
+              finish({ ok: false, failure: "aborted" });
+              return;
+            }
+            const classified = (err as { category?: number; code?: number } | null);
+            const isMediaOrManifest =
+              classified && (classified.category === 3 || classified.category === 4);
+            finish({ ok: false, failure: isMediaOrManifest ? "decode" : "network" });
           });
-        } else {
-          video.src = candidate.url;
-          video.load();
-        }
-        startPlayback();
       });
     },
     [releases, resetVideo]
@@ -434,7 +559,6 @@ function BetaPlayer({
       }
       const session = sessionRef.current;
       let current: number | null = null;
-      // The engine only moves to another quality once the current one is out of options.
       const commitFailure = (index: number | null) => {
         if (index === null) return;
         const reason = lastFailureRef.current[index] ?? "failed";
@@ -531,9 +655,6 @@ function BetaPlayer({
 
   useImperativeHandle(ref, () => ({ stop }), [stop]);
 
-  // Start with the highest quality (from where this item was left) as soon as the player
-  // opens; stop on close. Deferred one task so a mount → unmount → mount (React StrictMode)
-  // sends one request.
   useEffect(() => {
     const timer = window.setTimeout(() => void run(0, resumeAtRef.current), 0);
     return () => {
@@ -543,8 +664,6 @@ function BetaPlayer({
     };
   }, [run, resetVideo]);
 
-  // A link that fails after playback started (expired token, dropped connection):
-  // automatic recovery in the SAME session, so the one re-resolve is never exceeded.
   useEffect(() => {
     lateFailureRef.current = () => {
       const video = videoRef.current;
@@ -559,7 +678,7 @@ function BetaPlayer({
     const video = videoRef.current;
     if (!video) return;
     const onLateError = () => {
-      if (liveUrlRef.current) lateFailureRef.current();
+      if (liveUrlRef.current && video.error) lateFailureRef.current();
     };
     const onTime = () => {
       if (!liveUrlRef.current || !Number.isFinite(video.currentTime)) return;
@@ -570,12 +689,10 @@ function BetaPlayer({
       if (!video.ended) persistPosition();
     };
     const onEnded = () => {
-      // Finished: next time starts from the beginning.
       clearResumePoint(resumeKey);
       resumeAtRef.current = undefined;
       lastSavedRef.current = 0;
     };
-    // Unmuted from the native controls → hide "Turn sound on".
     const onVolume = () => {
       if (!video.muted) setMutedByPolicy(false);
     };
@@ -607,8 +724,6 @@ function BetaPlayer({
     video.currentTime = Math.min(end, Math.max(0, video.currentTime + delta));
   }, []);
 
-  // ← / → (and J / L) jump 10 s while a link plays — also when the video itself has focus
-  // or is fullscreen, so it's always 10 s rather than the native step.
   useEffect(() => {
     if (outcome !== "playing") return;
     const onKey = (event: KeyboardEvent) => {
@@ -628,7 +743,6 @@ function BetaPlayer({
     return () => window.removeEventListener("keydown", onKey);
   }, [outcome, seekBy]);
 
-  /** Runs inside the click, so the browser allows sound again. */
   const unmute = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -671,7 +785,6 @@ function BetaPlayer({
   const noSoundLabels = failedList.filter((f) => f.reason === "no-audio").map((f) => labels[f.index]);
   const brokenLabels = failedList.filter((f) => f.reason === "failed").map((f) => labels[f.index]);
   const silentQuality = silent ? qualityLabel(silent.release) : null;
-  /** The freshest direct link this session found — what the player apps are handed. */
   const handoffUrl = silent?.candidate.sourceUrl ?? lastUrl;
 
   return (
@@ -679,7 +792,6 @@ function BetaPlayer({
       <div className="relative aspect-video w-full overflow-hidden rounded-[12px] bg-black ring-1 ring-edge">
         <video
           ref={videoRef}
-          // Native controls only once a link plays; while trying / after failing the overlay speaks.
           controls={outcome === "playing"}
           playsInline
           preload="auto"
@@ -735,8 +847,8 @@ function BetaPlayer({
             <div className="mb-3">
               <p className="text-[13.5px] font-semibold text-fg">This video&apos;s sound doesn&apos;t play in your browser</p>
               <p className="mt-1 text-[12.5px] leading-relaxed text-fg-2">
-                Its audio format (often Dolby DD / DDP) isn&apos;t supported here. VLC plays it with sound, and the
-                downloaded file keeps the video and every audio track.
+                Its audio format isn&apos;t supported here. VLC plays it with sound, and the downloaded file keeps the
+                video and every audio track.
               </p>
             </div>
           )}
@@ -819,6 +931,61 @@ function BetaPlayer({
                   </button>
                 </span>
               )}
+            </div>
+          )}
+
+          {outcome === "playing" && audioTracks.length > 1 && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2">
+                <Languages size={13} aria-hidden="true" /> Audio
+              </span>
+              {audioTracks.map((track) => (
+                <button
+                  key={track.id}
+                  type="button"
+                  aria-pressed={track.active}
+                  onClick={() => shakaHandleRef.current?.selectAudioTrack(track.id)}
+                  className={cx(
+                    "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
+                    track.active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
+                  )}
+                >
+                  {track.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {outcome === "playing" && textTracks.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2">
+                <Captions size={13} aria-hidden="true" /> Subtitles
+              </span>
+              <button
+                type="button"
+                aria-pressed={textTracks.every((t) => !t.active)}
+                onClick={() => void shakaHandleRef.current?.selectTextTrack(null)}
+                className={cx(
+                  "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
+                  textTracks.every((t) => !t.active) ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
+                )}
+              >
+                Off
+              </button>
+              {textTracks.map((track) => (
+                <button
+                  key={track.id}
+                  type="button"
+                  aria-pressed={track.active}
+                  onClick={() => void shakaHandleRef.current?.selectTextTrack(track.id)}
+                  className={cx(
+                    "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
+                    track.active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
+                  )}
+                >
+                  {track.label}
+                </button>
+              ))}
             </div>
           )}
 
@@ -919,8 +1086,8 @@ function BetaPlayer({
       )}
 
       <p className="mt-3 text-[11.5px] leading-relaxed text-fg-3">
-        Beta: starts with the best quality that plays with sound here and steps down if a link won&apos;t play.
-        Remembers where you stopped. Your browser streams the file directly from the host.
+        Powered by Shaka Player: starts with the best quality that plays with sound here and steps down if a link
+        won&apos;t play. Remembers where you stopped. Your browser streams the file directly from the host.
       </p>
     </div>
   );

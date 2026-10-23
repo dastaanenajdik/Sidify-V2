@@ -114,6 +114,7 @@ export interface StreamCandidate {
   /** Resolver verified an MP4 / WebM / HLS container. MKV & unknown files are `false`. */
   verified: boolean;
   container?: string;
+  streamType?: ResolvedMirrorLink["streamType"];
 }
 
 /**
@@ -160,6 +161,7 @@ export function streamCandidates(links: readonly ResolvedMirrorLink[]): StreamCa
       kind: link.streamType === "hls" ? "hls" : "file",
       verified: Boolean(link.playable),
       container: link.container,
+      streamType: link.streamType,
       order,
     });
   });

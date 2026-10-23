@@ -2,11 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Bookmark, Check, Copy, Download, ExternalLink, ListVideo, Play, RotateCcw, RotateCw, Star } from "lucide-react";
+import {
+  Bookmark,
+  Captions,
+  Check,
+  Copy,
+  Download,
+  ExternalLink,
+  Languages,
+  ListVideo,
+  Play,
+  RotateCcw,
+  RotateCw,
+  Star,
+} from "lucide-react";
 import { copyText } from "@/lib/clipboard";
 import { mediaArt } from "@/lib/media/art";
-import { attachPlaybackSource, type HlsPlaybackMode } from "@/lib/media/hlsPlayer";
-import { externalPlayerReleases, playableReleases } from "@/lib/media/playbackPlan";
+import { audioVerdict, externalPlayerReleases, playableReleases } from "@/lib/media/playbackPlan";
 import {
   clearResumePoint,
   formatPlaybackTime,
@@ -14,6 +26,12 @@ import {
   resumePosition,
   saveResumePoint,
 } from "@/lib/media/resumePoints";
+import {
+  attachShakaPlayback,
+  type ShakaAudioTrackOption,
+  type ShakaPlaybackHandle,
+  type ShakaTextTrackOption,
+} from "@/lib/media/shakaPlayer";
 import type { MediaDetail, PlaybackSource } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { SectionHeader, Shelf } from "@/components/ui";
@@ -336,55 +354,116 @@ function formatRuntime(minutes: number): string {
 
 /* ------------------------------- playback -------------------------------- */
 
+type StreamShakaMode = ShakaPlaybackHandle["mode"];
+
 function MediaStreamPlayer({
   source,
   poster,
   videoRef,
+  shakaHandleRef,
   onModeChange,
+  onTracksChange,
   onStreamError,
 }: {
   source: PlaybackSource;
   poster?: string;
   videoRef: React.RefObject<HTMLVideoElement | null>;
-  onModeChange: (url: string, mode: HlsPlaybackMode) => void;
+  shakaHandleRef: React.RefObject<ShakaPlaybackHandle | null>;
+  onModeChange: (url: string, mode: StreamShakaMode) => void;
+  onTracksChange: (tracks: { audio: ShakaAudioTrackOption[]; text: ShakaTextTrackOption[] }) => void;
   onStreamError: (url: string, message: string) => void;
 }) {
-
   useEffect(() => {
-    const videoEl = videoRef.current;
+    const videoEl = videoRef.current as (HTMLVideoElement & {
+      webkitAudioDecodedByteCount?: number;
+      webkitVideoDecodedByteCount?: number;
+    }) | null;
     if (!videoEl) return;
 
     let disposed = false;
-    let teardown: (() => void) | undefined;
+    let audioMonitorTimer: number | undefined;
+    let upgradingMp4 = false;
+    const abortCtrl = new AbortController();
 
-    // Attach one task later: an effect that is torn down and re-run straight away (React
-    // StrictMode, or a re-render with new callbacks) then attaches once, instead of a stale
-    // attach's late `destroy()` wiping the `src` the newer attach just set.
+    // Attach one task later so React StrictMode double-mount creates one clean Shaka instance per <video>.
     const timer = window.setTimeout(() => {
-      void attachPlaybackSource({
-        video: videoEl,
-        source,
-        onMode: (mode) => {
-          if (!disposed) onModeChange(source.url, mode);
+      void attachShakaPlayback(videoEl, {
+        url: source.url,
+        streamType: source.type,
+        fileName: source.label,
+        signal: abortCtrl.signal,
+        onTracksChanged: (tracks) => {
+          if (!disposed) onTracksChange(tracks);
         },
-        onFatalError: (reason) => {
-          if (!disposed) onStreamError(source.url, reason);
+        onFatalError: (err) => {
+          if (!disposed) {
+            onStreamError(source.url, `Shaka Player error (${err.kind}): ${err.detail}`);
+          }
         },
-      }).then((handle) => {
-        if (disposed) {
-          handle.destroy();
-        } else {
-          teardown = handle.destroy;
-        }
-      });
+      })
+        .then((handle) => {
+          if (disposed) {
+            void handle.destroy();
+            return;
+          }
+          shakaHandleRef.current = handle;
+          onModeChange(source.url, handle.mode);
+
+          // If loaded as progressive src= MP4 with hidden Dolby audio, monitor decoded audio bytes
+          // and transparently upgrade in-place to Shaka MP4-MSE + WASM Dolby transcoding.
+          if (handle.mode === "shaka-src" && handle.mimeType === "video/mp4") {
+            const onPlaying = () => {
+              const startSec = videoEl.currentTime;
+              const startFrames = videoEl.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
+              const poll = () => {
+                if (disposed || upgradingMp4 || videoEl.paused) return;
+                const verdict = audioVerdict({
+                  progress: videoEl.currentTime - startSec,
+                  audioBytes: videoEl.webkitAudioDecodedByteCount,
+                  videoBytes: videoEl.webkitVideoDecodedByteCount,
+                  frames: (videoEl.getVideoPlaybackQuality?.().totalVideoFrames ?? 0) - startFrames,
+                });
+                if (verdict === "silent") {
+                  upgradingMp4 = true;
+                  void handle.upgradeProgressiveMp4ToMse(videoEl.currentTime).then((ok) => {
+                    upgradingMp4 = false;
+                    if (!disposed && ok) {
+                      onModeChange(source.url, handle.mode);
+                      void videoEl.play().catch(() => {});
+                    }
+                  });
+                } else if (verdict === "pending") {
+                  audioMonitorTimer = window.setTimeout(poll, 300);
+                }
+              };
+              audioMonitorTimer = window.setTimeout(poll, 400);
+            };
+            videoEl.addEventListener("playing", onPlaying, { once: true });
+          }
+        })
+        .catch((err: unknown) => {
+          if (disposed || abortCtrl.signal.aborted) return;
+          onStreamError(
+            source.url,
+            (err as { message?: string } | null)?.message ||
+              "Shaka Player could not initialize this media stream.",
+          );
+        });
     }, 0);
 
     return () => {
       disposed = true;
+      abortCtrl.abort();
       window.clearTimeout(timer);
-      teardown?.();
+      window.clearTimeout(audioMonitorTimer);
+      onTracksChange({ audio: [], text: [] });
+      const activeHandle = shakaHandleRef.current;
+      shakaHandleRef.current = null;
+      if (activeHandle) {
+        void activeHandle.destroy();
+      }
     };
-  }, [source, videoRef, onModeChange, onStreamError]);
+  }, [source, videoRef, shakaHandleRef, onModeChange, onTracksChange, onStreamError]);
 
   return (
     <video
@@ -394,12 +473,15 @@ function MediaStreamPlayer({
       playsInline
       preload="metadata"
       poster={poster}
-      onError={() =>
-        onStreamError(
-          source.url,
-          "Browser video element rejected this stream (unsupported audio/video codec, expired direct URL, or cross-origin media policy). Open the link in VLC / IINA / MPV or download directly."
-        )
-      }
+      onError={(e) => {
+        const el = e.currentTarget;
+        if (el.error) {
+          onStreamError(
+            source.url,
+            "Browser video element rejected this stream (unsupported audio/video codec, expired direct URL, or cross-origin media policy). Open the link in VLC / IINA / MPV or download directly."
+          );
+        }
+      }}
       className="aspect-video w-full bg-black"
     >
       Your browser cannot play this media stream natively.
@@ -531,8 +613,11 @@ function PlaybackSection({
   const { title } = detail;
   const pushToast = useUi((s) => s.pushToast);
   const [failedReasons, setFailedReasons] = useState<Record<string, string>>({});
-  const [streamModes, setStreamModes] = useState<Record<string, HlsPlaybackMode>>({});
+  const [streamModes, setStreamModes] = useState<Record<string, StreamShakaMode>>({});
+  const [audioTracks, setAudioTracks] = useState<ShakaAudioTrackOption[]>([]);
+  const [textTracks, setTextTracks] = useState<ShakaTextTrackOption[]>([]);
   const streamVideoRef = useRef<HTMLVideoElement | null>(null);
+  const shakaHandleRef = useRef<ShakaPlaybackHandle | null>(null);
   const downloads = detail.downloads ?? [];
 
   // Stable callbacks, so reporting a mode/error doesn't re-run (and re-attach) the player.
@@ -540,9 +625,17 @@ function PlaybackSection({
     setFailedReasons((prev) => (prev[url] === reason ? prev : { ...prev, [url]: reason }));
   }, []);
 
-  const handleModeChange = useCallback((url: string, mode: HlsPlaybackMode) => {
+  const handleModeChange = useCallback((url: string, mode: StreamShakaMode) => {
     setStreamModes((prev) => (prev[url] === mode ? prev : { ...prev, [url]: mode }));
   }, []);
+
+  const handleTracksChange = useCallback(
+    ({ audio, text }: { audio: ShakaAudioTrackOption[]; text: ShakaTextTrackOption[] }) => {
+      setAudioTracks(audio);
+      setTextTracks(text);
+    },
+    [],
+  );
 
   if (playback.length === 0) {
     const links = title.watchProviders ?? [];
@@ -626,7 +719,9 @@ function PlaybackSection({
             source={source}
             poster={title.backdrop ?? title.poster ?? undefined}
             videoRef={streamVideoRef}
+            shakaHandleRef={shakaHandleRef}
             onModeChange={handleModeChange}
+            onTracksChange={handleTracksChange}
             onStreamError={handleStreamError}
           />
         )}
@@ -638,6 +733,61 @@ function PlaybackSection({
           sourceUrl={source.url}
           title={title.title}
         />
+      )}
+
+      {!embed && audioTracks.length > 1 && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2">
+            <Languages size={13} aria-hidden="true" /> Audio
+          </span>
+          {audioTracks.map((track) => (
+            <button
+              key={track.id}
+              type="button"
+              aria-pressed={track.active}
+              onClick={() => shakaHandleRef.current?.selectAudioTrack(track.id)}
+              className={cx(
+                "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
+                track.active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
+              )}
+            >
+              {track.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!embed && textTracks.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2">
+            <Captions size={13} aria-hidden="true" /> Subtitles
+          </span>
+          <button
+            type="button"
+            aria-pressed={textTracks.every((t) => !t.active)}
+            onClick={() => void shakaHandleRef.current?.selectTextTrack(null)}
+            className={cx(
+              "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
+              textTracks.every((t) => !t.active) ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
+            )}
+          >
+            Off
+          </button>
+          {textTracks.map((track) => (
+            <button
+              key={track.id}
+              type="button"
+              aria-pressed={track.active}
+              onClick={() => void shakaHandleRef.current?.selectTextTrack(track.id)}
+              className={cx(
+                "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
+                track.active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
+              )}
+            >
+              {track.label}
+            </button>
+          ))}
+        </div>
       )}
 
       {failureMessage && (
@@ -672,11 +822,9 @@ function PlaybackSection({
         </h2>
         {!embed && activeMode && activeMode !== "unsupported" && (
           <span className="rounded-full bg-fill px-2.5 py-0.5 text-[11px] font-semibold text-fg-3">
-            {activeMode === "native-hls"
-              ? "Native HLS"
-              : activeMode === "mse-hls"
-                ? "HLS · hls.js MSE"
-                : `Direct ${source.type.toUpperCase()}`}
+            {activeMode === "shaka-mse"
+              ? `Shaka MSE · ${source.type.toUpperCase()}`
+              : `Shaka · ${source.type.toUpperCase()}`}
           </span>
         )}
         {playback.length > 1 &&
