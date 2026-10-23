@@ -250,8 +250,8 @@ export function parseGeneratorLinks(
     const candidate = sanitizePublicHttpsUrl(rawHref, context.baseUrl);
     if (!candidate) return;
 
-    // Skip Telegram links and raw .zip buttons on generator pages unless user opened a pack
-    if (/t\.me|telegram/i.test(candidate)) return;
+    // Skip Telegram links/redirectors and raw .zip buttons on generator pages unless user opened a pack
+    if (/t\.me|telegram|\/tg\/go\b/i.test(candidate) || /\btelegram\b/i.test(text)) return;
     if (/\.zip(?:$|[?#])/i.test(candidate) && !/\.zip\b/i.test(context.fileName || "")) return;
 
     let finalUrl = candidate;
