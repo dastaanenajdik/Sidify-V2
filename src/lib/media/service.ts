@@ -109,6 +109,22 @@ async function secondarySearch(query: string, kind: MediaKind | "all", limit: nu
   }
 }
 
+/**
+ * The exclusive collection's own listing, best-effort.
+ *
+ * This is the catalogue's homepage rows — not a keyword search. Searching for a
+ * generic word like "2024" matches no title at all, which is why the shelf used
+ * to come up empty.
+ */
+async function secondaryListing(kind: MediaKind | "all", limit: number): Promise<MediaTitle[]> {
+  if (!exclusiveCollectionEnabled()) return [];
+  try {
+    return await getSecondaryProvider().discovery(kind, limit);
+  } catch {
+    return [];
+  }
+}
+
 /* ------------------------------- playback -------------------------------- */
 
 /** Playback assembly is provider + optional operator manifest only — see `playback.ts`. */
@@ -152,7 +168,7 @@ export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<M
     provider[kind === "movie" ? "getPopularMovies" : "getPopularSeries"](12).catch(() => []),
     kind === "movie" && provider.getFreeToWatch ? provider.getFreeToWatch(12).catch(() => []) : Promise.resolve([]),
     // The exclusive collection gets its own shelf on the browse page.
-    secondarySearch("2024", kind, 12),
+    secondaryListing(kind, 12),
   ]);
 
   const rails = railsFor(kind, { trending, recent, topRated, popular });

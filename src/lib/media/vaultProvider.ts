@@ -9,10 +9,10 @@
  */
 
 import { MediaProviderError, type MediaProvider } from "./provider";
-import { mergeSearchResults } from "./query";
 import { getVaultClient, VaultApiError, type VaultClient } from "./vaultClient";
 import {
   detailsPayloadToDetail,
+  homepagePayloadToTitles,
   isDeprecationNoticeUrl,
   playInfoToReleases,
   resourceItemToRelease,
@@ -48,6 +48,22 @@ const DETAIL_STALE_MS = 2 * 60 * 60 * 1000;
 const SEARCH_TTL_MS = 5 * 60 * 1000;
 const PAGE_SIZE = 24;
 
+/**
+ * The catalogue's homepage tabs.
+ *
+ * Tab "2" is the one the reference client opens on its first screen; the others
+ * are read as well so the listing covers more than a single row type. A tab that
+ * does not answer is skipped — the listing merges whatever does come back.
+ */
+const HOMEPAGE_TAB_IDS = ["2", "1", "3"];
+
+/** How long the homepage listing stays fresh, and how long it may be served stale. */
+const HOMEPAGE_TTL_MS = 5 * 60 * 1000;
+const HOMEPAGE_STALE_MS = 30 * 60 * 1000;
+
+/** How many titles the homepage listing keeps — enough to fill either kind's shelf. */
+const HOMEPAGE_CACHE_SIZE = 200;
+
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
@@ -64,6 +80,8 @@ export class VaultMediaProvider implements MediaProvider {
 
   private readonly detailCache = new Map<string, CacheEntry<MediaDetail | null>>();
   private readonly searchCache = new Map<string, CacheEntry<MediaTitle[]>>();
+  /** The homepage listing — one upstream round trip for the whole collection. */
+  private homepageCache: CacheEntry<MediaTitle[]> | null = null;
 
   constructor(private readonly client: VaultClient = getVaultClient()) {}
 
@@ -132,27 +150,107 @@ export class VaultMediaProvider implements MediaProvider {
   /**
    * The collection's own listing, used when nothing has been searched yet.
    *
-   * Several broad terms are queried and their results merged, so the section always
-   * has something to show even when the catalogue's own ranking endpoints are absent.
+   * This is the catalogue's **homepage** endpoint — the same rows the reference
+   * client shows on its first screen. It is the only listing the catalogue really
+   * has; searching for generic words like "2024" or "action" matches no title at
+   * all, which is why the section used to come up empty.
+   *
+   * The listing mixes movies and series, so a kind filter is applied afterwards.
    */
   async discovery(kind: MediaKind | "all" = "all", limit = 24): Promise<MediaTitle[]> {
+    // The listing is filtered by kind *after* it is collected, so the whole
+    // listing is needed here — slicing first could starve the filter.
+    const titles = await this.homepage(HOMEPAGE_CACHE_SIZE);
+    const matched = kind === "all" ? titles : titles.filter((title) => title.kind === kind);
+    if (matched.length) return matched.slice(0, limit);
+
+    // The homepage came back empty. A broad search is the safety net so the
+    // section is never blank.
     if (kind === "all") {
       const [movies, series] = await Promise.all([
         this.discoveryQuery("movie", limit),
         this.discoveryQuery("series", limit),
       ]);
-      const merged = mergeSearchResults(movies, series);
-      return merged.slice(0, limit);
+      const merged = [...movies, ...series];
+      const seen = new Set<string>();
+      const unique = merged.filter((title) => {
+        if (seen.has(title.id)) return false;
+        seen.add(title.id);
+        return true;
+      });
+      return unique.slice(0, limit);
     }
     return this.discoveryQuery(kind, limit);
   }
 
-  /** The catalogue is search-driven, so "trending" falls back to a broad query. */
+  /**
+   * The catalogue's homepage rows.
+   *
+   * `tab-operating` answers with `items`: groups of rows, each carrying its
+   * subjects in a banner, a custom row or a plain grid. Several tabs are read and
+   * merged so the listing is not limited to one row type.
+   */
+  private async homepage(limit: number): Promise<MediaTitle[]> {
+    const now = Date.now();
+    const cached = this.homepageCache;
+    if (cached) {
+      if (cached.expiresAt > now) return cached.value.slice(0, limit);
+      // Stale: serve what we have and refresh in the background.
+      if (cached.staleUntil > now) {
+        void this.loadHomepage().catch(() => {});
+        return cached.value.slice(0, limit);
+      }
+    }
+    return this.loadHomepage(limit);
+  }
+
+  /** Reads every homepage tab and merges the rows into one listing. */
+  private async loadHomepage(limit = HOMEPAGE_CACHE_SIZE): Promise<MediaTitle[]> {
+    const collected: MediaTitle[] = [];
+    const seen = new Set<string>();
+
+    for (const tabId of HOMEPAGE_TAB_IDS) {
+      try {
+        const payload = await this.client.get(
+          `/wefeed-mobile-bff/tab-operating?page=1&tabId=${encodeURIComponent(tabId)}&version=`
+        );
+        for (const title of homepagePayloadToTitles(payload)) {
+          if (seen.has(title.id)) continue;
+          seen.add(title.id);
+          collected.push(title);
+        }
+      } catch {
+        /* one failing tab must not break the listing */
+      }
+    }
+
+    const value = collected.slice(0, limit);
+    const now = Date.now();
+    this.homepageCache = {
+      value,
+      expiresAt: now + HOMEPAGE_TTL_MS,
+      staleUntil: now + HOMEPAGE_STALE_MS,
+    };
+    return value;
+  }
+
+  /**
+   * The catalogue has no separate ranking endpoint, so the rails fall back to the
+   * homepage listing (filtered by kind) and finally to a broad search.
+   */
   private async discoveryQuery(kind: MediaKind, limit: number): Promise<MediaTitle[]> {
-    const terms =
-      kind === "movie"
-        ? ["2024", "2023", "action", "drama", "horror", "comedy"]
-        : ["series", "2024", "drama", "comedy", "action", "thriller"];
+    // The homepage listing first — it is the catalogue's own ranking.
+    try {
+      const listed = await this.homepage(HOMEPAGE_CACHE_SIZE);
+      const matched = listed.filter((title) => title.kind === kind);
+      if (matched.length) return matched.slice(0, limit);
+    } catch {
+      /* fall through to the search fallback */
+    }
+
+    // The homepage came back empty — a broad search is the safety net so a rail
+    // is never blank.
+    const terms = kind === "movie" ? ["action", "drama", "comedy", "horror"] : ["drama", "comedy", "thriller"];
     const collected: MediaTitle[] = [];
     const seen = new Set<string>();
     for (const term of terms) {
