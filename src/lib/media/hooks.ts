@@ -28,6 +28,22 @@ export function useMediaSearch(term: string, enabled = true, limit = 12) {
 }
 
 /**
+ * The exclusive collection's own results.
+ *
+ * Unlike `useMediaSearch`, this never mixes in the main catalogue — the section shows
+ * exactly one source. An empty query returns the collection's listing.
+ */
+export function useExclusiveSearch(term: string, enabled = true, limit = 24) {
+  return useQuery({
+    queryKey: ["media-exclusive", term, limit],
+    queryFn: () => mediaApi.exclusive(term, "all", limit),
+    enabled,
+    staleTime: 2 * 60_000,
+    retry: 0,
+  });
+}
+
+/**
  * Episodes for one season, fetched the first time the season is opened. Providers that
  * already returned episodes with the detail response never trigger this.
  */

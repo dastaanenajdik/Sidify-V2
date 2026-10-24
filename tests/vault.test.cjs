@@ -183,24 +183,24 @@ test('vault slugs round-trip the subject id', () => {
 });
 
 test('search payload becomes titles with kind, year and poster', () => {
+  // The real API groups its matches: `results` is an array of groups, each with
+  // a `subjects` array. Only the first group is used.
   const payload = {
-    results: {
-      list: [
-        {
-          subjects: [
-            {
-              subjectId: 987,
-              title: '[1080p] Dune Part Two',
-              subjectType: 1,
-              releaseDate: '2024-03-01',
-              cover: { url: 'https://cdn.example.com/dune.jpg' },
-              genre: ['Action', 'Sci-Fi'],
-            },
-            { subjectId: 654, title: 'Some Series', subjectType: 2 },
-          ],
-        },
-      ],
-    },
+    results: [
+      {
+        subjects: [
+          {
+            subjectId: 987,
+            title: '[1080p] Dune Part Two',
+            subjectType: 1,
+            releaseDate: '2024-03-01',
+            cover: { url: 'https://cdn.example.com/dune.jpg' },
+            genre: ['Action', 'Sci-Fi'],
+          },
+          { subjectId: 654, title: 'Some Series', subjectType: 2 },
+        ],
+      },
+    ],
   };
   const titles = A.searchPayloadToTitles(payload);
   assert.equal(titles.length, 2);
@@ -213,9 +213,28 @@ test('search payload becomes titles with kind, year and poster', () => {
   assert.equal(titles[1].kind, 'series');
 });
 
-test('search payload also accepts a flat list', () => {
-  const titles = A.searchPayloadToTitles({ list: [{ subjectId: 1, title: 'A' }] });
-  assert.equal(titles.length, 1);
+test('search payload also accepts grouped and flat shapes', () => {
+  // `results` wrapped in `data` (the client unwraps `data` before adapting).
+  const grouped = A.searchPayloadToTitles({
+    results: { list: [{ subjects: [{ subjectId: 1, title: 'A' }] }] },
+  });
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].id, '1');
+
+  const flat = A.searchPayloadToTitles({ list: [{ subjectId: 2, title: 'B' }] });
+  assert.equal(flat.length, 1);
+  assert.equal(flat[0].id, '2');
+
+  const direct = A.searchPayloadToTitles({ subjects: [{ subjectId: 3, title: 'C' }] });
+  assert.equal(direct.length, 1);
+  assert.equal(direct[0].id, '3');
+});
+
+test('duplicate subjects in one response are collapsed', () => {
+  const payload = {
+    results: [{ subjects: [{ subjectId: 5, title: 'Same' }, { subjectId: 5, title: 'Same' }] }],
+  };
+  assert.equal(A.searchPayloadToTitles(payload).length, 1);
 });
 
 /* --------------------------- dash resolution ---------------------------- */

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Clapperboard } from "lucide-react";
+import { Clapperboard, Sparkles } from "lucide-react";
 import { usePlayer, currentTrack } from "@/store/player";
 import { next, togglePlay } from "@/lib/audioEngine";
 import { useRoomSummary } from "@/lib/rooms/client";
@@ -20,6 +20,7 @@ const TABS = [
     icon: Clapperboard,
     match: (p: string) => p.startsWith("/movies") || p.startsWith("/series"),
   },
+  { href: "/exclusive", label: "Exclusive", icon: Sparkles, match: (p: string) => p.startsWith("/exclusive") },
   { href: "/search", label: "Search", icon: SearchGlyph, match: (p: string) => p.startsWith("/search") },
   {
     href: "/library",

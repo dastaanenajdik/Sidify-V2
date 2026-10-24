@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Clapperboard, Clock3, Download, Heart, ListMusic, Plus, Settings, Smartphone, Tv } from "lucide-react";
+import { Clapperboard, Clock3, Download, Heart, ListMusic, Plus, Settings, Smartphone, Sparkles, Tv } from "lucide-react";
 import { usePlaylists } from "@/lib/library";
 import { useRoomSummary } from "@/lib/rooms/client";
 import { useSettings } from "@/store/settings";
@@ -120,6 +120,7 @@ export default function Sidebar() {
         <Item href="/explore" icon={<ExploreGlyph size={16} />} label="Explore" />
         <Item href="/movies" icon={<Clapperboard size={17} />} label="Movies" />
         <Item href="/series" icon={<Tv size={17} />} label="Series" />
+        <Item href="/exclusive" icon={<Sparkles size={16} />} label="Exclusive" />
         <Item href="/library" icon={<LibraryGlyph size={17} />} label="Library" />
         <Item href="/search" icon={<SearchGlyph size={16} />} label="Search" />
 

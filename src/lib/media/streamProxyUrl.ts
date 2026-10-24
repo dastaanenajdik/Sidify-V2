@@ -48,6 +48,9 @@ const ALLOWED_MEDIA_HOST_PATTERNS: RegExp[] = [
   /(^|\.)cdn77\.org$/i,
   /(^|\.)contabostorage\.com$/i,
   /(^|\.)your-objectstorage\.com$/i,
+  // The exclusive collection's signed-stream CDN families (DASH manifests and direct files)
+  /(^|\.)hakunaymatata\.com$/i,
+  /(^|\.)aoneroom\.com$/i,
 ];
 
 const UNSAFE_MEDIA_HOST_RE =
