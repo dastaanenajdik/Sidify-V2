@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, Info, SearchX, X } from "lucide-react";
+import { AlertTriangle, ChevronRight, Info, SearchX, Sparkles, X } from "lucide-react";
 import { useMediaBrowse } from "@/lib/media/hooks";
 import { SORTS } from "@/lib/media/query";
 import type { MediaKind, MediaSort, MediaTitle } from "@/lib/media/types";
@@ -148,6 +148,26 @@ function Browse({ kind }: { kind: MediaKind }) {
 
       {!value.q && !value.genre && !value.year && !value.language && value.sort === "trending" && first?.featured && (
         <MediaHero title={first.featured} />
+      )}
+
+      {!value.q && (
+        <div className="px-4 desk:px-8">
+          <Link
+            href="/exclusive"
+            className="flex items-center gap-3 rounded-[14px] bg-raised/70 px-4 py-3.5 ring-1 ring-edge transition-colors hover:bg-raised"
+          >
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-fill-2 text-fg">
+              <Sparkles size={16} aria-hidden="true" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[14px] font-semibold">Exclusive collection</span>
+              <span className="block truncate text-[12.5px] text-fg-2">
+                A separate collection with its own search, streams and downloads
+              </span>
+            </span>
+            <ChevronRight size={16} className="shrink-0 text-fg-3" aria-hidden="true" />
+          </Link>
+        </div>
       )}
 
       <div className="mt-1 mb-6">

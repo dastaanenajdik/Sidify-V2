@@ -291,29 +291,55 @@ export function subjectToTitle(value: unknown): MediaTitle | null {
   };
 }
 
-/** Search payload → titles. */
+/**
+ * Search payload → titles.
+ *
+ * The API groups its matches: `results` is an array of result groups and each group
+ * carries a `subjects` array. Only the first group is used, matching the reference
+ * client's behaviour. A flat `subjects` / `list` payload is also accepted.
+ */
 export function searchPayloadToTitles(payload: unknown): MediaTitle[] {
   const root = asRecord(payload);
   if (!root) return [];
 
-  const results = asRecord(root.results);
-  const firstGroup = Array.isArray(results?.list) ? asRecord(results.list[0]) : null;
-  const subjects = Array.isArray(firstGroup?.subjects)
-    ? firstGroup.subjects
-    : Array.isArray(root.subjects)
-      ? root.subjects
-      : Array.isArray(root.list)
-        ? root.list
-        : [];
+  const results = root.results;
+
+  // `results` is an array of groups: the first group's `subjects` are the matches.
+  let subjects: unknown[] = [];
+  if (Array.isArray(results)) {
+    const firstGroup = asRecord(results[0]);
+    if (Array.isArray(firstGroup?.subjects)) {
+      subjects = firstGroup.subjects;
+    } else if (Array.isArray(firstGroup?.list)) {
+      subjects = firstGroup.list;
+    }
+  } else {
+    const resultsRecord = asRecord(results);
+    if (resultsRecord) {
+      // Some responses wrap the groups in `results.list`.
+      const groups = Array.isArray(resultsRecord.list) ? resultsRecord.list : null;
+      const firstGroup = groups ? asRecord(groups[0]) : resultsRecord;
+      if (Array.isArray(firstGroup?.subjects)) subjects = firstGroup.subjects;
+      else if (Array.isArray(firstGroup?.list)) subjects = firstGroup.list;
+      else if (Array.isArray(resultsRecord.subjects)) subjects = resultsRecord.subjects;
+    }
+  }
+
+  if (!subjects.length) {
+    if (Array.isArray(root.subjects)) subjects = root.subjects;
+    else if (Array.isArray(root.list)) subjects = root.list;
+  }
 
   const titles: MediaTitle[] = [];
+  const seen = new Set<string>();
   for (const entry of subjects) {
     const title = subjectToTitle(entry);
-    if (title) titles.push(title);
+    if (!title || seen.has(title.id)) continue;
+    seen.add(title.id);
+    titles.push(title);
   }
   return titles;
 }
-
 /** Season/episode structure for a series subject. */
 function seasonsOf(record: Record<string, unknown>): Season[] {
   const seasonsValue = asRecord(record.seasons);

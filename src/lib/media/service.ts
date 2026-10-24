@@ -208,6 +208,33 @@ export async function searchMedia(query: string, kind: MediaKind | "all" = "all"
   return { query, items: merged.slice(0, Math.max(limit, exclusiveCount)), provider: provider.info };
 }
 
+/**
+ * The exclusive collection on its own.
+ *
+ * Only the exclusive catalogue answers here — the main catalogue never contributes.
+ * With no query, the collection's own discovery listings are returned instead.
+ */
+export async function searchExclusive(
+  query: string,
+  kind: MediaKind | "all" = "all",
+  limit = 24
+): Promise<MediaSearchResponse> {
+  const provider = getSecondaryProvider();
+  const term = query.trim();
+
+  if (!exclusiveCollectionEnabled()) {
+    return { query: term, items: [], provider: provider.info };
+  }
+
+  if (!term) {
+    const items = await provider.discovery(kind, limit);
+    return { query: "", items, provider: provider.info };
+  }
+
+  const items = await provider.searchTitles(term, kind, limit);
+  return { query: term, items, provider: provider.info };
+}
+
 /* --------------------------------- detail -------------------------------- */
 
 async function loadDetail(kind: MediaKind, slug: string): Promise<MediaDetail | null> {

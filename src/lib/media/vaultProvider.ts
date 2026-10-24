@@ -9,6 +9,7 @@
  */
 
 import { MediaProviderError, type MediaProvider } from "./provider";
+import { mergeSearchResults } from "./query";
 import { getVaultClient, VaultApiError, type VaultClient } from "./vaultClient";
 import {
   detailsPayloadToDetail,
@@ -128,9 +129,30 @@ export class VaultMediaProvider implements MediaProvider {
     }
   }
 
+  /**
+   * The collection's own listing, used when nothing has been searched yet.
+   *
+   * Several broad terms are queried and their results merged, so the section always
+   * has something to show even when the catalogue's own ranking endpoints are absent.
+   */
+  async discovery(kind: MediaKind | "all" = "all", limit = 24): Promise<MediaTitle[]> {
+    if (kind === "all") {
+      const [movies, series] = await Promise.all([
+        this.discoveryQuery("movie", limit),
+        this.discoveryQuery("series", limit),
+      ]);
+      const merged = mergeSearchResults(movies, series);
+      return merged.slice(0, limit);
+    }
+    return this.discoveryQuery(kind, limit);
+  }
+
   /** The catalogue is search-driven, so "trending" falls back to a broad query. */
   private async discoveryQuery(kind: MediaKind, limit: number): Promise<MediaTitle[]> {
-    const terms = kind === "movie" ? ["2024", "action", "drama"] : ["series", "2024", "drama"];
+    const terms =
+      kind === "movie"
+        ? ["2024", "2023", "action", "drama", "horror", "comedy"]
+        : ["series", "2024", "drama", "comedy", "action", "thriller"];
     const collected: MediaTitle[] = [];
     const seen = new Set<string>();
     for (const term of terms) {

@@ -55,6 +55,10 @@ export const mediaApi = {
   search: (q: string, kind: MediaKind | "all" = "all", limit = 24) =>
     fetch(`/api/media/search?${queryString({ q, type: kind, limit })}`).then((r) => json<MediaSearchResponse>(r)),
 
+  /** The exclusive collection on its own — never mixed with the main catalogue. */
+  exclusive: (q: string, kind: MediaKind | "all" = "all", limit = 24) =>
+    fetch(`/api/media/exclusive?${queryString({ q, type: kind, limit })}`).then((r) => json<MediaSearchResponse>(r)),
+
   detail: (kind: MediaKind, slug: string) =>
     fetch(`/api/media/title/${kind}/${encodeURIComponent(slug)}`).then((r) => json<MediaDetail>(r)),
 
