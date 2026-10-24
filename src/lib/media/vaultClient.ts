@@ -51,6 +51,14 @@ interface VaultSession {
 
 const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * How long a refused login is remembered before it is tried again.
+ *
+ * Long enough that one page load asks once instead of a dozen times, short
+ * enough that a deployment recovers on its own when the host comes back.
+ */
+const SESSION_RETRY_COOLDOWN_MS = 20_000;
+
 /** Reads `exp` / `userId` out of a JWT payload (no signature verification needed). */
 export function parseJwtClaims(token: string): { userId: string | null; expiresAt: number | null } {
   const parts = token.split(".");
@@ -136,6 +144,8 @@ export class VaultClient {
   private lastDiagnostics: VaultResponseDiagnostics | null = null;
   /** Structural summary of the most recent rejected response. Diagnostics only. */
   private lastFailure: VaultResponseDiagnostics | null = null;
+  /** The last login failure, kept briefly so the host is not asked again at once. */
+  private sessionFailure: { at: number; error: Error } | null = null;
 
   constructor(options: VaultClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -165,11 +175,28 @@ export class VaultClient {
   /** Mints a visitor session once and reuses it until it expires. */
   async ensureSession(): Promise<string> {
     if (sessionIsValid(this.session)) return this.session.token;
+
+    // A host that refuses the login refuses it just as firmly on the ninth
+    // attempt. Without this, one page load with three tabs and a fallback search
+    // minted the same rejected session a dozen times, which is both slow and a
+    // good way to get a temporary identity ban.
+    if (this.sessionFailure && Date.now() - this.sessionFailure.at < SESSION_RETRY_COOLDOWN_MS) {
+      throw this.sessionFailure.error;
+    }
+
     if (!this.sessionPromise) {
       this.sessionPromise = this.fetchFreshSession()
         .then((session) => {
           this.session = session;
+          this.sessionFailure = null;
           return session;
+        })
+        .catch((error: unknown) => {
+          this.sessionFailure = {
+            at: Date.now(),
+            error: error instanceof Error ? error : new Error(String(error)),
+          };
+          throw error;
         })
         .finally(() => {
           this.sessionPromise = null;
