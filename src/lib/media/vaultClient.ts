@@ -210,9 +210,20 @@ export class VaultClient {
         if (!isSessionRejection(retryError)) throw retryError;
 
         // A brand-new session was rejected too, so the host itself is the
-        // problem. One other host is worth a try before giving up.
-        this.activeHostIndex = (this.activeHostIndex + 1) % HOST_POOL.length;
-        return this.requestHosts(method, pathAndQuery, body, freshToken);
+        // problem. Try the remaining hosts before giving up.
+        // A persistent session rejection must not stop at just the second host.
+        // Keep this bounded: each remaining host is tried at most once here.
+        let lastError: unknown = retryError;
+        for (let attempt = 1; attempt < HOST_POOL.length; attempt++) {
+          this.activeHostIndex = (this.activeHostIndex + 1) % HOST_POOL.length;
+          try {
+            return await this.requestHosts(method, pathAndQuery, body, freshToken);
+          } catch (hostError) {
+            if (!isSessionRejection(hostError)) throw hostError;
+            lastError = hostError;
+          }
+        }
+        throw lastError;
       }
     }
   }
@@ -420,7 +431,7 @@ function isSessionRejection(error: unknown): boolean {
 function asEnvelope(parsed: unknown): Record<string, unknown> | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const record = parsed as Record<string, unknown>;
-  return "code" in record || "data" in record || "message" in record || "msg" in record ? record : null;
+  return "code" in record || "errorCode" in record || "data" in record || "message" in record || "msg" in record ? record : null;
 }
 
 function unwrapEnvelope(envelope: Record<string, unknown> | null, parsed: unknown): unknown {
@@ -440,7 +451,7 @@ function unwrapEnvelope(envelope: Record<string, unknown> | null, parsed: unknow
 }
 
 /** Statuses that mean the request itself was rejected, whatever the HTTP status was. */
-const REJECTED_ENVELOPE_CODES = new Set([401, 403, 407, 429]);
+const REJECTED_ENVELOPE_CODES = new Set([401, 403, 407, 429, 440]);
 
 /**
  * Turns a body-level failure into an error.

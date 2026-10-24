@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   try {
     const data = await searchExclusive(query, kind, limit);
     return NextResponse.json(data, {
-      headers: { "cache-control": "public, s-maxage=120, stale-while-revalidate=600" },
+      headers: { "cache-control": data.items.length ? "public, s-maxage=120, stale-while-revalidate=600" : "no-store" },
     });
   } catch (error) {
     const providerError = error instanceof MediaProviderError ? error : null;
