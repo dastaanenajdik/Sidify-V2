@@ -400,3 +400,60 @@ test('a rejected response is logged with the reason it gave', async () => {
   assert.match(detail, /440/, 'the log must carry the status');
   assert.match(detail, /login timeout/, 'the log must carry the reason the host gave');
 });
+
+test('HTTP 200 body-level 440 refreshes the session instead of returning an empty listing', async () => {
+  let logins = 0;
+  let calls = 0;
+  const client = new VaultClient({ fetchImpl: async (url) => {
+    if (url.includes('visitor-login')) {
+      logins++;
+      return Response.json({ data: { token: `token-${logins}` } });
+    }
+    if (++calls === 1) return Response.json({ code: 440, message: 'login timeout', data: null });
+    return Response.json(HOMEPAGE_PAYLOAD);
+  }});
+  const titles = await new VaultMediaProvider(client).discovery('all', 24);
+  assert.equal(titles.length, 4);
+  assert.equal(logins, 2);
+});
+
+test('persistent body-level errorCode 440 rejects search and discovery, never masquerades as empty', async () => {
+  const client = new VaultClient({ fetchImpl: async (url) => {
+    if (url.includes('visitor-login')) return Response.json({ data: { token: 'token' } });
+    return Response.json({ errorCode: 440 });
+  }});
+  const provider = new VaultMediaProvider(client);
+  await assert.rejects(() => provider.searchTitles('love'), /440/);
+  await assert.rejects(() => provider.discovery('all', 24), /440/);
+});
+
+test('persistent 440 on the first two hosts still reaches a healthy third host', async () => {
+  const hosts = new Set();
+  const client = new VaultClient({ fetchImpl: async (url) => {
+    if (url.includes('visitor-login')) return Response.json({ data: { token: 'token' } });
+    const host = new URL(url).host;
+    hosts.add(host);
+    if (host === 'api6.aoneroom.com' || host === 'api5.aoneroom.com') {
+      return Response.json({ code: 440, data: null }, { status: 440 });
+    }
+    return Response.json(HOMEPAGE_PAYLOAD);
+  }});
+  assert.equal((await new VaultMediaProvider(client).discovery('all', 24)).length, 4);
+  assert.ok(hosts.has('api4.aoneroom.com'));
+});
+
+test('empty homepage and search responses do not poison the next request cache', async () => {
+  let available = false;
+  const client = new VaultClient({ fetchImpl: async (url) => {
+    if (url.includes('visitor-login')) return Response.json({ data: { token: 'token' } });
+    if (!available) return Response.json({ data: { items: [], subjects: [] } });
+    if (url.includes('tab-operating')) return Response.json(HOMEPAGE_PAYLOAD);
+    return Response.json({ data: { subjects: HOMEPAGE_PAYLOAD.data.items[2].subjects } });
+  }});
+  const provider = new VaultMediaProvider(client);
+  assert.equal((await provider.discovery('all', 24)).length, 0);
+  assert.equal((await provider.searchTitles('arrival')).length, 0);
+  available = true;
+  assert.equal((await provider.discovery('all', 24)).length, 4);
+  assert.equal((await provider.searchTitles('arrival')).length, 2);
+});

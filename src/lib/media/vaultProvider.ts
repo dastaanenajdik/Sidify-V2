@@ -186,11 +186,13 @@ export class VaultMediaProvider implements MediaProvider {
         const oldest = this.searchCache.keys().next().value;
         if (oldest) this.searchCache.delete(oldest);
       }
-      this.searchCache.set(cacheKeyFor(term, kind, limit), {
-        value: limited,
-        expiresAt: now + SEARCH_TTL_MS,
-        staleUntil: now + DETAIL_STALE_MS,
-      });
+      if (limited.length) {
+        this.searchCache.set(cacheKeyFor(term, kind, limit), {
+          value: limited,
+          expiresAt: now + SEARCH_TTL_MS,
+          staleUntil: now + DETAIL_STALE_MS,
+        });
+      }
       return limited;
     } catch (error) {
       throw this.toProviderError(error);
@@ -295,9 +297,9 @@ export class VaultMediaProvider implements MediaProvider {
     const startedAt = Date.now();
 
     for (const tabId of HOMEPAGE_TAB_IDS) {
-      // Stop reading further tabs once the budget is gone and there is something
-      // to show; a partial listing beats a function that never returns.
-      if (collected.length && Date.now() - startedAt > HOMEPAGE_TIME_BUDGET_MS) break;
+      // Stop starting new tabs once the budget is spent, including when every
+      // attempted tab failed. Individual in-flight calls retain their timeout.
+      if (attempts > 0 && Date.now() - startedAt > HOMEPAGE_TIME_BUDGET_MS) break;
       attempts += 1;
       try {
         const payload = await this.client.get(
@@ -335,11 +337,15 @@ export class VaultMediaProvider implements MediaProvider {
 
     const value = collected.slice(0, limit);
     const now = Date.now();
-    this.homepageCache = {
-      value,
-      expiresAt: now + HOMEPAGE_TTL_MS,
-      staleUntil: now + HOMEPAGE_STALE_MS,
-    };
+    // Do not keep an empty/unsupported response fresh for minutes. Preserve a
+    // previously useful listing during a transient empty upstream response.
+    if (value.length) {
+      this.homepageCache = {
+        value,
+        expiresAt: now + HOMEPAGE_TTL_MS,
+        staleUntil: now + HOMEPAGE_STALE_MS,
+      };
+    }
     return value;
   }
 
@@ -368,21 +374,25 @@ export class VaultMediaProvider implements MediaProvider {
     // Each term can itself cost a retry, so this loop needs a ceiling too — an
     // upstream that rejects every call must not hold the function open.
     const deadline = Date.now() + FALLBACK_TIME_BUDGET_MS;
+    let answered = false;
+    let fallbackError: unknown = null;
     for (const term of terms) {
       if (collected.length >= limit) break;
       if (Date.now() > deadline) break;
       try {
         const titles = await this.searchTitles(term, kind, limit);
+        answered = true;
         for (const title of titles) {
           if (seen.has(title.id)) continue;
           seen.add(title.id);
           collected.push(title);
           if (collected.length >= limit) break;
         }
-      } catch {
-        /* one failing term must not break the rail */
+      } catch (error) {
+        fallbackError = error;
       }
     }
+    if (!answered && fallbackError) throw this.toProviderError(fallbackError);
     return collected.slice(0, limit);
   }
 
