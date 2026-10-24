@@ -128,6 +128,14 @@ export class VaultMediaProvider implements MediaProvider {
         subjectType: 0,
       });
       const titles = searchPayloadToTitles(payload);
+      if (!titles.length) {
+        // An empty answer for a real keyword is worth a log line: it separates
+        // "no match for this word" from "the payload shape changed".
+        console.warn("[vault] search answered without any subjects", {
+          term,
+          keys: payloadKeys(payload),
+        });
+      }
       const matched = kind === "all" ? titles : titles.filter((title) => title.kind === kind);
       const limited = matched.slice(0, limit);
 
@@ -214,13 +222,24 @@ export class VaultMediaProvider implements MediaProvider {
         const payload = await this.client.get(
           `/wefeed-mobile-bff/tab-operating?page=1&tabId=${encodeURIComponent(tabId)}&version=`
         );
-        for (const title of homepagePayloadToTitles(payload)) {
+        const titles = homepagePayloadToTitles(payload);
+        // A tab that answers with nothing is worth knowing about: it is the
+        // difference between "the endpoint has no rows" and "the payload shape
+        // is not the one we expect", and the two look identical from the UI.
+        if (!titles.length) {
+          console.warn(
+            "[vault] homepage tab answered without any subjects",
+            { tabId, keys: payloadKeys(payload) }
+          );
+        }
+        for (const title of titles) {
           if (seen.has(title.id)) continue;
           seen.add(title.id);
           collected.push(title);
         }
-      } catch {
-        /* one failing tab must not break the listing */
+      } catch (error) {
+        // One failing tab must not break the listing — but it must be visible.
+        console.warn("[vault] homepage tab failed", { tabId, error: describeError(error) });
       }
     }
 
@@ -593,4 +612,23 @@ let sharedProvider: VaultMediaProvider | null = null;
 export function getVaultProvider(): VaultMediaProvider {
   if (!sharedProvider) sharedProvider = new VaultMediaProvider();
   return sharedProvider;
+}
+
+/* ------------------------------ diagnostics ------------------------------ */
+
+/**
+ * The top-level keys of a payload.
+ *
+ * Logged when a listing comes back empty, so a shape change upstream shows up
+ * in the server logs instead of only as an empty page.
+ */
+function payloadKeys(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") return [];
+  return Object.keys(payload as Record<string, unknown>).slice(0, 12);
+}
+
+/** A short, log-safe description of an error. */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error);
 }
