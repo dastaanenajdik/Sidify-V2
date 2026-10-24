@@ -59,7 +59,7 @@ export default function RoomsPage() {
       </div>
 
       {room.inRoom && room.room && (
-        <div className="mb-6 flex items-center gap-4 rounded-[18px] bg-brand/12 p-4 ring-1 ring-brand/30">
+        <div className="mb-6 flex flex-wrap items-center gap-3 sm:gap-4 rounded-[18px] bg-brand/12 p-4 ring-1 ring-brand/30">
           <span className="live-dot h-2.5 w-2.5 shrink-0 rounded-full bg-brand" />
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] font-semibold">You&apos;re in {room.room.name}</div>
@@ -129,7 +129,7 @@ export default function RoomsPage() {
               autoCapitalize="characters"
               autoComplete="off"
               spellCheck={false}
-              className="field h-14 w-full text-center font-mono text-[26px] font-bold tracking-[0.42em] uppercase placeholder:tracking-[0.42em] placeholder:text-fg-3"
+              className="field h-14 w-full text-center font-mono text-[22px] sm:text-[26px] font-bold tracking-[0.3em] sm:tracking-[0.42em] uppercase placeholder:tracking-[0.3em] sm:placeholder:tracking-[0.42em] placeholder:text-fg-3"
             />
             <input
               value={name}

@@ -1,7 +1,7 @@
 "use client";
 
+import { memo, type ReactNode } from "react";
 import Link from "next/link";
-import type { ReactNode } from "react";
 import { MoreHorizontal, Play } from "lucide-react";
 import type { Album, Artist, Track } from "@/lib/types";
 import { playContext } from "@/lib/audioEngine";
@@ -97,7 +97,7 @@ export function SquareCard({
   );
 }
 
-export function AlbumCard({ album, className }: { album: Album; className?: string }) {
+export const AlbumCard = memo(function AlbumCard({ album, className }: { album: Album; className?: string }) {
   return (
     <SquareCard
       href={`/album/${encodeURIComponent(album.id)}`}
@@ -107,9 +107,9 @@ export function AlbumCard({ album, className }: { album: Album; className?: stri
       className={className}
     />
   );
-}
+});
 
-export function ArtistCard({ artist, className }: { artist: Artist; className?: string }) {
+export const ArtistCard = memo(function ArtistCard({ artist, className }: { artist: Artist; className?: string }) {
   return (
     <Link href={`/artist/${encodeURIComponent(artist.id)}`} className={cx("group/card block shrink-0 snap-start text-center", CARD_W, className)}>
       <Artwork src={artist.artwork} size={180} round className="aspect-square w-full transition-transform duration-300 group-hover/card:scale-[1.02]" />
@@ -117,13 +117,23 @@ export function ArtistCard({ artist, className }: { artist: Artist; className?: 
       <div className="text-[12px] text-fg-2">Artist</div>
     </Link>
   );
-}
+});
 
 /** A single song as a card: tapping plays it within its shelf. */
-export function SongCard({ tracks, index, label, className }: { tracks: Track[]; index: number; label: string; className?: string }) {
+export const SongCard = memo(function SongCard({
+  tracks,
+  index,
+  label,
+  className,
+}: {
+  tracks: Track[];
+  index: number;
+  label: string;
+  className?: string;
+}) {
   const t = tracks[index];
   const isCurrent = usePlayer((s) => currentTrack(s)?.id === t.id);
-  const isPlaying = usePlayer((s) => s.isPlaying);
+  const isCurrentPlaying = usePlayer((s) => currentTrack(s)?.id === t.id && s.isPlaying);
   return (
     <div
       className={cx("group/card relative block shrink-0 snap-start text-left", CARD_W, className)}
@@ -137,7 +147,7 @@ export function SongCard({ tracks, index, label, className }: { tracks: Track[];
           <Artwork src={t.artwork} size={180} rounded="rounded-[12px]" className="aspect-square w-full ring-1 ring-edge" />
           {isCurrent && (
             <span className="absolute right-2 bottom-2 grid h-8 w-8 place-items-center rounded-full bg-black/60 text-playing backdrop-blur-md">
-              <PlayingBars paused={!isPlaying} size={12} />
+              <PlayingBars paused={!isCurrentPlaying} size={12} />
             </span>
           )}
         </div>
@@ -156,7 +166,7 @@ export function SongCard({ tracks, index, label, className }: { tracks: Track[];
       </button>
     </div>
   );
-}
+});
 
 /* -------------------------------------------------------------------------- */
 /*  Hero card                                                                  */
@@ -211,10 +221,10 @@ export function HeroCard({
 /*  Compact rows (quick picks, recents) — laid out in columns of four          */
 /* -------------------------------------------------------------------------- */
 
-export function CompactRow({ tracks, index, label }: { tracks: Track[]; index: number; label: string }) {
+export const CompactRow = memo(function CompactRow({ tracks, index, label }: { tracks: Track[]; index: number; label: string }) {
   const t = tracks[index];
   const isCurrent = usePlayer((s) => currentTrack(s)?.id === t.id);
-  const isPlaying = usePlayer((s) => s.isPlaying);
+  const isCurrentPlaying = usePlayer((s) => currentTrack(s)?.id === t.id && s.isPlaying);
   return (
     <div
       className="group/row flex h-[60px] items-center gap-3 rounded-[8px] pr-1 transition-colors hover:bg-fill"
@@ -228,7 +238,7 @@ export function CompactRow({ tracks, index, label }: { tracks: Track[]; index: n
           <Artwork src={t.artwork} size={48} className="h-12 w-12" />
           {isCurrent && (
             <span className="absolute inset-0 grid place-items-center rounded-[7px] bg-black/45 text-white">
-              <PlayingBars paused={!isPlaying} size={12} />
+              <PlayingBars paused={!isCurrentPlaying} size={12} />
             </span>
           )}
         </span>
@@ -247,7 +257,7 @@ export function CompactRow({ tracks, index, label }: { tracks: Track[]; index: n
       </button>
     </div>
   );
-}
+});
 
 /** Columns of four compact rows that scroll sideways together. */
 export function QuickPicks({ tracks, label }: { tracks: Track[]; label: string }) {
@@ -270,7 +280,7 @@ export function QuickPicks({ tracks, label }: { tracks: Track[]; label: string }
 /*  Mood / genre tiles                                                         */
 /* -------------------------------------------------------------------------- */
 
-export function MoodCard({
+export const MoodCard = memo(function MoodCard({
   title,
   color,
   artwork,
@@ -317,4 +327,4 @@ export function MoodCard({
       {body}
     </button>
   );
-}
+});

@@ -1,7 +1,7 @@
 "use client";
 
+import { memo, useState } from "react";
 import Link from "next/link";
-import { useState } from "react";
 import { Bookmark, Star } from "lucide-react";
 import { mediaArt } from "@/lib/media/art";
 import type { MediaTitle } from "@/lib/media/types";
@@ -18,9 +18,18 @@ export function mediaHref(title: Pick<MediaTitle, "kind" | "slug">): string {
  * A 2:3 poster card: artwork, rating, title and year · genre, plus a watchlist toggle.
  * Missing artwork is drawn locally rather than fetched from a placeholder service.
  */
-export function PosterCard({ title, className, eager }: { title: MediaTitle; className?: string; eager?: boolean }) {
+export const PosterCard = memo(function PosterCard({
+  title,
+  className,
+  eager,
+}: {
+  title: MediaTitle;
+  className?: string;
+  eager?: boolean;
+}) {
   const [broken, setBroken] = useState(false);
-  const saved = useWatchlist((s) => s.items.some((item) => item.id === `${title.kind}:${title.slug}`));
+  const watchKey = `${title.kind}:${title.slug}`;
+  const saved = useWatchlist((s) => Boolean(s.savedMap[watchKey]));
   const toggle = useWatchlist((s) => s.toggle);
 
   const artwork = broken ? mediaArt(null, { seed: title.slug, accent: title.accent }) : mediaArt(title.poster, { seed: title.slug, accent: title.accent });
@@ -79,7 +88,7 @@ export function PosterCard({ title, className, eager }: { title: MediaTitle; cla
       </button>
     </article>
   );
-}
+});
 
 /** Fixed width so cards line up inside the horizontal shelves. */
 export const posterShelfClass = "w-[132px] sm:w-[146px] desk:w-[156px]";

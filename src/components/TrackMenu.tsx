@@ -20,7 +20,7 @@ import {
 import { useUi } from "@/store/ui";
 import { usePlayer, currentTrack } from "@/store/player";
 import { addToQueueEnd, playNextInQueue, removeFromQueue, startRadio } from "@/lib/audioEngine";
-import { downloadTrackFlow, useBlocked, useLiked } from "@/lib/library";
+import { downloadTrackFlow, useBlocked, useToggleLike } from "@/lib/library";
 import { copyText } from "@/lib/clipboard";
 import { useRoom } from "@/lib/rooms/client";
 import { cx } from "@/lib/format";
@@ -34,7 +34,7 @@ export default function TrackMenu() {
   const menu = useUi((s) => s.menu);
   const close = useUi((s) => s.closeMenu);
   const router = useRouter();
-  const { toggle } = useLiked();
+  const toggle = useToggleLike();
   const { block } = useBlocked();
   const inRoom = useRoom((s) => !!s.session);
   const liked = usePlayer((s) => !!(menu && s.likedIds[menu.track.id]));

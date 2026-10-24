@@ -1,14 +1,24 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { usePlayer, currentTrack } from "@/store/player";
 import { useSettings } from "@/store/settings";
+import { useUi } from "@/store/ui";
 import MeshBackdrop from "../MeshBackdrop";
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
-import SidePanel from "./SidePanel";
 import { MiniPlayer, MobileNav } from "./MobileChrome";
+
+const SidePanel = dynamic(() => import("./SidePanel"), { ssr: false });
+
+function LazySidePanel() {
+  const sidePanel = useUi((s) => s.sidePanel);
+  const [mounted, setMounted] = useState(false);
+  if (sidePanel && !mounted) setMounted(true);
+  return mounted ? <SidePanel /> : null;
+}
 
 /**
  * The window: sidebar | (top bar over page + side panel). On phones the
@@ -31,12 +41,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <div className="relative flex min-h-0 flex-1">
           <div className="relative min-w-0 flex-1">
             <PageAmbience />
-            <main ref={mainRef} id="main" className="absolute inset-0 overflow-x-hidden overflow-y-auto">
+            <main ref={mainRef} id="main" className="absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-y-contain">
               {children}
               <div className="h-[calc(170px+env(safe-area-inset-bottom,0px))] desk:h-12" />
             </main>
           </div>
-          <SidePanel />
+          <LazySidePanel />
         </div>
       </div>
       <MiniPlayer />

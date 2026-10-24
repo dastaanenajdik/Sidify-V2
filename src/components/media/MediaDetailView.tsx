@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   Bookmark,
@@ -26,11 +27,10 @@ import {
   resumePosition,
   saveResumePoint,
 } from "@/lib/media/resumePoints";
-import {
-  attachShakaPlayback,
-  type ShakaAudioTrackOption,
-  type ShakaPlaybackHandle,
-  type ShakaTextTrackOption,
+import type {
+  ShakaAudioTrackOption,
+  ShakaPlaybackHandle,
+  ShakaTextTrackOption,
 } from "@/lib/media/shakaPlayer";
 import type { MediaDetail, PlaybackSource } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
@@ -38,15 +38,17 @@ import { SectionHeader, Shelf } from "@/components/ui";
 import { useUi } from "@/store/ui";
 import { useWatchlist } from "@/store/watchlist";
 import { cx, formatBytes } from "@/lib/format";
-import { BetaBadge, BetaPlayerSheet } from "./BetaPlayerSheet";
+import { BetaBadge } from "./BetaBadge";
 import { PosterCard, posterShelfClass } from "./PosterCard";
-import { QualityPickerSheet } from "./QualityPickerSheet";
-import { TrailerSheet } from "./TrailerSheet";
-import { VlcPickerSheet } from "./VlcPickerSheet";
 import { VlcPlayButton } from "./VlcPlayButton";
 import { useResumePoint } from "./useResumePoint";
 import { MovieWatchSection, SeasonTabsSection } from "./WatchSections";
 import type { WatchTarget } from "./watch";
+
+const BetaPlayerSheet = dynamic(() => import("./BetaPlayerSheet").then((m) => m.BetaPlayerSheet), { ssr: false });
+const QualityPickerSheet = dynamic(() => import("./QualityPickerSheet").then((m) => m.QualityPickerSheet), { ssr: false });
+const TrailerSheet = dynamic(() => import("./TrailerSheet").then((m) => m.TrailerSheet), { ssr: false });
+const VlcPickerSheet = dynamic(() => import("./VlcPickerSheet").then((m) => m.VlcPickerSheet), { ssr: false });
 
 /** Everything on a /movies/[slug] or /series/[slug] page. */
 export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
@@ -338,10 +340,14 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
 
       {/* Sheets live outside the animated <article>: its `fade-up` transform animation would
           otherwise become the containing block of the sheets' `position: fixed` overlay. */}
-      <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={title.title} />
-      <VlcPickerSheet target={vlcTarget} onClose={closeVlc} />
-      <QualityPickerSheet target={downloadTarget} onClose={closeDownload} />
-      <BetaPlayerSheet target={playTarget} onClose={closePlay} onOpenVlc={openVlc} onDownload={openDownload} />
+      {trailerOpen && (
+        <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={title.title} />
+      )}
+      {vlcTarget && <VlcPickerSheet target={vlcTarget} onClose={closeVlc} />}
+      {downloadTarget && <QualityPickerSheet target={downloadTarget} onClose={closeDownload} />}
+      {playTarget && (
+        <BetaPlayerSheet target={playTarget} onClose={closePlay} onOpenVlc={openVlc} onDownload={openDownload} />
+      )}
     </>
   );
 }
@@ -387,20 +393,23 @@ function MediaStreamPlayer({
 
     // Attach one task later so React StrictMode double-mount creates one clean Shaka instance per <video>.
     const timer = window.setTimeout(() => {
-      void attachShakaPlayback(videoEl, {
-        url: source.url,
-        streamType: source.type,
-        fileName: source.label,
-        signal: abortCtrl.signal,
-        onTracksChanged: (tracks) => {
-          if (!disposed) onTracksChange(tracks);
-        },
-        onFatalError: (err) => {
-          if (!disposed) {
-            onStreamError(source.url, `Shaka Player error (${err.kind}): ${err.detail}`);
-          }
-        },
-      })
+      void import("@/lib/media/shakaPlayer")
+        .then(({ attachShakaPlayback }) =>
+          attachShakaPlayback(videoEl, {
+            url: source.url,
+            streamType: source.type,
+            fileName: source.label,
+            signal: abortCtrl.signal,
+            onTracksChanged: (tracks) => {
+              if (!disposed) onTracksChange(tracks);
+            },
+            onFatalError: (err) => {
+              if (!disposed) {
+                onStreamError(source.url, `Shaka Player error (${err.kind}): ${err.detail}`);
+              }
+            },
+          })
+        )
         .then((handle) => {
           if (disposed) {
             void handle.destroy();

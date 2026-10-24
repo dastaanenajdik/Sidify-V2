@@ -60,7 +60,7 @@ export default function CollectionHeader({
   );
 
   const buttons = (
-    <div className="mt-5 flex items-center justify-center gap-3 desk:justify-start">
+    <div className="mt-5 flex flex-wrap items-center justify-center gap-3 desk:justify-start">
       {onShuffle && (
         <button
           type="button"
@@ -88,19 +88,27 @@ export default function CollectionHeader({
 
   return (
     <header className="relative isolate text-white">
-      {/* phones: full-bleed artwork */}
-      <div className="relative desk:hidden">
-        <div className={cx("relative aspect-square w-full overflow-hidden", round && "mx-auto mt-6 aspect-square w-[64%] rounded-full")}>
+      {/* phones & tablets (<980px): full-bleed on phones, framed square on tablets */}
+      <div className="relative desk:hidden" style={{ background: round ? "transparent" : base }}>
+        <div
+          className={cx(
+            "relative aspect-square w-full overflow-hidden sm:mx-auto sm:pt-7 sm:max-w-[300px]",
+            round && "mx-auto mt-6 aspect-square w-[64%] max-w-[260px] rounded-full sm:pt-0"
+          )}
+        >
           {round ? (
             <Artwork src={artwork} size={320} round eager className="h-full w-full" />
           ) : (
-            <>
+            <div className="relative aspect-square w-full overflow-hidden sm:rounded-[16px] sm:shadow-[0_20px_50px_-14px_rgba(0,0,0,.65)] sm:ring-1 sm:ring-white/10">
               <div className="absolute inset-0">{squareArt}</div>
-              <div className="absolute inset-0" style={{ background: `linear-gradient(180deg, transparent 45%, ${base} 100%)` }} />
-            </>
+              <div
+                className="absolute inset-0 sm:hidden"
+                style={{ background: `linear-gradient(180deg, transparent 45%, ${base} 100%)` }}
+              />
+            </div>
           )}
         </div>
-        <div className="relative px-5 pt-1 pb-6 text-center" style={{ background: round ? "transparent" : base }}>
+        <div className="relative px-5 pt-3 pb-6 text-center sm:pt-5" style={{ background: round ? "transparent" : base }}>
           {eyebrow && <div className="t-eyebrow mb-1 text-white/60">{eyebrow}</div>}
           <h1 className="text-[26px] leading-tight font-extrabold tracking-[-0.6px] [overflow-wrap:anywhere]">{title}</h1>
           {subtitle && <div className="mt-1 text-[17px] font-medium text-white/80">{subtitle}</div>}
@@ -114,7 +122,7 @@ export default function CollectionHeader({
       <div className="relative hidden overflow-hidden desk:block">
         {!cover && (artwork || arts?.[0]) && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={art(artwork || arts?.[0], 300)} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full scale-125 object-cover opacity-45 blur-[60px]" />
+          <img src={art(artwork || arts?.[0], 300)} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-40 blur-[36px]" />
         )}
         <div className="absolute inset-0" style={{ background: `linear-gradient(180deg, color-mix(in srgb, ${base} 55%, transparent), ${base})` }} />
         <div className="relative flex items-end gap-8 px-8 pt-14 pb-8">

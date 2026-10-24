@@ -98,8 +98,9 @@ function pickFeatured(items: import("./types").MediaTitle[]) {
 export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<MediaBrowse> {
   const provider = getMediaProvider();
   const filtered = isFiltered(query);
+  const isContinuation = (query.page ?? 1) > 1;
 
-  if (filtered) {
+  if (filtered || isContinuation) {
     const [page, facets] = await Promise.all([provider.browse(kind, query), provider.getFacets(kind)]);
     return {
       ...page,
@@ -108,17 +109,17 @@ export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<M
       rails: [],
       facets,
       provider: provider.info,
-      filtered: true,
+      filtered,
     };
   }
 
   const [page, facets, trending, recent, topRated, popular, free] = await Promise.all([
     provider.browse(kind, query),
     provider.getFacets(kind),
-    provider[kind === "movie" ? "getTrendingMovies" : "getTrendingSeries"](12),
-    provider[kind === "movie" ? "getNewMovieReleases" : "getNewSeriesReleases"](12),
-    provider[kind === "movie" ? "getTopRatedMovies" : "getTopRatedSeries"](12),
-    provider[kind === "movie" ? "getPopularMovies" : "getPopularSeries"](12),
+    provider[kind === "movie" ? "getTrendingMovies" : "getTrendingSeries"](12).catch(() => []),
+    provider[kind === "movie" ? "getNewMovieReleases" : "getNewSeriesReleases"](12).catch(() => []),
+    provider[kind === "movie" ? "getTopRatedMovies" : "getTopRatedSeries"](12).catch(() => []),
+    provider[kind === "movie" ? "getPopularMovies" : "getPopularSeries"](12).catch(() => []),
     kind === "movie" && provider.getFreeToWatch ? provider.getFreeToWatch(12).catch(() => []) : Promise.resolve([]),
   ]);
 

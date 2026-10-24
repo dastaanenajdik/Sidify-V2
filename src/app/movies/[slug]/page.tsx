@@ -1,3 +1,4 @@
+import { cache } from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import MediaDetailView from "@/components/media/MediaDetailView";
@@ -8,9 +9,9 @@ export const revalidate = 3600;
 
 type Props = { params: Promise<{ slug: string }> };
 
-async function load(slug: string) {
+const load = cache(async (slug: string) => {
   return getMediaDetail("movie", decodeURIComponent(slug));
-}
+});
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;

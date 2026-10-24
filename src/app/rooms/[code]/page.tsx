@@ -135,18 +135,35 @@ function JoinView({ code }: { code: string }) {
 
 /* ---------------------------------- room ---------------------------------- */
 
+/** Isolated 500ms clock leaf so RoomView + QueueList don't re-render twice per second. */
+function RoomProgressBar({ room, durationMs }: { room: RoomState; durationMs: number }) {
+  const offset = useRoom((s) => s.offsetMs);
+  const now = useNow(500);
+  const pos = expectedPosition(room, now + offset);
+  const ratio = durationMs > 0 ? Math.min(1, Math.max(0, pos / durationMs)) : 0;
+
+  return (
+    <>
+      <div className="mt-2.5 h-[3px] overflow-hidden rounded-full bg-white/20">
+        <div className="h-full w-full origin-left rounded-full bg-white/85" style={{ transform: `scaleX(${ratio.toFixed(4)})` }} />
+      </div>
+      <div className="mt-1 flex justify-between text-[11.5px] text-white/60 tabular-nums">
+        <span>{formatTime(pos)}</span>
+        <span>-{formatTime(Math.max(0, durationMs - pos))}</span>
+      </div>
+    </>
+  );
+}
+
 function RoomView({ room, you }: { room: RoomState; you: string }) {
   const router = useRouter();
   const status = useRoom((s) => s.status);
   const rtt = useRoom((s) => s.rttMs);
-  const offset = useRoom((s) => s.offsetMs);
   const presence = useRoom((s) => s.presence);
   const isPlaying = usePlayer((s) => s.isPlaying);
   const isHost = room.hostId === you;
   const canControl = !room.hostOnly || isHost;
   const cur = currentOf(room);
-  const now = useNow(500);
-  const pos = expectedPosition(room, now + offset);
   const [qrOpen, setQrOpen] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const url = inviteUrl(room.code);
@@ -194,13 +211,7 @@ function RoomView({ room, you }: { room: RoomState; you: string }) {
                     {cur.artist}
                     {room.startedBy ? ` · picked by ${room.startedBy}` : ""}
                   </div>
-                  <div className="mt-2.5 h-[3px] overflow-hidden rounded-full bg-white/20">
-                    <div className="h-full rounded-full bg-white/85" style={{ width: `${cur.durationMs ? Math.min(100, (pos / cur.durationMs) * 100) : 0}%` }} />
-                  </div>
-                  <div className="mt-1 flex justify-between text-[11.5px] text-white/60 tabular-nums">
-                    <span>{formatTime(pos)}</span>
-                    <span>-{formatTime(Math.max(0, cur.durationMs - pos))}</span>
-                  </div>
+                  <RoomProgressBar room={room} durationMs={cur.durationMs} />
                 </div>
               </div>
             ) : (
@@ -236,7 +247,7 @@ function RoomView({ room, you }: { room: RoomState; you: string }) {
             >
               {room.code}
             </button>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button size="sm" className="!bg-white !text-black" onClick={() => void share()}>
                 <Share2 size={14} /> Invite
               </Button>

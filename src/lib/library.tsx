@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect } from "react";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, downloadTrack, removeDownloadEverywhere, clearAllDownloads } from "./clientApi";
 import { emitRefresh, onRefresh } from "./refreshBus";
 import { refreshBlockedFilter } from "./audioEngine";
@@ -18,6 +18,32 @@ function useRefreshOn(key: string, fn: () => void) {
   useEffect(() => onRefresh((k) => k === key && fn()), [key, fn]);
 }
 
+async function toggleLikedWithClient(track: Track, qc: QueryClient) {
+  const state = usePlayer.getState();
+  const liked = !!state.likedIds[track.id];
+  const ids = { ...state.likedIds };
+  if (liked) delete ids[track.id];
+  else ids[track.id] = true;
+  usePlayer.getState().set({ likedIds: ids });
+  const push = useUi.getState().pushToast;
+  await (liked ? api.unlike(track.id) : api.like(track)).catch(() =>
+    usePlayer.getState().set({ likedIds: state.likedIds })
+  );
+  if (!liked && useSettings.getState().autoDownloadLiked) void downloadTrackFlow(track, { silent: true });
+  push({ title: liked ? "Removed from Liked Songs" : "Added to Liked Songs", desc: track.title, kind: "ok" });
+  qc.invalidateQueries({ queryKey: ["liked"] });
+  qc.invalidateQueries({ queryKey: ["home"] });
+}
+
+/**
+ * Lightweight toggle hook for TrackRow/Lcd/TrackMenu that avoids mounting a
+ * `useQuery(["liked"])` observer + `useEffect` per row on long song lists.
+ */
+export function useToggleLike() {
+  const qc = useQueryClient();
+  return useCallback((track: Track) => toggleLikedWithClient(track, qc), [qc]);
+}
+
 /* -------------------------------- liked ---------------------------------- */
 export function useLiked() {
   const qc = useQueryClient();
@@ -32,24 +58,7 @@ export function useLiked() {
     }
   }, [q.data]);
 
-  const toggle = async (track: Track) => {
-    const state = usePlayer.getState();
-    const liked = !!state.likedIds[track.id];
-    const ids = { ...state.likedIds };
-    if (liked) delete ids[track.id];
-    else ids[track.id] = true;
-    usePlayer.getState().set({ likedIds: ids });
-    const push = useUi.getState().pushToast;
-    // api.like/unlike never reject: they write through to the local library store and
-    // mirror to the server when it answers, so the heart always sticks.
-    await (liked ? api.unlike(track.id) : api.like(track)).catch(() =>
-      usePlayer.getState().set({ likedIds: state.likedIds })
-    );
-    if (!liked && useSettings.getState().autoDownloadLiked) void downloadTrackFlow(track, { silent: true });
-    push({ title: liked ? "Removed from Liked Songs" : "Added to Liked Songs", desc: track.title, kind: "ok" });
-    qc.invalidateQueries({ queryKey: ["liked"] });
-    qc.invalidateQueries({ queryKey: ["home"] });
-  };
+  const toggle = useCallback((track: Track) => toggleLikedWithClient(track, qc), [qc]);
 
   return { ...q, toggle };
 }

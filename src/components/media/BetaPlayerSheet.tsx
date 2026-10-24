@@ -49,35 +49,15 @@ import type { MediaReleaseItem } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { cx } from "@/lib/format";
 import { useMounted } from "@/lib/useMounted";
+import { BetaBadge } from "./BetaBadge";
 import { ExternalPlayerLinks } from "./ExternalPlayerLinks";
 import { VlcPlayButton } from "./VlcPlayButton";
 import type { WatchTarget } from "./watch";
 
+export { BetaBadge };
+
 /** How long one link may take to parse headers/cues and show its first frame before trying the next one. */
 const ATTEMPT_TIMEOUT_MS = 25_000;
-
-export function BetaBadge({
-  tone = "amber",
-  className,
-}: {
-  /** `amber` on neutral surfaces, `inverse` inside primary buttons, `onWhite` on the white hero button. */
-  tone?: "amber" | "inverse" | "onWhite";
-  className?: string;
-}) {
-  return (
-    <span
-      className={cx(
-        "rounded-full px-1.5 py-[1px] text-[9.5px] font-bold tracking-[0.06em] uppercase",
-        tone === "amber" && "bg-amber-500/15 text-amber-500",
-        tone === "inverse" && "bg-on-primary/15 text-on-primary",
-        tone === "onWhite" && "bg-black/10 text-black/70",
-        className
-      )}
-    >
-      Beta
-    </span>
-  );
-}
 
 interface BetaPlayerHandle {
   stop: () => void;

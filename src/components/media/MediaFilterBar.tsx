@@ -40,7 +40,7 @@ export function MediaFilterBar({
   return (
     <div className="px-4 desk:px-8">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[200px] flex-1">
+        <div className="relative w-full sm:w-auto sm:min-w-[220px] sm:flex-1">
           <SearchGlyph
             size={15}
             className={cx("pointer-events-none absolute top-1/2 left-3 -translate-y-1/2", busy ? "text-fg" : "text-fg-2")}
