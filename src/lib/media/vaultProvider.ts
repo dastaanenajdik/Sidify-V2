@@ -74,6 +74,9 @@ const HOMEPAGE_CACHE_SIZE = 200;
  */
 const HOMEPAGE_TIME_BUDGET_MS = 9_000;
 
+/** How long the last-resort search may take before the section gives up. */
+const FALLBACK_TIME_BUDGET_MS = 5_000;
+
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
@@ -92,6 +95,15 @@ export class VaultMediaProvider implements MediaProvider {
   private readonly searchCache = new Map<string, CacheEntry<MediaTitle[]>>();
   /** The homepage listing — one upstream round trip for the whole collection. */
   private homepageCache: CacheEntry<MediaTitle[]> | null = null;
+  /**
+   * A listing request that is already in flight.
+   *
+   * The listing is asked for more than once per page load (the section itself,
+   * plus the movies/series fallbacks, which run together). Without this each of
+   * those starts its own read of every tab, so one page load can make half a
+   * dozen identical upstream calls.
+   */
+  private homepageInFlight: Promise<MediaTitle[]> | null = null;
 
   constructor(private readonly client: VaultClient = getVaultClient()) {}
 
@@ -260,7 +272,17 @@ export class VaultMediaProvider implements MediaProvider {
         return cached.value.slice(0, limit);
       }
     }
-    return this.loadHomepage(limit);
+
+    // Share one read between callers that arrive while it is still running.
+    if (this.homepageInFlight) {
+      return (await this.homepageInFlight).slice(0, limit);
+    }
+
+    const load = this.loadHomepage(limit).finally(() => {
+      this.homepageInFlight = null;
+    });
+    this.homepageInFlight = load;
+    return load;
   }
 
   /** Reads every homepage tab and merges the rows into one listing. */
@@ -343,8 +365,12 @@ export class VaultMediaProvider implements MediaProvider {
     const terms = ["love", "night", "war", "dark", "city", "girl"];
     const collected: MediaTitle[] = [];
     const seen = new Set<string>();
+    // Each term can itself cost a retry, so this loop needs a ceiling too — an
+    // upstream that rejects every call must not hold the function open.
+    const deadline = Date.now() + FALLBACK_TIME_BUDGET_MS;
     for (const term of terms) {
       if (collected.length >= limit) break;
+      if (Date.now() > deadline) break;
       try {
         const titles = await this.searchTitles(term, kind, limit);
         for (const title of titles) {
