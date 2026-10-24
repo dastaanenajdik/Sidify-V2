@@ -134,6 +134,8 @@ export class VaultClient {
   private sessionPromise: Promise<VaultSession> | null = null;
   /** Structural summary of the most recent successful response. Diagnostics only. */
   private lastDiagnostics: VaultResponseDiagnostics | null = null;
+  /** Structural summary of the most recent rejected response. Diagnostics only. */
+  private lastFailure: VaultResponseDiagnostics | null = null;
 
   constructor(options: VaultClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -196,13 +198,22 @@ export class VaultClient {
     try {
       return await this.requestHosts(method, pathAndQuery, body, token);
     } catch (error) {
-      const status = error instanceof VaultApiError ? error.status : undefined;
-      if (status === 401 || status === 403 || (error instanceof VaultApiError && error.code === "hosts_exhausted")) {
-        this.invalidateSession();
-        const freshToken = await this.ensureSession();
+      if (!isSessionRejection(error)) throw error;
+
+      // The session was rejected. Mint a new one and try the same host again:
+      // an expired token is by far the most common reason for this.
+      this.invalidateSession();
+      const freshToken = await this.ensureSession();
+      try {
+        return await this.requestHosts(method, pathAndQuery, body, freshToken);
+      } catch (retryError) {
+        if (!isSessionRejection(retryError)) throw retryError;
+
+        // A brand-new session was rejected too, so the host itself is the
+        // problem. One other host is worth a try before giving up.
+        this.activeHostIndex = (this.activeHostIndex + 1) % HOST_POOL.length;
         return this.requestHosts(method, pathAndQuery, body, freshToken);
       }
-      throw error;
     }
   }
 
@@ -249,7 +260,20 @@ export class VaultClient {
         }
 
         if (!response.ok) {
-          throw new VaultApiError(`Upstream host returned ${response.status}.`, "api_status", response.status);
+          // Read what the host had to say before giving up on it. A rejection
+          // usually carries a `code`/`message` that names the reason, and without
+          // it a rejected request is indistinguishable from a broken one.
+          const failure = await this.describeFailure(response, base, pathAndQuery);
+          this.lastFailure = failure;
+          console.warn("[vault] upstream rejected the request", failure);
+
+          throw new VaultApiError(
+            `Upstream host returned ${response.status}` +
+              (failure.envelopeMessage ? ` (${String(failure.envelopeMessage)})` : "") +
+              ".",
+            "api_status",
+            response.status
+          );
         }
 
         this.activeHostIndex = index;
@@ -326,6 +350,70 @@ export class VaultClient {
   describeLastResponse(): VaultResponseDiagnostics | null {
     return this.lastDiagnostics;
   }
+
+  /**
+   * The shape of the most recent rejected response, for logging.
+   *
+   * Carries the status, the gateway's own `code`/`message` and the payload keys —
+   * no catalogue content.
+   */
+  describeLastFailure(): VaultResponseDiagnostics | null {
+    return this.lastFailure;
+  }
+
+  /** Reads a rejected response's body and summarises it without keeping the content. */
+  private async describeFailure(
+    response: Response,
+    host: string,
+    path: string
+  ): Promise<VaultResponseDiagnostics> {
+    let envelopeCode: unknown;
+    let envelopeMessage: unknown;
+    let payloadKeys: string[] = [];
+    let skeleton: unknown = null;
+
+    try {
+      const text = await readBoundedText(response);
+      const parsed: unknown = JSON.parse(text);
+      const envelope = asEnvelope(parsed);
+      envelopeCode = envelope?.code ?? envelope?.errorCode;
+      envelopeMessage =
+        envelope?.message ??
+        envelope?.msg ??
+        (envelope && typeof envelope.error === "string" ? envelope.error : undefined);
+      payloadKeys = envelope ? Object.keys(envelope).slice(0, 12) : [];
+      skeleton = skeletonOf(parsed);
+    } catch {
+      /* a rejected response need not carry JSON at all */
+    }
+
+    return {
+      status: response.status,
+      host,
+      path,
+      envelopeCode,
+      envelopeMessage,
+      payloadKeys,
+      skeleton,
+    };
+  }
+}
+
+/**
+ * Statuses that mean "I do not accept this session", as opposed to "this request
+ * is wrong".
+ *
+ * `440` is the gateway's own code for a session that is no longer valid — it is
+ * not a standard HTTP status, which is exactly why it has to be named here. The
+ * service answers `440` on every host when the token it was given is not usable,
+ * and treating it as fatal turned a recoverable situation into an empty shelf.
+ */
+const SESSION_REJECTION_STATUSES = new Set([401, 403, 440]);
+
+function isSessionRejection(error: unknown): boolean {
+  if (!(error instanceof VaultApiError)) return false;
+  if (error.code === "hosts_exhausted") return true;
+  return error.code === "api_status" && SESSION_REJECTION_STATUSES.has(error.status ?? 0);
 }
 
 /** The part of a payload that carries `code`/`message`/`data`, when there is one. */

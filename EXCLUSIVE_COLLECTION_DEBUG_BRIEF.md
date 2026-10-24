@@ -741,4 +741,76 @@ return anything, which is why it looked like the safety net was in place while i
 was not. It now uses common title words (`love`, `night`, `war`, `dark`, `city`,
 `girl`), which do match real titles.
 
+---
+
+## 14. The answer the logs finally gave: HTTP 440
+
+The production logs after §12 settled it. Every homepage tab was answered with:
+
+```
+[vault] homepage tab failed { tabId: '2', error: 'VaultApiError: Upstream host returned 440.' }
+```
+
+`440` is not a standard HTTP status. It is the gateway's own code for "I will not
+accept this session". **That was the bug all along**, and §2 of this brief read it
+wrong: the empty list was never `HTTP 200 + items: []`. It was a `440` that the
+provider caught per tab, discarded, and turned into `[]` — which the UI rendered as
+"Nothing here yet". Every earlier theory (payload shape, tab ids, signature,
+geo-blocking) was chasing an empty list that was in fact an unhandled error.
+
+### 14.1 What the code did with a 440
+
+Nothing useful:
+
+1. `440` was not in `RETRY_STATUS_CODES`, so no host rotation.
+2. It was not `401`/`403`, so no session refresh.
+3. `request()` re-threw it immediately, because it was not retryable.
+4. `loadHomepage()` caught it per tab, logged a warning, and carried on.
+5. With every tab failed, it returned `[]`.
+6. `discovery()` handed `[]` to the route, which answered `200 {items: []}`.
+7. The section rendered "Nothing here yet".
+
+A fatal, recoverable error became an empty shelf in six steps, and nothing in the
+logs said the word "440" in a place anyone was looking.
+
+### 14.2 The fix
+
+- **`440` is now a session rejection**, alongside `401`/`403`. The client mints a
+  fresh session and retries once. If a brand-new session is also refused, it
+  rotates to another host and tries once more — because a refusal that survives a
+  fresh login is about the host or the egress, not the token.
+- **A rejected response's body is read and logged.** `{status, code, message, host,
+  path}` and the payload keys. The reason a host gives is the single most useful
+  thing in a failure, and it used to be thrown away with the response.
+
+Expect a line like:
+
+```
+[vault] upstream rejected the request {
+  status: 440, host: 'https://api6.aoneroom.com',
+  path: '/wefeed-mobile-bff/tab-operating?...',
+  envelopeCode: 440, envelopeMessage: '<the reason>', payloadKeys: [...]
+}
+```
+
+`envelopeMessage` is what decides the next move:
+
+| Message suggests | Next step |
+| --- | --- |
+| login / token / session | The retry in §14.2 should already cover it. If it still fails, the token from `visitor-login` is not the one this endpoint wants. |
+| region / country / unavailable in your area | Geo-blocking. Change the Vercel functions region to `sin1`/`bom1` (§13.1). |
+| version / update | The client version is being refused. Raise `VERSION_CODES` in `vaultCrypto.ts` to the current build. |
+| device / banned / too many | The identity is flagged. The request is then indistinguishable from abuse and needs a different egress. |
+| signature / timestamp | Re-check `scripts/check-signature.mjs`. It currently passes for every listing call. |
+
+### 14.3 Two things that were also fixed while chasing this
+
+- **Concurrent listing reads are shared.** One page load asked for the listing more
+  than once (the section, then the movies and series fallbacks together), and each
+  of those read every tab. In the logs that is why each tab id appears twice. An
+  in-flight promise is now shared.
+- **The last-resort search has a time ceiling (5 s).** Each call can now cost a
+  retry, so an upstream that rejects everything could otherwise hold the function
+  open.
+
 *End of brief.*

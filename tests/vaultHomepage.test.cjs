@@ -311,3 +311,92 @@ test('the response shape is logged without any payload values', async () => {
   assert.match(detail, /items/, 'the log must name the payload keys');
   assert.doesNotMatch(detail, /Shape Test/, 'the log must not contain payload values');
 });
+
+/**
+ * The gateway answers `440` when it will not accept the session. It is not a
+ * standard status, and it used to be fatal: no re-login, no retry, and the
+ * response body (which names the reason) was thrown away. Every tab then failed
+ * and the shelf came up empty.
+ */
+test('a session rejected with 440 re-authenticates and tries again', async () => {
+  let logins = 0;
+  let tabCalls = 0;
+
+  const fakeFetch = async (url) => {
+    if (url.includes('visitor-login')) {
+      logins += 1;
+      return new Response(JSON.stringify({ data: { token: `tok-${logins}` } }), { status: 200 });
+    }
+    if (url.includes('tab-operating')) {
+      tabCalls += 1;
+      if (tabCalls === 1) {
+        // The first attempt is refused, with the reason in the body.
+        return new Response(
+          JSON.stringify({ code: 440, message: 'login timeout', data: null }),
+          { status: 440 }
+        );
+      }
+      return new Response(JSON.stringify(HOMEPAGE_PAYLOAD), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  };
+
+  const provider = new VaultMediaProvider(new VaultClient({ fetchImpl: fakeFetch }));
+  const titles = await provider.discovery('all', 24);
+
+  assert.ok(titles.length >= 4, 'the listing must survive a rejected session');
+  assert.equal(logins, 2, 'a fresh session must be minted after a 440');
+});
+
+test('a 440 is retried on another host when a fresh session is refused too', async () => {
+  const hosts = new Set();
+  let logins = 0;
+
+  const fakeFetch = async (url) => {
+    const host = new URL(url).host;
+    if (url.includes('visitor-login')) {
+      logins += 1;
+      return new Response(JSON.stringify({ data: { token: `tok-${logins}` } }), { status: 200 });
+    }
+    hosts.add(host);
+    // The first host refuses everything; the next one serves the listing.
+    if (host === 'api6.aoneroom.com') {
+      return new Response(JSON.stringify({ code: 440, message: 'nope', data: null }), { status: 440 });
+    }
+    return new Response(JSON.stringify(HOMEPAGE_PAYLOAD), { status: 200 });
+  };
+
+  const provider = new VaultMediaProvider(new VaultClient({ fetchImpl: fakeFetch }));
+  const titles = await provider.discovery('all', 24);
+
+  assert.ok(titles.length >= 4, 'another host must be tried');
+  assert.ok(hosts.size > 1, 'more than one host must have been contacted');
+});
+
+test('a rejected response is logged with the reason it gave', async () => {
+  const lines = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => lines.push(args);
+
+  try {
+    const fakeFetch = async (url) => {
+      if (url.includes('visitor-login')) {
+        return new Response(JSON.stringify({ data: { token: 'tok' } }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ code: 440, message: 'login timeout', data: null }),
+        { status: 440 }
+      );
+    };
+    const provider = new VaultMediaProvider(new VaultClient({ fetchImpl: fakeFetch }));
+    await provider.discovery('all', 24).catch(() => {});
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const line = lines.find((entry) => String(entry[0]).includes('upstream rejected the request'));
+  assert.ok(line, 'a rejected request must be logged');
+  const detail = JSON.stringify(line[1]);
+  assert.match(detail, /440/, 'the log must carry the status');
+  assert.match(detail, /login timeout/, 'the log must carry the reason the host gave');
+});
