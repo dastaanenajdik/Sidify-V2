@@ -64,6 +64,16 @@ const HOMEPAGE_STALE_MS = 30 * 60 * 1000;
 /** How many titles the homepage listing keeps — enough to fill either kind's shelf. */
 const HOMEPAGE_CACHE_SIZE = 200;
 
+/**
+ * How long the whole listing may take.
+ *
+ * Each tab has its own request timeout, and reading several tabs one after
+ * another can add up to more than a serverless function is allowed to run. Once
+ * the budget is spent and at least one tab has answered, the rest are skipped —
+ * a short listing is better than a request that never returns.
+ */
+const HOMEPAGE_TIME_BUDGET_MS = 9_000;
+
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
@@ -100,6 +110,26 @@ export class VaultMediaProvider implements MediaProvider {
     );
   }
 
+  /**
+   * The structural shape of a response, for the logs.
+   *
+   * Keys, types and the envelope's status fields — never a title, an artwork URL
+   * or any other payload value. Enough to tell a shape change from an empty
+   * catalogue, safe to leave in production logs.
+   */
+  private responseShape(payload: unknown): Record<string, unknown> {
+    const diagnostics = this.client.describeLastResponse();
+    if (!diagnostics) return { keys: payloadKeys(payload) };
+
+    return {
+      keys: diagnostics.payloadKeys.length ? diagnostics.payloadKeys : payloadKeys(payload),
+      status: diagnostics.status,
+      envelopeCode: diagnostics.envelopeCode,
+      envelopeMessage: diagnostics.envelopeMessage,
+      skeleton: diagnostics.skeleton,
+    };
+  }
+
   /* ------------------------------ discovery ------------------------------ */
 
   async searchTitles(query: string, kind: MediaKind | "all" = "all", limit = 24): Promise<MediaTitle[]> {
@@ -133,7 +163,7 @@ export class VaultMediaProvider implements MediaProvider {
         // "no match for this word" from "the payload shape changed".
         console.warn("[vault] search answered without any subjects", {
           term,
-          keys: payloadKeys(payload),
+          ...this.responseShape(payload),
         });
       }
       const matched = kind === "all" ? titles : titles.filter((title) => title.kind === kind);
@@ -168,27 +198,48 @@ export class VaultMediaProvider implements MediaProvider {
   async discovery(kind: MediaKind | "all" = "all", limit = 24): Promise<MediaTitle[]> {
     // The listing is filtered by kind *after* it is collected, so the whole
     // listing is needed here — slicing first could starve the filter.
-    const titles = await this.homepage(HOMEPAGE_CACHE_SIZE);
+    let titles: MediaTitle[] = [];
+    let listingError: unknown = null;
+    try {
+      titles = await this.homepage(HOMEPAGE_CACHE_SIZE);
+    } catch (error) {
+      listingError = error;
+      console.warn("[vault] the homepage listing could not be read", {
+        error: describeError(error),
+      });
+    }
+
     const matched = kind === "all" ? titles : titles.filter((title) => title.kind === kind);
     if (matched.length) return matched.slice(0, limit);
 
     // The homepage came back empty. A broad search is the safety net so the
     // section is never blank.
-    if (kind === "all") {
-      const [movies, series] = await Promise.all([
-        this.discoveryQuery("movie", limit),
-        this.discoveryQuery("series", limit),
-      ]);
-      const merged = [...movies, ...series];
-      const seen = new Set<string>();
-      const unique = merged.filter((title) => {
-        if (seen.has(title.id)) return false;
-        seen.add(title.id);
-        return true;
-      });
-      return unique.slice(0, limit);
+    let fallback: MediaTitle[];
+    try {
+      if (kind === "all") {
+        const [movies, series] = await Promise.all([
+          this.discoveryQuery("movie", limit),
+          this.discoveryQuery("series", limit),
+        ]);
+        const merged = [...movies, ...series];
+        const seen = new Set<string>();
+        fallback = merged.filter((title) => {
+          if (seen.has(title.id)) return false;
+          seen.add(title.id);
+          return true;
+        });
+      } else {
+        fallback = await this.discoveryQuery(kind, limit);
+      }
+    } catch (error) {
+      throw this.toProviderError(listingError ?? error);
     }
-    return this.discoveryQuery(kind, limit);
+
+    if (fallback.length) return fallback.slice(0, limit);
+    // Nothing to show, and the listing never answered: that is a failure, and it
+    // must reach the UI as one rather than as an empty collection.
+    if (listingError) throw this.toProviderError(listingError);
+    return [];
   }
 
   /**
@@ -216,8 +267,16 @@ export class VaultMediaProvider implements MediaProvider {
   private async loadHomepage(limit = HOMEPAGE_CACHE_SIZE): Promise<MediaTitle[]> {
     const collected: MediaTitle[] = [];
     const seen = new Set<string>();
+    let attempts = 0;
+    let failures = 0;
+    let lastError: unknown = null;
+    const startedAt = Date.now();
 
     for (const tabId of HOMEPAGE_TAB_IDS) {
+      // Stop reading further tabs once the budget is gone and there is something
+      // to show; a partial listing beats a function that never returns.
+      if (collected.length && Date.now() - startedAt > HOMEPAGE_TIME_BUDGET_MS) break;
+      attempts += 1;
       try {
         const payload = await this.client.get(
           `/wefeed-mobile-bff/tab-operating?page=1&tabId=${encodeURIComponent(tabId)}&version=`
@@ -227,10 +286,10 @@ export class VaultMediaProvider implements MediaProvider {
         // difference between "the endpoint has no rows" and "the payload shape
         // is not the one we expect", and the two look identical from the UI.
         if (!titles.length) {
-          console.warn(
-            "[vault] homepage tab answered without any subjects",
-            { tabId, keys: payloadKeys(payload) }
-          );
+          console.warn("[vault] homepage tab answered without any subjects", {
+            tabId,
+            ...this.responseShape(payload),
+          });
         }
         for (const title of titles) {
           if (seen.has(title.id)) continue;
@@ -239,8 +298,17 @@ export class VaultMediaProvider implements MediaProvider {
         }
       } catch (error) {
         // One failing tab must not break the listing — but it must be visible.
+        failures += 1;
+        lastError = error;
         console.warn("[vault] homepage tab failed", { tabId, error: describeError(error) });
       }
+    }
+
+    // Nothing answered at all. Returning an empty list here would be reported as
+    // "the collection is empty" when in truth the catalogue could not be read —
+    // the two must stay distinguishable all the way up to the UI.
+    if (attempts > 0 && failures === attempts) {
+      throw lastError ?? new Error("The listing endpoint could not be reached.");
     }
 
     const value = collected.slice(0, limit);
@@ -269,7 +337,10 @@ export class VaultMediaProvider implements MediaProvider {
 
     // The homepage came back empty — a broad search is the safety net so a rail
     // is never blank.
-    const terms = kind === "movie" ? ["action", "drama", "comedy", "horror"] : ["drama", "comedy", "thriller"];
+    // The search endpoint matches **title text**, so a genre word like "drama"
+    // matches no title at all. These are words that occur in a great many
+    // titles, which makes them the only useful last resort.
+    const terms = ["love", "night", "war", "dark", "city", "girl"];
     const collected: MediaTitle[] = [];
     const seen = new Set<string>();
     for (const term of terms) {

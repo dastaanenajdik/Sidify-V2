@@ -628,4 +628,117 @@ const payload = await this.client.get(
 
 ---
 
+---
+## 12. Update — what changed after this brief was written
+
+A second review of this brief found a blind spot in §2's deduction, and it was
+real. `HTTP 200 + items: []` was described as "the payload shape is wrong, or the
+catalogue is genuinely empty". It missed a third case: **the gateway reporting a
+failure in the body while keeping HTTP 200**. That case produced exactly the same
+observable symptom, and the code had no way to tell it apart.
+
+### 12.1 Cause that was found and fixed: the adapter only knew 3 payload shapes
+
+The homepage adapter read `items` → `banner.banners[].subject`,
+`customData.items[].subject` and `subjects[]` — and nothing else. Tested against
+eleven plausible shapes, it parsed three and returned an empty list for the other
+eight, including:
+
+- groups under `operatingList`, `list`, `modules`
+- subjects at the payload root (`data.subjects[]`)
+- **flat** row items (the row *is* the subject, not `{subject}`)
+- a double-wrapped envelope (`data.data.items`)
+
+A shape it does not recognise yields `[]` with HTTP 200 — indistinguishable from
+an empty catalogue. That is the reported symptom exactly.
+
+`homepagePayloadToTitles()` now reads `items`, `operatingList`, `list`,
+`modules`, `groups` and `rows`, accepts both nested and flat row items, and if the
+known shapes still yield nothing, falls back to `collectSubjectsDeep()`: a walk of
+the payload that collects every object carrying an id **and** a title **and** at
+least one media marker (type, artwork, release date, rating, genre). The media
+marker is what stops a row or a banner — which also carry an id and a title — from
+being mistaken for a title. All eleven shapes now parse.
+
+### 12.2 Cause that was found and fixed: failures reported inside a 200
+
+`VaultClient` now inspects the envelope's `code`. A code of 401/403/407/429 or
+5xx, with no content next to it, is raised as an error instead of being handed to
+the adapters. This also triggers the existing session refresh, so a stale token
+recovered from a body-level 401 re-authenticates exactly as a header-level 401
+does.
+
+### 12.3 Cause that was found and fixed: every tab failing looked like an empty list
+
+`loadHomepage()` caught the error from each tab and carried on. If **all** tabs
+failed, it returned `[]` and the UI said "Nothing here yet" — even though nothing
+had answered at all. It now raises when every attempt failed, and `discovery()`
+surfaces that as a provider error after one last fallback attempt. The UI's two
+empty states now mean what they say again.
+
+A time budget (9 s) was added to the tab loop: each tab has its own 12 s timeout,
+so reading several of them one after another could exceed what a serverless
+function is allowed to run. A partial listing beats a request that never returns.
+
+### 12.4 The logs now print the shape, not the content
+
+When a listing or a search comes back empty, the warning now carries a
+depth-limited **skeleton** of the payload in which every value is replaced by its
+type:
+
+```
+{ items: [ { banner: { banners: [ { subject: { subjectId: "number", title: "string" } } ] } } ] }
+```
+
+plus the envelope's `code`/`message` and the payload's top-level keys. This is
+enough to see a shape change at a glance, and it writes no titles, no artwork
+URLs and no upstream content to the logs at all. Read it with:
+
+```
+Vercel → Project → Logs → search "[vault]"
+```
+
+---
+
+## 13. Corrections to advice received from another reviewer
+
+The following claims were checked against this codebase and against the reference
+client. Two were wrong for this API; the rest were useful and one led to a real fix.
+
+| Claim | Verdict |
+| --- | --- |
+| `new URL(url)` throws on a relative path, so the query is never sorted and the signature breaks | **Wrong here.** `VaultClient` signs the *absolute* URL (`${base}${pathAndQuery}`), so `new URL()` never throws. `scripts/check-signature.mjs` prints the signed and sent query side by side and shows they match for every listing call. |
+| `tab-operating` needs `host=` and `pageSize=` parameters | **Wrong for this API.** The reference client, which works against the live service, calls `?page={page}&tabId={tab_id}&version=` and nothing else. Adding parameters changes the canonical string and can only make a valid signature invalid. |
+| `tab-api/all` should be used to discover tab ids dynamically | **Not supported by the reference.** It uses the literal tab id `"2"` and no discovery call. Adding an unverified endpoint risks a 404 per request. Not adopted. |
+| Pin the region to `bom1`/`sin1`, prefer SG hosts, keep a stable Indian `x-forwarded-for` | **Plausible and worth trying, but unverified.** Vercel runs Hobby functions in `iad1` (US-East) by default; the service is regional. Nothing in this repo can confirm or deny geo-blocking, so no code was changed — see §13.1 for how to test it without risking the deploy. |
+| A stale `version_code` / missing `X-M-Version` may gate the listing | **Unverified.** The reference sends no `X-M-Version` header and works. Do not add headers the oracle does not send; each one changes the request for no known benefit. |
+| Failures reported in the body with HTTP 200 | **Correct, and it led to the fix in §12.2.** |
+| The fallback search should use common title words (`"the"`, `"love"`) instead of genre words | **Sound reasoning.** The search endpoint matches title text, so genre words match nothing. See §13.2. |
+| A recursive subject walker instead of brittle path lookups | **Correct, and it is the fix in §12.1.** |
+
+### 13.1 If the shape fix does not resolve it: testing the geo hypothesis safely
+
+The cheapest experiment, with no code change and no deploy risk:
+
+1. Open the project's Vercel settings and change the **Functions region** from the
+   default to Singapore (`sin1`) or Mumbai (`bom1`).
+2. Redeploy and watch the same `[vault]` log lines.
+
+If the payload shape changes from empty to populated, geo-blocking is the cause.
+Do **not** hard-code a region in a route file until that is confirmed: on the
+Hobby plan the region is a project-level setting, and a code-level pin that
+conflicts with it can fail the deploy.
+
+Note also that `HOST_POOL` already contains Singapore hosts (`api4sg`, `api6sg`).
+If the deployment is moved to `sin1`, reordering the pool to prefer those is a
+one-line change.
+
+### 13.2 The last-resort fallback
+
+`discoveryQuery()` fell back to genre words (`action`, `drama`), which the search
+index cannot match — it searches titles. That fallback could therefore never
+return anything, which is why it looked like the safety net was in place while it
+was not. It now uses common title words (`love`, `night`, `war`, `dark`, `city`,
+`girl`), which do match real titles.
+
 *End of brief.*

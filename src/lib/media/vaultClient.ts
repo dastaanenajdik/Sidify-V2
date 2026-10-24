@@ -99,6 +99,28 @@ export interface VaultClientOptions {
 }
 
 /**
+ * A structural summary of one upstream response.
+ *
+ * Deliberately contains **no payload values** — only keys, counts and the
+ * envelope's status fields. That is enough to tell "the endpoint has no rows"
+ * apart from "the payload shape changed", which is the distinction the UI cannot
+ * make, and it keeps titles and upstream content out of the logs entirely.
+ */
+export interface VaultResponseDiagnostics {
+  status: number;
+  host: string;
+  path: string;
+  /** `code` from the envelope, when the payload is enveloped. */
+  envelopeCode?: unknown;
+  /** `message`/`msg` from the envelope, when present. */
+  envelopeMessage?: unknown;
+  /** Top-level keys of the payload the adapters will see. */
+  payloadKeys: string[];
+  /** Depth-limited shape of the payload, with every string/number replaced by its type. */
+  skeleton: unknown;
+}
+
+/**
  * Stateful API client. One instance is shared per server process; the session token
  * lives in module scope so warm serverless instances reuse it.
  */
@@ -110,6 +132,8 @@ export class VaultClient {
   private activeHostIndex = 0;
   private session: VaultSession | null = null;
   private sessionPromise: Promise<VaultSession> | null = null;
+  /** Structural summary of the most recent successful response. Diagnostics only. */
+  private lastDiagnostics: VaultResponseDiagnostics | null = null;
 
   constructor(options: VaultClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -247,17 +271,30 @@ export class VaultClient {
         // and they answer with an empty list instead of an error, which is
         // indistinguishable from "the catalogue has no titles". Keeping the whole
         // payload lets the adapter try the unwrapped shape as well.
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          const envelope = parsed as Record<string, unknown>;
-          if ("data" in envelope) {
-            const inner = envelope.data;
-            if (inner && typeof inner === "object" && !Array.isArray(inner)) {
-              return inner;
-            }
-            if (inner === undefined) return envelope;
-          }
+        const envelope = asEnvelope(parsed);
+        const payload = unwrapEnvelope(envelope, parsed);
+
+        this.lastDiagnostics = {
+          status: response.status,
+          host: base,
+          path: pathAndQuery,
+          envelopeCode: envelope?.code ?? envelope?.errorCode,
+          envelopeMessage: envelope?.message ?? envelope?.msg,
+          payloadKeys: payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload) : [],
+          skeleton: skeletonOf(payload),
+        };
+
+        // Some gateways answer a rejected request with HTTP 200 and the failure
+        // in the body, e.g. `{ code: 401, message: "signature error", data: null }`.
+        // Such a response looks like a successful, empty payload — the adapters
+        // turn it into `[]` and the UI reports "nothing here yet", which hides the
+        // real cause. A failure code with no data is therefore raised as an error.
+        const softError = softErrorOf(envelope, payload);
+        if (softError) {
+          throw softError;
         }
-        return parsed;
+
+        return payload;
       } catch (error) {
         if (error instanceof VaultApiError && error.code === "api_status" && !RETRY_STATUS_CODES.has(error.status ?? 0)) {
           throw error;
@@ -279,6 +316,112 @@ export class VaultClient {
 
     throw lastError ?? new VaultApiError("All upstream hosts were exhausted.", "hosts_exhausted");
   }
+
+  /**
+   * A structural summary of the last successful response, for logging.
+   *
+   * Contains keys and types only — never a title, a URL or any other payload
+   * value — so it is safe to write to the server logs.
+   */
+  describeLastResponse(): VaultResponseDiagnostics | null {
+    return this.lastDiagnostics;
+  }
+}
+
+/** The part of a payload that carries `code`/`message`/`data`, when there is one. */
+function asEnvelope(parsed: unknown): Record<string, unknown> | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  return "code" in record || "data" in record || "message" in record || "msg" in record ? record : null;
+}
+
+function unwrapEnvelope(envelope: Record<string, unknown> | null, parsed: unknown): unknown {
+  if (!envelope || !("data" in envelope)) return parsed;
+
+  const inner = envelope.data;
+  // A nested object is the payload proper.
+  if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+    // Guard against the payload being wrapped twice.
+    const again = unwrapEnvelope(asEnvelope(inner), inner);
+    return again;
+  }
+  // `data` is null, a string or an array: the envelope carries no payload, so the
+  // whole body is handed on and the adapters try both shapes.
+  if (inner === undefined || inner === null) return parsed;
+  return inner;
+}
+
+/** Statuses that mean the request itself was rejected, whatever the HTTP status was. */
+const REJECTED_ENVELOPE_CODES = new Set([401, 403, 407, 429]);
+
+/**
+ * Turns a body-level failure into an error.
+ *
+ * Some gateways answer a rejected request with HTTP 200 and the failure in the
+ * body — `{ code: 401, message: "signature error", data: null }`. Without this
+ * check that body reaches the adapters, becomes an empty list, and the UI
+ * reports "nothing here yet", hiding the real cause.
+ */
+function softErrorOf(envelope: Record<string, unknown> | null, body: unknown): VaultApiError | null {
+  if (!envelope) return null;
+
+  const rawCode = envelope.code ?? envelope.errorCode;
+  const code = typeof rawCode === "number" ? rawCode : typeof rawCode === "string" ? Number(rawCode) : NaN;
+  if (!Number.isFinite(code)) return null;
+
+  // 0 and 200 both mean success in this API.
+  if (code === 0 || code === 200) return null;
+
+  // A body that carries content next to a business `code` is still a payload.
+  if (hasContent(body) || hasContent(unwrapEnvelope(envelope, null))) return null;
+
+  const rejected = REJECTED_ENVELOPE_CODES.has(code) || code >= 500;
+  if (!rejected) return null;
+
+  const message = typeof envelope.message === "string" ? envelope.message : typeof envelope.msg === "string" ? envelope.msg : "";
+  return new VaultApiError(
+    `Upstream rejected the request in the body (code ${code}${message ? `: ${message}` : ""}).`,
+    "api_status",
+    code
+  );
+}
+
+const CONTENT_KEYS = ["items", "subjects", "results", "list", "operatingList", "modules", "groups", "rows", "subject"];
+
+function hasContent(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return CONTENT_KEYS.some((key) => {
+    const entry = record[key];
+    return Array.isArray(entry) ? entry.length > 0 : Boolean(entry && typeof entry === "object");
+  });
+}
+
+/**
+ * The shape of a payload with every value replaced by its type.
+ *
+ * `{items:[{banner:{banners:[{subject:{subjectId:1,title:"x"}}]}}]}`
+ * becomes `{items:[{banner:{banners:[{subject:{subjectId:"number",title:"string"}}]}}]}`.
+ *
+ * This is what makes a shape change visible in the logs without writing any
+ * upstream content into them.
+ */
+function skeletonOf(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "…";
+  if (value === null) return null;
+  if (Array.isArray(value)) {
+    if (!value.length) return [];
+    return [skeletonOf(value[0], depth + 1)];
+  }
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = skeletonOf(entry, depth + 1);
+    }
+    return out;
+  }
+  return typeof value;
 }
 
 async function readBoundedText(response: Response): Promise<string> {
