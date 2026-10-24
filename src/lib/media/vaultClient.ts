@@ -240,8 +240,22 @@ export class VaultClient {
         }
 
         // The API wraps successful payloads in `data`.
-        if (parsed && typeof parsed === "object" && "data" in (parsed as Record<string, unknown>)) {
-          return (parsed as Record<string, unknown>).data;
+        //
+        // The envelope is only unwrapped when `data` is actually an object. If a
+        // response carries `data` as `null`, a string or an array, returning that
+        // value would leave the adapters looking at something they cannot read —
+        // and they answer with an empty list instead of an error, which is
+        // indistinguishable from "the catalogue has no titles". Keeping the whole
+        // payload lets the adapter try the unwrapped shape as well.
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          const envelope = parsed as Record<string, unknown>;
+          if ("data" in envelope) {
+            const inner = envelope.data;
+            if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+              return inner;
+            }
+            if (inner === undefined) return envelope;
+          }
         }
         return parsed;
       } catch (error) {
