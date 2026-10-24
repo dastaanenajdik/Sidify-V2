@@ -276,7 +276,7 @@ export function subjectToTitle(value: unknown): MediaTitle | null {
     genres,
     language: languageCode(record.lanName ?? record.language ?? record.country) ?? "en",
     languageName: str(record.lanName ?? record.language) ?? undefined,
-    rating: num(record.imdbRatingValue ?? record.rating) ?? undefined,
+    rating: num(record.imdbRatingValue ?? record.imdbRate ?? record.imdb_rating ?? record.rating) ?? undefined,
     votes: num(record.imdbVoteCount ?? record.voteCount) ?? undefined,
     runtimeMinutes: num(record.duration) ? Math.round(Number(num(record.duration)) / 60) : undefined,
     certification: str(record.certification) ?? undefined,
@@ -286,7 +286,15 @@ export function subjectToTitle(value: unknown): MediaTitle | null {
     seasonCount: num(record.season ?? record.seasons) ?? undefined,
     episodeCount: num(record.totalEpisode ?? record.episodeCount) ?? undefined,
     status: str(record.status) ?? undefined,
-    popularity: num(record.popularity ?? record.hotValue) ?? undefined,
+    // The listing's ranking signals: the reference client reads the same fields.
+    popularity: num(
+      record.__browse_rank ??
+        record.imdb_popularity ??
+        record.imdbPopularity ??
+        record.popularity ??
+        record.viewers ??
+        record.hotValue
+    ) ?? undefined,
     officialUrl: str(record.officialUrl) ?? null,
   };
 }
@@ -295,41 +303,111 @@ export function subjectToTitle(value: unknown): MediaTitle | null {
  * Search payload → titles.
  *
  * The API groups its matches: `results` is an array of result groups and each group
- * carries a `subjects` array. Only the first group is used, matching the reference
- * client's behaviour. A flat `subjects` / `list` payload is also accepted.
+ * carries a `subjects` array. Every group is read — the upstream's own reference
+ * client only looked at the first one, but the API does put matches in later
+ * groups too, and dropping them is what made the collection look empty.
+ *
+ * The payload may arrive with or without the `data` envelope (the reference
+ * client strips it before adapting, but a raw response must parse too), and a
+ * flat `subjects` / `list` payload is accepted as well.
  */
 export function searchPayloadToTitles(payload: unknown): MediaTitle[] {
   const root = asRecord(payload);
   if (!root) return [];
 
-  const results = root.results;
+  // The `data` envelope may still be present.
+  const inner = asRecord(root.data);
+  const scope = inner ?? root;
 
-  // `results` is an array of groups: the first group's `subjects` are the matches.
-  let subjects: unknown[] = [];
-  if (Array.isArray(results)) {
-    const firstGroup = asRecord(results[0]);
-    if (Array.isArray(firstGroup?.subjects)) {
-      subjects = firstGroup.subjects;
-    } else if (Array.isArray(firstGroup?.list)) {
-      subjects = firstGroup.list;
+  const subjects: unknown[] = [];
+
+  const collectFromGroups = (groups: unknown[]) => {
+    for (const group of groups) {
+      const groupRecord = asRecord(group);
+      if (!groupRecord) continue;
+      if (Array.isArray(groupRecord.subjects)) subjects.push(...groupRecord.subjects);
+      else if (Array.isArray(groupRecord.list)) subjects.push(...groupRecord.list);
     }
+  };
+
+  const results = scope.results;
+  if (Array.isArray(results)) {
+    // `results` is an array of groups, each with its own `subjects`.
+    collectFromGroups(results);
   } else {
     const resultsRecord = asRecord(results);
     if (resultsRecord) {
       // Some responses wrap the groups in `results.list`.
       const groups = Array.isArray(resultsRecord.list) ? resultsRecord.list : null;
-      const firstGroup = groups ? asRecord(groups[0]) : resultsRecord;
-      if (Array.isArray(firstGroup?.subjects)) subjects = firstGroup.subjects;
-      else if (Array.isArray(firstGroup?.list)) subjects = firstGroup.list;
-      else if (Array.isArray(resultsRecord.subjects)) subjects = resultsRecord.subjects;
+      if (groups) collectFromGroups(groups);
+      else {
+        if (Array.isArray(resultsRecord.subjects)) subjects.push(...resultsRecord.subjects);
+        else if (Array.isArray(resultsRecord.list)) subjects.push(...resultsRecord.list);
+      }
     }
   }
 
   if (!subjects.length) {
-    if (Array.isArray(root.subjects)) subjects = root.subjects;
-    else if (Array.isArray(root.list)) subjects = root.list;
+    if (Array.isArray(scope.subjects)) subjects.push(...scope.subjects);
+    else if (Array.isArray(scope.list)) subjects.push(...scope.list);
   }
 
+  return titlesFromSubjects(subjects);
+}
+
+/**
+ * Homepage payload → titles.
+ *
+ * The catalogue's own listing endpoint answers with `items`: an array of groups,
+ * and a group can carry its subjects in three different places depending on the
+ * row type — a banner (`banner.banners[].subject`), a custom row
+ * (`customData.items[].subject`) or a plain grid (`subjects[]`).
+ *
+ * This mirrors the reference client's `moviebox_homepage_json_to_catalog`.
+ */
+export function homepagePayloadToTitles(payload: unknown): MediaTitle[] {
+  const root = asRecord(payload);
+  if (!root) return [];
+
+  const inner = asRecord(root.data);
+  const scope = inner ?? root;
+
+  const groups = Array.isArray(scope.items) ? scope.items : Array.isArray(scope) ? scope : [];
+  const subjects: unknown[] = [];
+
+  for (const group of groups) {
+    const groupRecord = asRecord(group);
+    if (!groupRecord) continue;
+
+    // Banner row: `banner.banners[].subject`.
+    const banner = asRecord(groupRecord.banner);
+    if (banner && Array.isArray(banner.banners)) {
+      for (const bannerItem of banner.banners) {
+        const bannerRecord = asRecord(bannerItem);
+        const subject = bannerRecord ? bannerRecord.subject : undefined;
+        if (subject !== undefined) subjects.push(subject);
+      }
+    }
+
+    // Custom row: `customData.items[].subject`.
+    const customData = asRecord(groupRecord.customData);
+    if (customData && Array.isArray(customData.items)) {
+      for (const customItem of customData.items) {
+        const customRecord = asRecord(customItem);
+        const subject = customRecord ? customRecord.subject : undefined;
+        if (subject !== undefined) subjects.push(subject);
+      }
+    }
+
+    // Plain grid: `subjects[]`.
+    if (Array.isArray(groupRecord.subjects)) subjects.push(...groupRecord.subjects);
+  }
+
+  return titlesFromSubjects(subjects);
+}
+
+/** Subjects → titles, skipping the ones without an id and dropping duplicates. */
+function titlesFromSubjects(subjects: unknown[]): MediaTitle[] {
   const titles: MediaTitle[] = [];
   const seen = new Set<string>();
   for (const entry of subjects) {
