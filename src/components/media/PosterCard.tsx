@@ -7,8 +7,14 @@ import { mediaArt } from "@/lib/media/art";
 import type { MediaTitle } from "@/lib/media/types";
 import { useWatchlist } from "@/store/watchlist";
 import { cx } from "@/lib/format";
+import { ExclusiveBadge } from "./ExclusiveBadge";
 
 const KIND_PATH = { movie: "movies", series: "series" } as const;
+
+/** Titles from the exclusive collection are marked by their slug prefix. */
+export function isExclusiveTitle(title: Pick<MediaTitle, "slug">): boolean {
+  return typeof title.slug === "string" && title.slug.startsWith("vault-");
+}
 
 export function mediaHref(title: Pick<MediaTitle, "kind" | "slug">): string {
   return `/${KIND_PATH[title.kind]}/${encodeURIComponent(title.slug)}`;
@@ -60,6 +66,9 @@ export const PosterCard = memo(function PosterCard({
             <span className="absolute bottom-2 left-2 rounded-full bg-primary px-1.5 py-[2px] text-[9px] font-bold tracking-[0.06em] text-on-primary uppercase shadow-sm">
               Free
             </span>
+          )}
+          {isExclusiveTitle(title) && (
+            <ExclusiveBadge className="absolute right-2 bottom-2" compact />
           )}
           {title.demo && (
             <span className="absolute bottom-2 left-2 rounded-full bg-white/15 px-1.5 py-[2px] text-[9px] font-bold tracking-[0.06em] text-white/90 uppercase backdrop-blur-md">

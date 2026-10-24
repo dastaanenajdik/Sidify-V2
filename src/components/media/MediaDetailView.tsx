@@ -39,7 +39,8 @@ import { useUi } from "@/store/ui";
 import { useWatchlist } from "@/store/watchlist";
 import { cx, formatBytes } from "@/lib/format";
 import { BetaBadge } from "./BetaBadge";
-import { PosterCard, posterShelfClass } from "./PosterCard";
+import { ExclusiveBadge } from "./ExclusiveBadge";
+import { PosterCard, isExclusiveTitle, posterShelfClass } from "./PosterCard";
 import { VlcPlayButton } from "./VlcPlayButton";
 import { useResumePoint } from "./useResumePoint";
 import { MovieWatchSection, SeasonTabsSection } from "./WatchSections";
@@ -168,6 +169,7 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
                       Demo title
                     </span>
                   )}
+                  {isExclusiveTitle(title) && <ExclusiveBadge className="bg-white/15 text-white/90" />}
                   {title.free && !title.demo && (
                     <span className="rounded-full bg-primary px-2 py-[3px] text-[10px] font-bold tracking-[0.06em] text-on-primary uppercase">
                       Free to stream

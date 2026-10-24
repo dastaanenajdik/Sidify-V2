@@ -8,11 +8,14 @@ import type { MediaTitle } from "@/lib/media/types";
 import { Skeleton } from "@/components/ui";
 import { cx } from "@/lib/format";
 import { mediaHref } from "./PosterCard";
+import { ExclusiveBadge } from "./ExclusiveBadge";
+import { isExclusiveTitle } from "./PosterCard";
 
 function Row({ item }: { item: MediaTitle }) {
   const [broken, setBroken] = useState(false);
   const art = broken ? mediaArt(null, { seed: item.slug, accent: item.accent }) : mediaArt(item.poster, { seed: item.slug, accent: item.accent });
   const KindIcon = item.kind === "series" ? Tv : Film;
+  const exclusive = isExclusiveTitle(item);
   return (
     <li>
       <Link
@@ -30,7 +33,8 @@ function Row({ item }: { item: MediaTitle }) {
         />
         <span className="min-w-0 flex-1">
           <span className="line-clamp-2 text-[14px] leading-snug font-medium">{item.title}</span>
-          <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-fg-2">
+          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[12px] text-fg-2">
+            {exclusive && <ExclusiveBadge compact />}
             <KindIcon size={12} aria-hidden="true" />
             {item.kind === "series" ? "Series" : "Movie"}
             {item.year ? ` · ${item.year}` : ""}

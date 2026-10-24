@@ -72,6 +72,8 @@ function QualityPicker({ target }: { target: WatchTarget }) {
           url: mirror.shortUrl,
           fileName: release.fileName,
           label: release.title,
+          source: mirror.source,
+          headers: mirror.headers,
           signal: controller.signal,
         });
         if (controller.signal.aborted) return;
