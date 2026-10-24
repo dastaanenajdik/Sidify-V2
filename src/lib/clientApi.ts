@@ -34,8 +34,22 @@ export interface SearchResults {
   artists: Artist[];
 }
 
+/**
+ * A server that *answers* — even with an error status — is reachable.
+ *
+ * Only a transport failure (no response at all: offline, DNS, a dropped
+ * connection) means the backend is really down. Treating a 5xx as "the backend is
+ * down" used to silence every library request for a while, so one failing endpoint
+ * took the whole library offline with it.
+ */
+class ApiError extends Error {
+  constructor(readonly status: number) {
+    super(`API error ${status}`);
+  }
+}
+
 async function j<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status);
   return res.json() as Promise<T>;
 }
 
@@ -69,7 +83,9 @@ async function get<T>(path: string): Promise<T | null> {
     const out = await fetchJsonDedup<T>(path);
     markBackendUp();
     return out;
-  } catch {
+  } catch (error) {
+    // The server answered: it is up, it just could not serve this request.
+    if (error instanceof ApiError) return null;
     markBackendDown();
     return null;
   }
@@ -83,7 +99,9 @@ async function send<T = { ok: boolean }>(path: string, method: "POST" | "PATCH" 
     );
     markBackendUp();
     return out;
-  } catch {
+  } catch (error) {
+    // The server answered: it is up, it just could not store this change.
+    if (error instanceof ApiError) return null;
     markBackendDown();
     return null;
   }

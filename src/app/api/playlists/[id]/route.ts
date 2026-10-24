@@ -1,19 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db, hasDatabaseUrl } from "@/db";
+import { db } from "@/db";
 import { playlists, playlistTracks } from "@/db/schema";
 import { and, asc, eq, max } from "drizzle-orm";
 import type { Track } from "@/lib/types";
+import { withDatabase, withDatabaseWrite } from "@/lib/dbResponses";
 
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
-  if (!hasDatabaseUrl()) return NextResponse.json({ error: "Database not configured" }, { status: 503 });
   const { id } = await ctx.params;
   const pid = Number(id);
   if (!Number.isFinite(pid)) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  try {
+  return withDatabase({ playlist: null }, async () => {
     const [[p], rows] = await Promise.all([
       db.select().from(playlists).where(eq(playlists.id, pid)),
       db
@@ -31,19 +31,16 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
         tracks: rows.map((r) => r.payload as Track),
       },
     });
-  } catch {
-    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
-  }
+  });
 }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
-  if (!hasDatabaseUrl()) return NextResponse.json({ error: "Database not configured" }, { status: 503 });
   const { id } = await ctx.params;
   const pid = Number(id);
   const { track } = (await req.json()) as { track: Track };
   if (!track?.id) return NextResponse.json({ error: "track required" }, { status: 400 });
 
-  try {
+  return withDatabaseWrite(async () => {
     const [agg] = await db
       .select({ maxPos: max(playlistTracks.position) })
       .from(playlistTracks)
@@ -55,31 +52,25 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       position: (agg?.maxPos ?? -1) + 1,
     });
     return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
-  }
+  });
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
-  if (!hasDatabaseUrl()) return NextResponse.json({ error: "Database not configured" }, { status: 503 });
   const { id } = await ctx.params;
   const pid = Number(id);
   const { name } = (await req.json()) as { name: string };
   if (!name?.trim()) return NextResponse.json({ error: "name required" }, { status: 400 });
-  try {
+  return withDatabaseWrite(async () => {
     await db.update(playlists).set({ name: name.trim().slice(0, 80) }).where(eq(playlists.id, pid));
     return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
-  }
+  });
 }
 
 export async function DELETE(req: NextRequest, ctx: Ctx) {
-  if (!hasDatabaseUrl()) return NextResponse.json({ error: "Database not configured" }, { status: 503 });
   const { id } = await ctx.params;
   const pid = Number(id);
   const trackId = req.nextUrl.searchParams.get("trackId");
-  try {
+  return withDatabaseWrite(async () => {
     if (trackId) {
       await db
         .delete(playlistTracks)
@@ -89,8 +80,5 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     await db.delete(playlistTracks).where(eq(playlistTracks.playlistId, pid));
     await db.delete(playlists).where(eq(playlists.id, pid));
     return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
-  }
+  });
 }
-

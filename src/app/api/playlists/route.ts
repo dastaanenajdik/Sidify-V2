@@ -1,16 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db, hasDatabaseUrl } from "@/db";
+import { db } from "@/db";
 import { playlists, playlistTracks } from "@/db/schema";
 import { asc, inArray } from "drizzle-orm";
 import type { PlaylistRow, Track } from "@/lib/types";
+import { withDatabase, withDatabaseWrite } from "@/lib/dbResponses";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  if (!hasDatabaseUrl()) {
-    return NextResponse.json({ error: "Database not configured", playlists: [] }, { status: 503 });
-  }
-  try {
+  return withDatabase({ playlists: [] }, async () => {
     const pls = await db.select().from(playlists).orderBy(asc(playlists.createdAt)).limit(100);
     if (!pls.length) return NextResponse.json({ playlists: [] });
 
@@ -42,23 +40,15 @@ export async function GET() {
       tracks: byPlaylist.get(p.id) ?? [],
     }));
     return NextResponse.json({ playlists: out });
-  } catch {
-    return NextResponse.json({ error: "Database unavailable", playlists: [] }, { status: 503 });
-  }
+  });
 }
 
 export async function POST(req: NextRequest) {
-  if (!hasDatabaseUrl()) {
-    return NextResponse.json({ error: "Database not configured" }, { status: 503 });
-  }
   const { name } = (await req.json()) as { name: string };
   const clean = (name || "").trim().slice(0, 80);
   if (!clean) return NextResponse.json({ error: "name required" }, { status: 400 });
-  try {
+  return withDatabaseWrite(async () => {
     const [row] = await db.insert(playlists).values({ name: clean }).returning();
     return NextResponse.json({ playlist: { id: row.id, name: row.name, createdAt: row.createdAt.toISOString(), tracks: [] } });
-  } catch {
-    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
-  }
+  });
 }
-
