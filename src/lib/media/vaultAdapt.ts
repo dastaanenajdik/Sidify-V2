@@ -352,7 +352,97 @@ export function searchPayloadToTitles(payload: unknown): MediaTitle[] {
     else if (Array.isArray(scope.list)) subjects.push(...scope.list);
   }
 
+  // The known shapes came up empty. Rather than answer with an empty list — which
+  // is indistinguishable from "the catalogue has no titles" — look for the
+  // subjects wherever they actually are.
+  if (!subjects.length) {
+    const deep = collectSubjectsDeep(scope);
+    if (deep.length) return titlesFromSubjects(deep);
+  }
+
   return titlesFromSubjects(subjects);
+}
+
+/**
+ * Finds the subjects in a payload whose exact shape we do not know.
+ *
+ * The listing endpoint has changed shape between versions — the groups have
+ * appeared under `items`, `list` and `operatingList`, and the rows have carried
+ * their subject either nested (`.subject`) or flat (the row *is* the subject).
+ * A strict adapter answers with an empty list for every one of those, which the
+ * UI cannot tell apart from an empty catalogue.
+ *
+ * So this walks the payload and collects every object that looks like a subject:
+ * something with an id **and** a title **and** at least one media marker. The
+ * media marker is what keeps a row or a banner (which also carry an id and a
+ * title) from being mistaken for a title.
+ */
+export function collectSubjectsDeep(payload: unknown): unknown[] {
+  const found: unknown[] = [];
+  const visited = new Set<unknown>();
+
+  const walk = (node: unknown, depth: number): void => {
+    if (depth > 8 || !node || typeof node !== "object") return;
+    if (visited.has(node)) return;
+    visited.add(node);
+
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+
+    const record = node as Record<string, unknown>;
+
+    // A wrapper may hold the real subject under `subject`.
+    const nested = asRecord(record.subject);
+    if (nested && looksLikeSubject(nested)) {
+      found.push(nested);
+      return;
+    }
+
+    if (looksLikeSubject(record)) {
+      found.push(record);
+      // A subject does not contain another subject — stop here.
+      return;
+    }
+
+    for (const value of Object.values(record)) {
+      walk(value, depth + 1);
+    }
+  };
+
+  walk(payload, 0);
+  return found;
+}
+
+/**
+ * Whether a record looks like a title.
+ *
+ * It needs an id and a title, plus one marker that only a real title carries —
+ * its type, its artwork, its release date or its rating. Without that third
+ * condition a row or a banner would pass for a title.
+ */
+function looksLikeSubject(record: Record<string, unknown>): boolean {
+  const hasId = record.subjectId !== undefined || record.id !== undefined;
+  if (!hasId) return false;
+
+  const hasTitle = typeof record.title === "string" || typeof record.name === "string";
+  if (!hasTitle) return false;
+
+  return (
+    record.subjectType !== undefined ||
+    record.stype !== undefined ||
+    record.cover !== undefined ||
+    record.coverUrl !== undefined ||
+    record.poster !== undefined ||
+    record.pic !== undefined ||
+    record.releaseDate !== undefined ||
+    record.year !== undefined ||
+    record.releaseInfo !== undefined ||
+    record.imdbRatingValue !== undefined ||
+    record.genre !== undefined ||
+    record.genres !== undefined
+  );
 }
 
 /**
@@ -367,43 +457,72 @@ export function searchPayloadToTitles(payload: unknown): MediaTitle[] {
  */
 export function homepagePayloadToTitles(payload: unknown): MediaTitle[] {
   const root = asRecord(payload);
-  if (!root) return [];
+  if (!root) return Array.isArray(payload) ? titlesFromSubjects(collectSubjectsDeep(payload)) : [];
 
-  const inner = asRecord(root.data);
-  const scope = inner ?? root;
+  // The envelope is usually stripped by the client, but tolerate it here too.
+  const scope = asRecord(root.data) ?? root;
 
-  const groups = Array.isArray(scope.items) ? scope.items : Array.isArray(scope) ? scope : [];
+  const groups = groupsOf(scope);
   const subjects: unknown[] = [];
 
   for (const group of groups) {
     const groupRecord = asRecord(group);
     if (!groupRecord) continue;
 
-    // Banner row: `banner.banners[].subject`.
+    // Banner row: `banner.banners[]`, each item either `{subject}` or the subject.
     const banner = asRecord(groupRecord.banner);
     if (banner && Array.isArray(banner.banners)) {
       for (const bannerItem of banner.banners) {
-        const bannerRecord = asRecord(bannerItem);
-        const subject = bannerRecord ? bannerRecord.subject : undefined;
-        if (subject !== undefined) subjects.push(subject);
+        pushSubject(subjects, bannerItem);
       }
     }
 
-    // Custom row: `customData.items[].subject`.
+    // Custom row: `customData.items[]`, each item either `{subject}` or the subject.
     const customData = asRecord(groupRecord.customData);
     if (customData && Array.isArray(customData.items)) {
       for (const customItem of customData.items) {
-        const customRecord = asRecord(customItem);
-        const subject = customRecord ? customRecord.subject : undefined;
-        if (subject !== undefined) subjects.push(subject);
+        pushSubject(subjects, customItem);
       }
     }
 
     // Plain grid: `subjects[]`.
-    if (Array.isArray(groupRecord.subjects)) subjects.push(...groupRecord.subjects);
+    if (Array.isArray(groupRecord.subjects)) {
+      for (const entry of groupRecord.subjects) pushSubject(subjects, entry);
+    }
+  }
+
+  // The known shapes came up empty. Rather than answer with an empty list — which
+  // is indistinguishable from "the catalogue has no titles" — look for the
+  // subjects wherever they actually are.
+  if (!subjects.length) {
+    const deep = collectSubjectsDeep(scope);
+    return titlesFromSubjects(deep);
   }
 
   return titlesFromSubjects(subjects);
+}
+
+/**
+ * The groups (rows) of a listing payload.
+ *
+ * The key has changed between versions: `items` is the documented one, but
+ * `operatingList`, `list`, `modules` and `groups` have all carried the same row
+ * structure. A payload that is a bare array *is* the group list.
+ */
+function groupsOf(scope: Record<string, unknown>): unknown[] {
+  for (const key of ["items", "operatingList", "list", "modules", "groups", "rows"]) {
+    const value = scope[key];
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+/** Pushes a row item that is either `{subject}` or a flat subject. */
+function pushSubject(into: unknown[], item: unknown): void {
+  const record = asRecord(item);
+  if (!record) return;
+  const subject = asRecord(record.subject);
+  into.push(subject ?? record);
 }
 
 /** Subjects → titles, skipping the ones without an id and dropping duplicates. */

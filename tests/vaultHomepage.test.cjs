@@ -237,3 +237,77 @@ test('the collection listing uses the homepage endpoint, not keyword guessing', 
   assert.match(listing, /this\.homepage\(/);
   assert.doesNotMatch(listing, /searchTitles\(/);
 });
+
+/**
+ * The listing endpoint's exact shape is not guaranteed: the groups have appeared
+ * under several keys and the rows have carried their subject either nested or
+ * flat. Every one of these shapes must produce titles — an adapter that answers
+ * with an empty list cannot be told apart from an empty catalogue in the UI.
+ */
+const SUBJECT = { subjectId: 900, title: 'Shape Test', subjectType: 1 };
+
+for (const [name, payload] of [
+  ['groups under `items`', { data: { items: [{ subjects: [SUBJECT] }] } }],
+  ['groups under `operatingList`', { data: { operatingList: [{ subjects: [SUBJECT] }] } }],
+  ['groups under `list`', { data: { list: [{ subjects: [SUBJECT] }] } }],
+  ['subjects at the payload root', { data: { subjects: [SUBJECT] } }],
+  ['a flat banner item', { data: { items: [{ banner: { banners: [SUBJECT] } }] } }],
+  ['a flat custom row item', { data: { items: [{ customData: { items: [SUBJECT] } }] } }],
+  ['a double-wrapped payload', { data: { data: { items: [{ subjects: [SUBJECT] }] } } }],
+  ['a bare array of groups', [{ subjects: [SUBJECT] }]],
+]) {
+  test(`the homepage adapter reads ${name}`, async () => {
+    const { provider } = makeProvider(async () =>
+      new Response(JSON.stringify(payload), { status: 200 })
+    );
+
+    const titles = await provider.discovery('all', 24);
+
+    assert.equal(titles.length, 1, `${name} must yield a title`);
+    assert.equal(titles[0].title, 'Shape Test');
+  });
+}
+
+test('a failure reported in the body with HTTP 200 is an error, not an empty list', async () => {
+  const { provider } = makeProvider(async (url) => {
+    if (url.includes('tab-operating')) {
+      // The gateway rejects the request but keeps the HTTP status at 200.
+      return new Response(
+        JSON.stringify({ code: 401, message: 'signature error', data: null }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ data: { items: [] } }), { status: 200 });
+  });
+
+  // Every host answers the same way, so the listing cannot succeed — and it must
+  // report a failure rather than an empty collection.
+  await assert.rejects(() => provider.discovery('all', 24));
+});
+
+test('the response shape is logged without any payload values', async () => {
+  const lines = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => lines.push(args);
+
+  try {
+    const { provider } = makeProvider(async (url) => {
+      if (url.includes('tab-operating')) {
+        return new Response(JSON.stringify({ data: { items: [{ banner: { banners: [] } }] } }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({ data: { results: [] } }), { status: 200 });
+    });
+
+    await provider.discovery('all', 24);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const line = lines.find((entry) => String(entry[0]).includes('without any subjects'));
+  assert.ok(line, 'an empty tab must be logged');
+  const detail = JSON.stringify(line[1]);
+  assert.match(detail, /items/, 'the log must name the payload keys');
+  assert.doesNotMatch(detail, /Shape Test/, 'the log must not contain payload values');
+});
