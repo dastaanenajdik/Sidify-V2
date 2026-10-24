@@ -721,7 +721,6 @@ function PlaybackSection({
             src={source.url}
             title={`${title.title} — player`}
             allow="autoplay; fullscreen; encrypted-media"
-            allowFullScreen
             loading="lazy"
             className="aspect-video w-full bg-black"
           />
