@@ -813,4 +813,80 @@ Expect a line like:
   retry, so an upstream that rejects everything could otherwise hold the function
   open.
 
+---
+
+## 15. The 440 is on the login itself
+
+§14 gave the code the ability to see and recover from a `440`. The logs from the
+next deployment narrowed it further:
+
+```
+status: 440
+host: 'https://api6.aoneroom.com'
+path: '/wefeed-mobile-bff/user-api/visitor-login'      <- the login, not the listing
+envelopeCode: 440
+envelopeMessage: 'ServiceNotAvailable'
+payloadKeys: [ 'code', 'reason', 'message', 'metadata' ]
+skeleton: { code: 'number', reason: 'string', message: 'string', metadata: {} }
+```
+
+**The login is what is refused.** No session can be minted, so every later call
+fails for a reason that is not really about the listing at all. The retry added in
+§14 does work — the logs show it re-attempting, and each attempt is refused the
+same way.
+
+`ServiceNotAvailable` with empty `metadata` is the host saying "I will not serve
+this caller". It is not a session expiry (that would be 401), not a signature
+failure (a bad signature has its own message), and not a payload problem. That
+leaves the caller's address, or the identity attached to it.
+
+### 15.1 Why the region is the prime suspect
+
+- The deployment runs on Vercel, whose functions default to **`iad1` (US-East)**.
+- The upstream is an Indian / South-East-Asian service.
+- The identity we present says India: `sp_code` `40401` (an Indian carrier), Indian
+  `x-forwarded-for` ranges, `region`/`timezone` for India.
+- The reference client works from a normal consumer connection, and is refused by
+  nothing.
+
+A cloud address in the US presenting an Indian mobile identity is exactly the kind
+of caller such a service declines — often with a soft, generic message rather than
+a hard 403.
+
+**This route is now pinned to `bom1` (Mumbai)** via `export const preferredRegion`.
+Only this route moved; the rest of the site has no reason to.
+
+Caveat worth knowing: on a single-region plan the region is a project-level
+setting. If the pin conflicts with it, the deployment will say so — in that case
+change the region in project settings instead and remove the pin.
+
+### 15.2 The decisive test is not on the deployment
+
+Everything above is inference. The one measurement that settles it is running the
+same protocol from a **normal consumer connection**:
+
+```
+node scripts/check-upstream.mjs "Dune"
+```
+
+It mints a real session, reads the listing, searches for the title, and prints the
+status of each step — no tokens, no payloads, titles only. Run it on a laptop, then
+compare with the deployment's logs:
+
+| Local result | Deployment result | Conclusion |
+| --- | --- | --- |
+| login ok, titles listed | 440 on login | The address is refused. Region/egress is the cause — the pin in §15.1 is the fix, or a relay on a residential/regional address. |
+| login ok, titles listed | login ok, no titles | Not the network. The shape log then names what the endpoint returns. |
+| login refused 440 | login refused 440 | Not the address either. The identity or the client version is being declined, and the `reason`/`message` from the body names which. |
+
+The script lives in `scripts/` and is never bundled into the app.
+
+### 15.3 Also fixed: the login is no longer hammered
+
+The logs showed the login being attempted about a dozen times for a single page
+load — the section, then the movies and series fallbacks, each needing a session of
+its own. That is slow, and repeatedly presenting a rejected identity is a good way
+to earn a temporary ban. A refused login is now remembered for 20 s, so one page
+load asks once.
+
 *End of brief.*

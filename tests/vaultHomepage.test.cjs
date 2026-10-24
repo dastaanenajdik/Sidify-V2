@@ -400,3 +400,37 @@ test('a rejected response is logged with the reason it gave', async () => {
   assert.match(detail, /440/, 'the log must carry the status');
   assert.match(detail, /login timeout/, 'the log must carry the reason the host gave');
 });
+
+/**
+ * A host that refuses the login refuses it just as firmly on the ninth attempt.
+ * One page load used to mint the same rejected session a dozen times — slow, and
+ * a good way to turn a refusal into a temporary identity ban.
+ */
+test('a refused login is not retried on every request', async () => {
+  let loginCalls = 0;
+
+  const fakeFetch = async (url) => {
+    if (url.includes('visitor-login')) {
+      loginCalls += 1;
+      return new Response(JSON.stringify({ code: 440, message: 'ServiceNotAvailable', data: null }), {
+        status: 440,
+      });
+    }
+    return new Response('{}', { status: 404 });
+  };
+
+  const client = new VaultClient({ fetchImpl: fakeFetch });
+  const provider = new VaultMediaProvider(client);
+
+  // The section, then the movies and series fallbacks — three entry points that
+  // each need a session.
+  await Promise.allSettled([
+    provider.discovery('all', 24),
+    provider.discovery('all', 24),
+    provider.discovery('all', 24),
+  ]);
+  await provider.discovery('all', 24).catch(() => {});
+
+  assert.ok(loginCalls >= 1, 'the login must be attempted at least once');
+  assert.ok(loginCalls <= 2, `the login must be remembered, but was attempted ${loginCalls} times`);
+});

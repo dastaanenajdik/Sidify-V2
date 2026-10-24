@@ -7,6 +7,20 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
+ * Run this route from Mumbai rather than the default US-East.
+ *
+ * The upstream is an Indian/South-East-Asian service and its hosts answer
+ * `440 ServiceNotAvailable` to callers it will not serve — including the login.
+ * A US datacentre address is the likeliest caller it declines, and the client
+ * identity we present (`sp_code` 40401, an Indian carrier) is an Indian one, so
+ * the request should leave from that region too.
+ *
+ * Only this route is pinned: the rest of the site has no reason to move, and on
+ * a single-region plan this is the smallest change that can be tried.
+ */
+export const preferredRegion = ["bom1"];
+
+/**
  * GET /api/media/exclusive?q=&type=movie|series|all&limit=
  *
  * The exclusive collection on its own: only the titles of the exclusive catalogue
