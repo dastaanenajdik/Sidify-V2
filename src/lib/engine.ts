@@ -277,12 +277,23 @@ function tagSource(tracks: Track[], source: "ytmusic" | "youtube"): Track[] {
 /**
  * Some YouTube Music rows arrive without a runtime (top-result cards, re-arranged
  * shelves). Rather than show "0:00", resolve the missing few through a lightweight
- * `player` call each — bounded, parallel, and never allowed to fail the search.
+ * `player` call each — bounded, parallel, cached, and never allowed to stall search.
  */
 const DURATION_BACKFILL_MAX = 6;
+const DURATION_BACKFILL_TIMEOUT_MS = 1_400;
+const durationCache = new Map<string, number>();
 
 async function backfillDurations(tracks: Track[]): Promise<void> {
-  const missing = tracks.filter((t) => t.videoId && !t.durationMs).slice(0, DURATION_BACKFILL_MAX);
+  const missing: Track[] = [];
+  for (const t of tracks) {
+    if (!t.videoId || t.durationMs) continue;
+    const cached = durationCache.get(t.videoId);
+    if (cached) {
+      t.durationMs = cached;
+      continue;
+    }
+    if (missing.length < DURATION_BACKFILL_MAX) missing.push(t);
+  }
   if (!missing.length) return;
   let yt: YT;
   try {
@@ -292,9 +303,21 @@ async function backfillDurations(tracks: Track[]): Promise<void> {
   }
   await Promise.allSettled(
     missing.map(async (t) => {
-      const info = await yt.getBasicInfo(t.videoId!, { client: "ANDROID" } as any);
+      const info = await withTimeout(
+        yt.getBasicInfo(t.videoId!, { client: "ANDROID" } as any),
+        DURATION_BACKFILL_TIMEOUT_MS,
+        "duration backfill"
+      );
       const secs = Number(info?.basic_info?.duration ?? 0);
-      if (Number.isFinite(secs) && secs > 0) t.durationMs = Math.round(secs * 1000);
+      if (Number.isFinite(secs) && secs > 0) {
+        const ms = Math.round(secs * 1000);
+        t.durationMs = ms;
+        if (durationCache.size > 1000) {
+          const oldest = durationCache.keys().next().value;
+          if (oldest) durationCache.delete(oldest);
+        }
+        durationCache.set(t.videoId!, ms);
+      }
     })
   );
 }
@@ -356,20 +379,84 @@ async function runSearch(query: string, type: SearchKind, limit: number): Promis
   return { tracks, albums: filled.albums.slice(0, 6), artists: filled.artists.slice(0, 6) };
 }
 
-/** Cached, deduplicated search used by every route. */
+const SEARCH_STALE_TTL = 2 * 60 * 60_000;
+const COVER_TTL = 60 * 60_000;
+const coverCache = new Map<string, { at: number; artwork: string; artist: string }>();
+
+function putBounded<K, V>(map: Map<K, V>, key: K, val: V, max = 400) {
+  if (!map.has(key) && map.size >= max) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, val);
+}
+
+/** Cached, deduplicated search with stale-while-revalidate used by every route. */
 export async function ytSearch(query: string, type: SearchKind = "all", limit = 20): Promise<SearchResult> {
   const q = normaliseQuery(query);
   if (!q) return { tracks: [], albums: [], artists: [] };
 
   const key = `s:${q.toLowerCase()}:${type}:${limit}`;
   const hit = searchCache.get(key);
-  if (hit && Date.now() - hit.at < SEARCH_TTL) return hit.data as SearchResult;
+  const now = Date.now();
+  if (hit) {
+    const age = now - hit.at;
+    if (age < SEARCH_TTL) return hit.data as SearchResult;
+    if (age < SEARCH_STALE_TTL) {
+      void dedupe(key, async () => {
+        const fresh = await runSearch(q, type, limit);
+        putBounded(searchCache, key, { at: Date.now(), data: fresh });
+        return fresh;
+      }).catch(() => {});
+      return hit.data as SearchResult;
+    }
+  }
 
   return dedupe(key, async () => {
     const result = await runSearch(q, type, limit);
-    searchCache.set(key, { at: Date.now(), data: result });
+    putBounded(searchCache, key, { at: Date.now(), data: result });
     return result;
   });
+}
+
+/**
+ * Lightweight artwork + artist lookup for Home release cards and Explore mood tiles.
+ * Skips ANDROID `getBasicInfo` duration probes completely since callers never need `durationMs`.
+ */
+export async function ytSearchCoverMeta(query: string): Promise<{ artwork: string; artist: string }> {
+  const q = normaliseQuery(query);
+  if (!q) return { artwork: "", artist: "Various Artists" };
+  const key = `cover:${q.toLowerCase()}`;
+  const hit = coverCache.get(key);
+  const now = Date.now();
+  if (hit && hit.artwork) {
+    if (now - hit.at < COVER_TTL) return { artwork: hit.artwork, artist: hit.artist };
+    void dedupe(key, async () => {
+      const yt = await getYT();
+      const tracks = await resolveTracks(yt, q, 1, true);
+      const next = { artwork: tracks[0]?.artwork || "", artist: tracks[0]?.artist || "Various Artists" };
+      if (next.artwork) putBounded(coverCache, key, { at: Date.now(), ...next }, 300);
+      return next;
+    }).catch(() => {});
+    return { artwork: hit.artwork, artist: hit.artist };
+  }
+
+  try {
+    return await dedupe(key, async () => {
+      const yt = await getYT();
+      const tracks = await resolveTracks(yt, q, 1, true);
+      const next = { artwork: tracks[0]?.artwork || "", artist: tracks[0]?.artist || "Various Artists" };
+      if (next.artwork) putBounded(coverCache, key, { at: Date.now(), ...next }, 300);
+      return next;
+    });
+  } catch {
+    return { artwork: "", artist: "Various Artists" };
+  }
+}
+
+export async function ytSearchCover(query: string): Promise<string> {
+  const meta = await ytSearchCoverMeta(query);
+  return meta.artwork;
 }
 
 /** Convenience wrapper matching the old `ytSearchTracks()` call sites. */

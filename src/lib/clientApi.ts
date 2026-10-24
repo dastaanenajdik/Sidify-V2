@@ -42,17 +42,31 @@ async function j<T>(res: Response): Promise<T> {
 const JSON_HDRS = { "content-type": "application/json" };
 
 /* -------------------------------------------------------------------------- */
-/*  Resilient library transport.                                               */
+/*  Resilient library transport + in-flight GET deduplication.                 */
 /*  `get`/`send` never throw: a 5xx, a missing DATABASE_URL or an offline      */
 /*  device just yields `null`, and the caller keeps the change in the local     */
 /*  library store (src/lib/localLibrary.ts). The server stays the source of     */
 /*  truth whenever it answers, so nothing about the API contract changes.       */
 /* -------------------------------------------------------------------------- */
 
+const inflightJson = new Map<string, Promise<unknown>>();
+
+function fetchJsonDedup<T>(url: string): Promise<T> {
+  const existing = inflightJson.get(url) as Promise<T> | undefined;
+  if (existing) return existing;
+  const req = fetch(url)
+    .then((r) => j<T>(r))
+    .finally(() => {
+      inflightJson.delete(url);
+    });
+  inflightJson.set(url, req);
+  return req;
+}
+
 async function get<T>(path: string): Promise<T | null> {
   if (backendLooksDown()) return null;
   try {
-    const out = await j<T>(await fetch(path));
+    const out = await fetchJsonDedup<T>(path);
     markBackendUp();
     return out;
   } catch {
@@ -76,26 +90,25 @@ async function send<T = { ok: boolean }>(path: string, method: "POST" | "PATCH" 
 }
 
 export const api = {
-  home: (country: string) => fetch(`/api/home?country=${country}`).then((r) => j<HomeData>(r)),
+  home: (country: string) => fetchJsonDedup<HomeData>(`/api/home?country=${encodeURIComponent(country)}`),
 
   search: (q: string, type: string, country: string, limit = 20) =>
-    fetch(`/api/search?q=${encodeURIComponent(q)}&type=${type}&country=${country}&limit=${limit}`).then((r) =>
-      j<SearchResults>(r)
+    fetchJsonDedup<SearchResults>(
+      `/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}&country=${encodeURIComponent(country)}&limit=${limit}`
     ),
 
   /** YouTube Music "Up next" radio for a track — what YTM would play after it. */
   radio: (videoId: string, limit = 12) =>
-    fetch(`/api/radio?video_id=${encodeURIComponent(videoId)}&limit=${limit}`).then((r) =>
-      j<{ tracks: Track[] }>(r)
-    ),
+    fetchJsonDedup<{ tracks: Track[] }>(`/api/radio?video_id=${encodeURIComponent(videoId)}&limit=${limit}`),
 
   /** A cover for every Explore mood / genre tile. */
-  explore: () => fetch("/api/explore").then((r) => j<{ covers: Record<string, string> }>(r)),
+  explore: () => fetchJsonDedup<{ covers: Record<string, string> }>("/api/explore"),
 
   artist: (id: string) =>
-    fetch(`/api/artist/${id}`).then((r) => j<{ artist: Artist; songs: Track[]; albums: Album[] }>(r)),
+    fetchJsonDedup<{ artist: Artist; songs: Track[]; albums: Album[] }>(`/api/artist/${encodeURIComponent(id)}`),
 
-  album: (id: string) => fetch(`/api/album/${id}`).then((r) => j<{ album: Album; tracks: Track[] }>(r)),
+  album: (id: string) =>
+    fetchJsonDedup<{ album: Album; tracks: Track[] }>(`/api/album/${encodeURIComponent(id)}`),
 
   /* --------------------------------- liked --------------------------------- */
   liked: async () => ({ tracks: mergeLiked((await get<{ tracks: Track[] }>("/api/library/liked"))?.tracks ?? []) }),
@@ -122,9 +135,15 @@ export const api = {
     return { ok: true };
   },
 
-  downloads: () => fetch("/api/downloads").then((r) => j<{ downloads: DownloadRow[] }>(r)),
-  removeDownload: (id: string) => fetch(`/api/downloads?id=${id}`, { method: "DELETE" }).then((r) => j<{ ok: boolean }>(r)),
-  clearDownloads: () => fetch("/api/downloads", { method: "DELETE" }).then((r) => j<{ ok: boolean }>(r)),
+  downloads: async () => ({ downloads: (await get<{ downloads: DownloadRow[] }>("/api/downloads"))?.downloads ?? [] }),
+  removeDownload: async (id: string) => {
+    await send(`/api/downloads?id=${encodeURIComponent(id)}`, "DELETE");
+    return { ok: true };
+  },
+  clearDownloads: async () => {
+    await send("/api/downloads", "DELETE");
+    return { ok: true };
+  },
 
   /* -------------------------------- followed -------------------------------- */
   followed: async () => ({
@@ -236,10 +255,7 @@ export async function downloadTrack(
   }
   const blob = new Blob(chunks, { type: "audio/mp4" });
   await idbPut(track.id, blob);
-  await fetch("/api/downloads", {
-    method: "POST",
-    body: JSON.stringify({ track, quality, sizeBytes: blob.size }),
-  });
+  await send("/api/downloads", "POST", { track, quality, sizeBytes: blob.size });
   onProgress?.(100);
   return blob.size;
 }

@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useSettings } from "@/store/settings";
 import { dim, tune, usePalette, type Palette } from "@/lib/palette";
 import { cx } from "@/lib/format";
 
 /**
- * The Now Playing backdrop: four luminous blobs sampled from the artwork,
- * blurred into one mesh. Colours crossfade over ~1.4s on a track change and
- * the blobs drift a little — then come to rest, so a full-screen blur isn't
- * redrawn forever for motion nobody is watching.
+ * The Now Playing backdrop: four luminous radial-gradient blobs sampled from
+ * the artwork and blended into one velvety mesh — diffused natively via smooth
+ * radial gradients so the GPU never has to recompute a giant 90px Gaussian blur.
  */
 
 const ANCHORS: [number, number][] = [
@@ -23,11 +22,10 @@ const SPEEDS = [1, -0.7, 0.85, -1.15];
 const NEUTRAL: Palette = ["#3a3a40", "#2a2a30", "#45454c", "#26262b"];
 const DRIFT = Math.PI * 0.45;
 
-export default function MeshBackdrop({
+function MeshBackdrop({
   artwork,
   palette: given,
   className,
-  blur = 64,
   scrim = true,
   driftKey,
 }: {
@@ -56,12 +54,12 @@ export default function MeshBackdrop({
   }, [driftKey, reduce]);
 
   return (
-    <div className={cx("mesh", className)} style={{ backgroundColor: base, transition: "background-color 1.4s ease", containerType: "size" }}>
-      <div className="mesh-layer" style={{ ["--mesh-blur" as string]: `${blur}px` }}>
+    <div className={cx("mesh", className)} style={{ backgroundColor: base, transition: "background-color 0.9s ease", containerType: "size" }}>
+      <div className="mesh-layer">
         {colors.map((c, i) => {
           const [ax, ay] = ANCHORS[i];
-          const dx = 0.16 * Math.cos(phase * SPEEDS[i] + i * 1.7);
-          const dy = 0.16 * Math.sin(phase * SPEEDS[i] * 0.9 + i * 2.3);
+          const dx = 0.14 * Math.cos(phase * SPEEDS[i] + i * 1.7);
+          const dy = 0.14 * Math.sin(phase * SPEEDS[i] * 0.9 + i * 2.3);
           return (
             <div
               key={i}
@@ -69,16 +67,14 @@ export default function MeshBackdrop({
               style={{
                 left: `${ax * 100}%`,
                 top: `${ay * 100}%`,
-                width: "124cqmax",
-                height: "124cqmax",
-                marginLeft: "-62cqmax",
-                marginTop: "-62cqmax",
-                backgroundColor: c,
-                opacity: 0.85,
-                transform: `translate(${dx * 100}cqw, ${dy * 100}cqh)`,
-                WebkitMaskImage: "radial-gradient(closest-side, #000 0%, rgba(0,0,0,.6) 45%, transparent 100%)",
-                maskImage: "radial-gradient(closest-side, #000 0%, rgba(0,0,0,.6) 45%, transparent 100%)",
-                transition: reduce ? "none" : undefined,
+                width: "136cqmax",
+                height: "136cqmax",
+                marginLeft: "-68cqmax",
+                marginTop: "-68cqmax",
+                background: `radial-gradient(closest-side, ${c} 0%, transparent 100%)`,
+                opacity: 0.78,
+                transform: `translate3d(${dx * 100}cqw, ${dy * 100}cqh, 0)`,
+                transition: reduce ? "none" : "transform 1.1s cubic-bezier(0.22, 1, 0.36, 1)",
               }}
             />
           );
@@ -88,3 +84,6 @@ export default function MeshBackdrop({
     </div>
   );
 }
+
+export default memo(MeshBackdrop);
+

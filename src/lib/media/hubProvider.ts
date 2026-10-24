@@ -41,12 +41,15 @@ export const HUB_PROVIDER_INFO: ProviderInfo = {
 };
 
 const LIST_TTL_MS = 5 * 60 * 1000;
+const LIST_STALE_MS = 60 * 60 * 1000;
 const DETAIL_TTL_MS = 15 * 60 * 1000;
+const DETAIL_STALE_MS = 2 * 60 * 60 * 1000;
 const PAGE_SIZE = 24;
 
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
+  staleUntil: number;
 }
 
 export interface HubProviderDeps {
@@ -61,6 +64,8 @@ export class FourKHDHubMediaProvider implements MediaProvider {
 
   private readonly listCache = new Map<string, CacheEntry<ParsedHubListPage>>();
   private readonly detailCache = new Map<string, CacheEntry<ParsedHubDetail>>();
+  private readonly listInflight = new Map<string, Promise<ParsedHubListPage>>();
+  private readonly detailInflight = new Map<string, Promise<ParsedHubDetail | null>>();
   private readonly deps: HubProviderDeps;
 
   constructor(deps: HubProviderDeps = {}) {
@@ -92,26 +97,95 @@ export class FourKHDHubMediaProvider implements MediaProvider {
     );
   }
 
+  private loadListPageNetwork(url: string): Promise<ParsedHubListPage> {
+    const existing = this.listInflight.get(url);
+    if (existing) return existing;
+
+    const req = (async () => {
+      try {
+        const res = await safeFetchHtml(url, {
+          purpose: "catalogue",
+          timeoutMs: this.deps.timeoutMs,
+          fetchImpl: this.deps.fetchImpl,
+          dnsLookup: this.deps.dnsLookup,
+        });
+        if (res.status === 404) {
+          return { items: [], totalPages: 1 };
+        }
+        const parsed = parseHubSearchHtml(res.text, this.base());
+        const now = Date.now();
+        if (!this.listCache.has(url) && this.listCache.size >= 200) {
+          const oldest = this.listCache.keys().next().value;
+          if (oldest) this.listCache.delete(oldest);
+        }
+        this.listCache.set(url, {
+          value: parsed,
+          expiresAt: now + LIST_TTL_MS,
+          staleUntil: now + LIST_STALE_MS,
+        });
+        return parsed;
+      } catch (error) {
+        throw this.toProviderError(error);
+      } finally {
+        this.listInflight.delete(url);
+      }
+    })();
+
+    this.listInflight.set(url, req);
+    return req;
+  }
+
   private async fetchListPage(url: string): Promise<ParsedHubListPage> {
     const hit = this.listCache.get(url);
-    if (hit && hit.expiresAt > Date.now()) return hit.value;
-
-    try {
-      const res = await safeFetchHtml(url, {
-        purpose: "catalogue",
-        timeoutMs: this.deps.timeoutMs,
-        fetchImpl: this.deps.fetchImpl,
-        dnsLookup: this.deps.dnsLookup,
-      });
-      if (res.status === 404) {
-        return { items: [], totalPages: 1 };
+    const now = Date.now();
+    if (hit) {
+      if (hit.expiresAt > now) return hit.value;
+      if (hit.staleUntil > now) {
+        void this.loadListPageNetwork(url).catch(() => {});
+        return hit.value;
       }
-      const parsed = parseHubSearchHtml(res.text, this.base());
-      this.listCache.set(url, { value: parsed, expiresAt: Date.now() + LIST_TTL_MS });
-      return parsed;
-    } catch (error) {
-      throw this.toProviderError(error);
     }
+    return this.loadListPageNetwork(url);
+  }
+
+  private loadDetailNetwork(pageUrl: string): Promise<ParsedHubDetail | null> {
+    const existing = this.detailInflight.get(pageUrl);
+    if (existing) return existing;
+
+    const req = (async () => {
+      try {
+        const res = await safeFetchHtml(pageUrl, {
+          purpose: "catalogue",
+          referer: `${this.base()}/`,
+          timeoutMs: this.deps.timeoutMs,
+          fetchImpl: this.deps.fetchImpl,
+          dnsLookup: this.deps.dnsLookup,
+        });
+        if (res.status === 404) return null;
+
+        const parsed = parseHubDetailHtml(res.text, res.url || pageUrl, this.base());
+        if (!parsed) return null;
+
+        const now = Date.now();
+        if (!this.detailCache.has(pageUrl) && this.detailCache.size >= 300) {
+          const oldest = this.detailCache.keys().next().value;
+          if (oldest) this.detailCache.delete(oldest);
+        }
+        this.detailCache.set(pageUrl, {
+          value: parsed,
+          expiresAt: now + DETAIL_TTL_MS,
+          staleUntil: now + DETAIL_STALE_MS,
+        });
+        return parsed;
+      } catch (error) {
+        throw this.toProviderError(error);
+      } finally {
+        this.detailInflight.delete(pageUrl);
+      }
+    })();
+
+    this.detailInflight.set(pageUrl, req);
+    return req;
   }
 
   private async fetchDetail(slug: string): Promise<ParsedHubDetail | null> {
@@ -119,26 +193,15 @@ export class FourKHDHubMediaProvider implements MediaProvider {
     if (!pageUrl) return null;
 
     const hit = this.detailCache.get(pageUrl);
-    if (hit && hit.expiresAt > Date.now()) return hit.value;
-
-    try {
-      const res = await safeFetchHtml(pageUrl, {
-        purpose: "catalogue",
-        referer: `${this.base()}/`,
-        timeoutMs: this.deps.timeoutMs,
-        fetchImpl: this.deps.fetchImpl,
-        dnsLookup: this.deps.dnsLookup,
-      });
-      if (res.status === 404) return null;
-
-      const parsed = parseHubDetailHtml(res.text, res.url || pageUrl, this.base());
-      if (!parsed) return null;
-
-      this.detailCache.set(pageUrl, { value: parsed, expiresAt: Date.now() + DETAIL_TTL_MS });
-      return parsed;
-    } catch (error) {
-      throw this.toProviderError(error);
+    const now = Date.now();
+    if (hit) {
+      if (hit.expiresAt > now) return hit.value;
+      if (hit.staleUntil > now) {
+        void this.loadDetailNetwork(pageUrl).catch(() => {});
+        return hit.value;
+      }
     }
+    return this.loadDetailNetwork(pageUrl);
   }
 
   /* ------------------------------ discovery ------------------------------ */

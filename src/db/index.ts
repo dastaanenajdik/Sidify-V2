@@ -21,13 +21,18 @@ const globalForDb = globalThis as typeof globalThis & {
 };
 
 function requireDatabaseUrl(): string {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = process.env.DATABASE_URL?.trim();
 
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required");
   }
 
   return databaseUrl;
+}
+
+/** Fast check so routes can short-circuit cleanly when running local-first without Postgres. */
+export function hasDatabaseUrl(): boolean {
+  return Boolean(process.env.DATABASE_URL?.trim());
 }
 
 let poolInstance: Pool | null = null;
@@ -40,7 +45,15 @@ export function getPool(): Pool {
   if (hotReloadPool) return hotReloadPool;
   if (poolInstance) return poolInstance;
 
-  const created = new Pool({ connectionString: requireDatabaseUrl() });
+  const created = new Pool({
+    connectionString: requireDatabaseUrl(),
+    max: 6,
+    connectionTimeoutMillis: 2_500,
+    idleTimeoutMillis: 30_000,
+  });
+  created.on("error", () => {
+    /* keep idle pool errors from crashing the process */
+  });
 
   if (process.env.NODE_ENV !== "production") {
     globalForDb.__arenaNextJsPostgresqlPool = created;

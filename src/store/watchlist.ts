@@ -28,6 +28,7 @@ export interface WatchlistEntry {
 
 interface WatchlistState {
   items: WatchlistEntry[];
+  savedMap: Record<string, true>;
   isSaved: (kind: MediaKind, slug: string) => boolean;
   /** Adds or removes the title and returns its new saved state. */
   toggle: (title: MediaTitle) => boolean;
@@ -36,6 +37,12 @@ interface WatchlistState {
 }
 
 const keyOf = (kind: MediaKind, slug: string) => `${kind}:${slug}`;
+
+const toSavedMap = (items: WatchlistEntry[]): Record<string, true> => {
+  const out: Record<string, true> = {};
+  for (const item of items) out[item.id] = true;
+  return out;
+};
 
 const entryOf = (title: MediaTitle): WatchlistEntry => ({
   id: keyOf(title.kind, title.slug),
@@ -53,22 +60,31 @@ export const useWatchlist = create<WatchlistState>()(
   persist(
     (set, get) => ({
       items: [],
-      isSaved: (kind, slug) => get().items.some((item) => item.id === keyOf(kind, slug)),
+      savedMap: {},
+      isSaved: (kind, slug) => Boolean(get().savedMap[keyOf(kind, slug)]),
       toggle: (title) => {
         const id = keyOf(title.kind, title.slug);
-        const saved = get().items.some((item) => item.id === id);
-        set({
-          items: saved ? get().items.filter((item) => item.id !== id) : [entryOf(title), ...get().items].slice(0, 500),
-        });
+        const saved = Boolean(get().savedMap[id]);
+        const nextItems = saved ? get().items.filter((item) => item.id !== id) : [entryOf(title), ...get().items].slice(0, 500);
+        set({ items: nextItems, savedMap: toSavedMap(nextItems) });
         return !saved;
       },
-      remove: (kind, slug) => set({ items: get().items.filter((item) => item.id !== keyOf(kind, slug)) }),
-      clear: () => set({ items: [] }),
+      remove: (kind, slug) => {
+        const nextItems = get().items.filter((item) => item.id !== keyOf(kind, slug));
+        set({ items: nextItems, savedMap: toSavedMap(nextItems) });
+      },
+      clear: () => set({ items: [], savedMap: {} }),
     }),
     {
       name: "sidify-watchlist",
       skipHydration: true,
       partialize: (state) => ({ items: state.items }),
+      merge: (persisted, current) => {
+        const items = Array.isArray((persisted as { items?: WatchlistEntry[] } | undefined)?.items)
+          ? (persisted as { items: WatchlistEntry[] }).items
+          : current.items;
+        return { ...current, items, savedMap: toSavedMap(items) };
+      },
     }
   )
 );

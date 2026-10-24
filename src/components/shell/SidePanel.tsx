@@ -24,14 +24,14 @@ export default function SidePanel() {
       {panel && (
         <motion.aside
           key="side"
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: 360, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
-          transition={{ duration: 0.26, ease: [0.4, 0, 0.2, 1] }}
-          className="relative hidden h-full shrink-0 overflow-hidden shadow-[inset_0.5px_0_0_var(--hairline)] desk:block"
+          initial={{ x: 18, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: 18, opacity: 0 }}
+          transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+          className="relative hidden h-full w-[320px] xl:w-[360px] shrink-0 overflow-hidden shadow-[inset_0.5px_0_0_var(--hairline)] desk:block"
           aria-label={panel === "lyrics" ? "Lyrics" : "Queue"}
         >
-          <div className="absolute inset-y-0 left-0 flex w-[360px] flex-col">
+          <div className="flex h-full w-full flex-col">
             {panel === "lyrics" && track && dynamic ? (
               <div className="absolute inset-0 opacity-90">
                 <MeshBackdrop artwork={track.artwork} driftKey={track.id} blur={48} />

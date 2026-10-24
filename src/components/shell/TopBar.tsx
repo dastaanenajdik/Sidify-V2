@@ -8,7 +8,7 @@ import { usePlayer, currentTrack } from "@/store/player";
 import { useUi } from "@/store/ui";
 import { useSettings } from "@/store/settings";
 import { next, prev, seekTo, setVolume, togglePlay } from "@/lib/audioEngine";
-import { useLiked } from "@/lib/library";
+import { useToggleLike } from "@/lib/library";
 import { useRoomSummary } from "@/lib/rooms/client";
 import { cx, formatTime } from "@/lib/format";
 import { LogoMark } from "../Logo";
@@ -144,20 +144,62 @@ function VolumeControl() {
       >
         <Icon size={16} />
       </IconButton>
-      <Range label="Volume" value={Math.round(volume * 100)} onChange={(v) => setVolume(v / 100)} className="w-[92px]" />
+      <Range label="Volume" value={Math.round(volume * 100)} onChange={(v) => setVolume(v / 100)} className="w-[68px] xl:w-[92px]" />
     </div>
+  );
+}
+
+/** Isolated progress & scrubber leaf so playback ticks never re-render Lcd artwork/buttons. */
+function LcdProgress({ fallbackDurationMs }: { fallbackDurationMs: number }) {
+  const positionMs = usePlayer((s) => s.positionMs);
+  const durationMs = usePlayer((s) => s.durationMs || fallbackDurationMs || 0);
+  const isLoading = usePlayer((s) => s.isLoading);
+  const [scrub, setScrub] = useState<number | null>(null);
+
+  const pos = scrub ?? positionMs;
+  const ratio = durationMs > 0 ? Math.min(1, Math.max(0, pos / durationMs)) : 0;
+
+  return (
+    <>
+      <span className="pointer-events-none absolute bottom-[5px] left-[54px] text-[10px] text-fg-2 tabular-nums opacity-0 transition-opacity group-hover/lcd:opacity-100">
+        {formatTime(pos)}
+      </span>
+      <span className="pointer-events-none absolute right-2 bottom-[5px] text-[10px] text-fg-2 tabular-nums opacity-0 transition-opacity group-hover/lcd:opacity-100">
+        -{formatTime(Math.max(0, durationMs - pos))}
+      </span>
+      <div className="absolute right-0 bottom-0 left-[46px] h-[2px] overflow-hidden bg-fill-2">
+        <div
+          className={cx("h-full w-full origin-left bg-fg-2", isLoading && "animate-pulse")}
+          style={{ transform: `scaleX(${ratio.toFixed(4)})` }}
+        />
+      </div>
+      <input
+        type="range"
+        aria-label="Seek"
+        min={0}
+        max={Math.max(1, durationMs)}
+        step={1000}
+        value={Math.min(pos, durationMs)}
+        onChange={(e) => setScrub(Number(e.target.value))}
+        onPointerUp={(e) => {
+          seekTo(Number((e.target as HTMLInputElement).value));
+          setScrub(null);
+        }}
+        onKeyUp={(e) => {
+          seekTo(Number((e.target as HTMLInputElement).value));
+          setScrub(null);
+        }}
+        className="absolute right-0 bottom-[-6px] left-[46px] h-3 cursor-pointer opacity-0"
+      />
+    </>
   );
 }
 
 function Lcd() {
   const track = usePlayer((s) => currentTrack(s));
-  const positionMs = usePlayer((s) => s.positionMs);
-  const durationMs = usePlayer((s) => s.durationMs || currentTrack(s)?.durationMs || 0);
-  const isLoading = usePlayer((s) => s.isLoading);
   const liked = usePlayer((s) => !!(track && s.likedIds[track.id]));
   const contextLabel = usePlayer((s) => s.contextLabel);
-  const { toggle } = useLiked();
-  const [scrub, setScrub] = useState<number | null>(null);
+  const toggle = useToggleLike();
 
   if (!track) {
     return (
@@ -168,8 +210,6 @@ function Lcd() {
     );
   }
 
-  const pos = scrub ?? positionMs;
-  const pct = durationMs ? Math.min(100, (pos / durationMs) * 100) : 0;
   const open = () => usePlayer.getState().set({ fullPlayerOpen: true });
 
   return (
@@ -203,39 +243,7 @@ function Lcd() {
         </IconButton>
       </div>
 
-      {/* times, on hover */}
-      <span className="pointer-events-none absolute bottom-[5px] left-[54px] text-[10px] text-fg-2 tabular-nums opacity-0 transition-opacity group-hover/lcd:opacity-100">
-        {formatTime(pos)}
-      </span>
-      <span className="pointer-events-none absolute right-2 bottom-[5px] text-[10px] text-fg-2 tabular-nums opacity-0 transition-opacity group-hover/lcd:opacity-100">
-        -{formatTime(Math.max(0, durationMs - pos))}
-      </span>
-
-      {/* progress hairline + invisible scrubber */}
-      <div className="absolute right-0 bottom-0 left-[46px] h-[2px] bg-fill-2">
-        <div
-          className={cx("h-full bg-fg-2 transition-[width] duration-200 ease-linear", isLoading && "animate-pulse")}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <input
-        type="range"
-        aria-label="Seek"
-        min={0}
-        max={Math.max(1, durationMs)}
-        step={1000}
-        value={Math.min(pos, durationMs)}
-        onChange={(e) => setScrub(Number(e.target.value))}
-        onPointerUp={(e) => {
-          seekTo(Number((e.target as HTMLInputElement).value));
-          setScrub(null);
-        }}
-        onKeyUp={(e) => {
-          seekTo(Number((e.target as HTMLInputElement).value));
-          setScrub(null);
-        }}
-        className="absolute right-0 bottom-[-6px] left-[46px] h-3 cursor-pointer opacity-0"
-      />
+      <LcdProgress fallbackDurationMs={track.durationMs || 0} />
     </div>
   );
 }

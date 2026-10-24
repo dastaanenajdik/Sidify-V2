@@ -952,9 +952,16 @@ function tickListen() {
 }
 
 export function startLoop() {
-  if (rafId) return;
   startWatchdog();
+  if (rafId) return;
+  if (!P().isPlaying && !fading) return;
+
   const loop = () => {
+    const curState = P();
+    if (!curState.isPlaying && !fading) {
+      rafId = 0;
+      return;
+    }
     rafId = requestAnimationFrame(loop);
     const now = performance.now();
 
@@ -962,12 +969,15 @@ export function startLoop() {
       if (now - lastTick > 240) {
         lastTick = now;
         tickListen();
-        const t = ytController.getTime();
+        const nextPos = ytController.getTime() * 1000;
         const dur = ytController.getDuration();
-        P().set({
-          positionMs: t * 1000,
-          ...(dur ? { durationMs: dur * 1000 } : {}),
-        });
+        const nextDur = dur ? dur * 1000 : curState.durationMs;
+        if (Math.abs(nextPos - curState.positionMs) >= 40 || Math.abs(nextDur - curState.durationMs) >= 100) {
+          P().set({
+            positionMs: nextPos,
+            ...(dur ? { durationMs: nextDur } : {}),
+          });
+        }
       }
       return;
     }
@@ -980,19 +990,22 @@ export function startLoop() {
     if (now - lastTick > 220) {
       lastTick = now;
       tickListen();
-      P().set({ positionMs: t * 1000, durationMs: dur ? dur * 1000 : P().durationMs });
+      const nextPos = t * 1000;
+      const nextDur = dur ? dur * 1000 : curState.durationMs;
+      if (Math.abs(nextPos - curState.positionMs) >= 40 || Math.abs(nextDur - curState.durationMs) >= 100) {
+        P().set({ positionMs: nextPos, durationMs: nextDur });
+      }
     }
     // In a room the room decides what comes next — no local crossfade or preloading.
     if (roomBridge()) return;
     const { crossfadeSecs, gapless } = S();
-    const s = P();
     const remaining = dur - t;
     if (
       crossfadeSecs > 0 &&
       !fading &&
       remaining > 0.5 &&
       remaining <= crossfadeSecs &&
-      s.repeat !== "one" &&
+      curState.repeat !== "one" &&
       deck.el.playbackRate > 0
     ) {
       void startCrossfade(Math.min(crossfadeSecs, Math.max(1.2, remaining)));
@@ -1338,6 +1351,7 @@ export function initEngine() {
   useSettings.subscribe(applySettings);
   usePlayer.subscribe((state, prevState) => {
     if (state.volume !== prevState.volume || state.speed !== prevState.speed) applySettings();
+    if (state.isPlaying && !prevState.isPlaying) startLoop();
   });
   window.addEventListener("beforeunload", () => {
     saveSession();

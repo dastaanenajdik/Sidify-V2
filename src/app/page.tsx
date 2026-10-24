@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, Settings } from "lucide-react";
 import { api } from "@/lib/clientApi";
+import { mergeRecent } from "@/lib/localLibrary";
 import { playContext, startRadio } from "@/lib/audioEngine";
 import { useLiked } from "@/lib/library";
 import { useSettings } from "@/store/settings";
@@ -24,7 +25,12 @@ export default function HomePage() {
   const name = useSettings((s) => s.profileName);
   const ef = useSettings((s) => s.explicitFilter);
   const home = useQuery({ queryKey: ["home", region], queryFn: () => api.home(region), staleTime: 5 * 60_000 });
-  const recentQ = useQuery({ queryKey: ["recent"], queryFn: api.recent, staleTime: 30_000 });
+  const recentQ = useQuery({
+    queryKey: ["recent"],
+    queryFn: api.recent,
+    staleTime: 60_000,
+    placeholderData: () => ({ tracks: mergeRecent([]) }),
+  });
   const { data: likedData } = useLiked();
   const playing = usePlayer((s) => currentTrack(s));
 

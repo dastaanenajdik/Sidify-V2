@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
@@ -8,14 +9,16 @@ import { usePlayer } from "@/store/player";
 import { useWatchlist } from "@/store/watchlist";
 import { initEngine, restoreSession, togglePlay, next, prev, applySettings } from "@/lib/audioEngine";
 import { useLiked, useDownloads, useBlocked } from "@/lib/library";
+import { likedTracksLocal } from "@/lib/localLibrary";
 import { resumeRoom, useRoom } from "@/lib/rooms/client";
 import { registerServiceWorker, armNextAutoReload } from "@/lib/pwa";
-import NameGate from "./NameGate";
-import NowPlaying from "./player/NowPlaying";
 import BackGuard from "./BackGuard";
-import TrackMenu from "./TrackMenu";
 import Toasts from "./Toasts";
-import { GlobalModals } from "./Overlays";
+
+const NameGate = dynamic(() => import("./NameGate"), { ssr: false });
+const NowPlaying = dynamic(() => import("./player/NowPlaying"), { ssr: false });
+const TrackMenu = dynamic(() => import("./TrackMenu"), { ssr: false });
+const GlobalModals = dynamic(() => import("./Overlays").then((m) => m.GlobalModals), { ssr: false });
 
 /**
  * Persisted stores load from localStorage here, right after hydration, so the
@@ -28,6 +31,13 @@ function StoreHydration() {
     void usePlayer.persist.rehydrate();
     void useRoom.persist.rehydrate();
     void useWatchlist.persist.rehydrate();
+    // Seed liked hearts synchronously from localStorage so heart icons never wait on a network fetch.
+    const localLiked = likedTracksLocal();
+    if (localLiked.length) {
+      usePlayer.getState().set({
+        likedIds: Object.fromEntries(localLiked.map((t) => [t.id, true])),
+      });
+    }
   }, []);
   return null;
 }
@@ -151,12 +161,64 @@ function DataSync() {
   return null;
 }
 
+/** Lazily mounts heavy overlay trees on first demand, while warming chunks at idle. */
+function DeferredOverlays() {
+  const fullPlayerOpen = usePlayer((s) => s.fullPlayerOpen);
+  const hasMenu = useUi((s) => s.menu !== null);
+  const hasModal = useUi(
+    (s) =>
+      Boolean(
+        s.addToPlaylistTrack ||
+          s.createPlaylistOpen ||
+          s.sleepMenuOpen ||
+          s.statsOpen ||
+          s.lyricsShare
+      )
+  );
+
+  const [npMounted, setNpMounted] = useState(false);
+  const [menuMounted, setMenuMounted] = useState(false);
+  const [modalsMounted, setModalsMounted] = useState(false);
+
+  if (fullPlayerOpen && !npMounted) setNpMounted(true);
+  if (hasMenu && !menuMounted) setMenuMounted(true);
+  if (hasModal && !modalsMounted) setModalsMounted(true);
+
+  useEffect(() => {
+    const warm = () => {
+      void import("./player/NowPlaying");
+      void import("./TrackMenu");
+    };
+    const ric = (window as unknown as { requestIdleCallback?: (fn: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+    const cancelRic = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+    if (ric) {
+      const id = ric(warm, { timeout: 2500 });
+      return () => cancelRic?.(id);
+    }
+    const timer = window.setTimeout(warm, 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <>
+      {npMounted && <NowPlaying />}
+      {menuMounted && <TrackMenu />}
+      {modalsMounted && <GlobalModals />}
+    </>
+  );
+}
+
 export default function Providers({ children }: { children: ReactNode }) {
   const [client] = useState(
     () =>
       new QueryClient({
         defaultOptions: {
-          queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 30_000 },
+          queries: {
+            retry: 1,
+            refetchOnWindowFocus: false,
+            staleTime: 2 * 60_000,
+            gcTime: 15 * 60_000,
+          },
         },
       })
   );
@@ -170,10 +232,8 @@ export default function Providers({ children }: { children: ReactNode }) {
       <DataSync />
       {children}
       <NameGate />
-      <NowPlaying />
+      <DeferredOverlays />
       <BackGuard />
-      <TrackMenu />
-      <GlobalModals />
       <Toasts />
     </QueryClientProvider>
   );

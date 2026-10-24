@@ -68,28 +68,44 @@ function readLines(value: unknown): LyricLine[] {
 }
 
 const LOADING: LyricsLookupState = { ...IDLE, loading: true, started: true };
+const lyricsMemoryCache = new Map<string, LyricsLookupState>();
+
+function lyricsCacheKey(title: string, artist: string): string {
+  return `${title.trim().toLowerCase()}::${artist.trim().toLowerCase()}`;
+}
 
 export function useLyricsLookup(initialTitle: string, initialArtist: string, durationMs = 0) {
   const [lookup, setLookup] = useState<LyricsLookup>({ title: initialTitle, artist: initialArtist, attempt: 0, durationMs });
-  // A panel that mounts with a track is already fetching; a finder with an empty
-  // title stays idle so its empty state is shown instead of a spinner.
-  const [state, setState] = useState<LyricsLookupState>(initialTitle.trim() ? LOADING : IDLE);
+  // Serve cached lyrics immediately on tab switch without flashing a loading state.
+  const [state, setState] = useState<LyricsLookupState>(() => {
+    const clean = initialTitle.trim();
+    if (!clean) return IDLE;
+    return lyricsMemoryCache.get(lyricsCacheKey(clean, initialArtist)) ?? LOADING;
+  });
 
   /** Start a new search (used by the manual "wrong match?" form and Retry). */
   const search = useCallback((title: string, artist: string) => {
-    setState(title.trim() ? LOADING : IDLE);
-    setLookup((value) => ({ title: title.trim(), artist: artist.trim(), attempt: value.attempt + 1, durationMs: value.durationMs }));
+    const clean = title.trim();
+    const cached = clean ? lyricsMemoryCache.get(lyricsCacheKey(clean, artist)) : null;
+    setState(clean ? (cached ?? LOADING) : IDLE);
+    setLookup((value) => ({ title: clean, artist: artist.trim(), attempt: value.attempt + 1, durationMs: value.durationMs }));
   }, []);
 
   const retry = useCallback(() => {
+    lyricsMemoryCache.delete(lyricsCacheKey(lookup.title, lookup.artist));
     setState(LOADING);
     setLookup((value) => ({ ...value, attempt: value.attempt + 1 }));
-  }, []);
+  }, [lookup.title, lookup.artist]);
 
   useEffect(() => {
-    if (!lookup.title.trim()) return;
+    const cleanTitle = lookup.title.trim();
+    if (!cleanTitle) return;
+    const key = lyricsCacheKey(cleanTitle, lookup.artist);
+    const cached = lyricsMemoryCache.get(key);
+    if (cached && lookup.attempt === 0) return;
+
     const controller = new AbortController();
-    const params = new URLSearchParams({ title: lookup.title, artist: lookup.artist });
+    const params = new URLSearchParams({ title: cleanTitle, artist: lookup.artist });
     if (lookup.durationMs > 0) params.set("duration", String(lookup.durationMs / 1000));
 
     fetch(`/api/lyrics?${params}`, { signal: controller.signal })
@@ -104,7 +120,7 @@ export function useLyricsLookup(initialTitle: string, initialArtist: string, dur
         };
         if (!response.ok || !data.success) throw new Error(data.message || "Unable to load lyrics. Please retry.");
         if (controller.signal.aborted) return;
-        setState({
+        const resolved: LyricsLookupState = {
           loading: false,
           started: true,
           lyrics: data.lyrics || "",
@@ -112,7 +128,13 @@ export function useLyricsLookup(initialTitle: string, initialArtist: string, dur
           source: data.source || "",
           instrumental: !!data.instrumental,
           message: "",
-        });
+        };
+        if (lyricsMemoryCache.size > 80) {
+          const oldest = lyricsMemoryCache.keys().next().value;
+          if (oldest) lyricsMemoryCache.delete(oldest);
+        }
+        lyricsMemoryCache.set(key, resolved);
+        setState(resolved);
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;

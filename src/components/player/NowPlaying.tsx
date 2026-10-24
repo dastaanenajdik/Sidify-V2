@@ -109,7 +109,7 @@ function Sheet({ track }: { track: Track }) {
           </div>
         </div>
 
-        <div className={cx("flex min-h-0 flex-1 gap-10 px-[30px] pb-4 desk:px-12 desk:pb-8", showSide ? "desk:flex-row" : "flex-col items-center")}>
+        <div className={cx("flex min-h-0 flex-1 gap-6 sm:gap-10 px-5 sm:px-[30px] pb-4 desk:px-12 desk:pb-8", showSide ? "desk:flex-row" : "flex-col items-center")}>
           {/* main column */}
           <div className={cx("mx-auto flex min-h-0 w-full max-w-[560px] flex-1 flex-col", showSide && "desk:mx-0 desk:max-w-[460px] desk:flex-none desk:basis-[440px]")}>
             {/* art / lyrics / queue area (phones swap; wide screens keep the art) */}

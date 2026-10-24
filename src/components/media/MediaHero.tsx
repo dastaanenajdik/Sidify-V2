@@ -1,14 +1,16 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Bookmark, Check, Info, Play, Star } from "lucide-react";
 import { mediaArt } from "@/lib/media/art";
 import { mediaHref } from "./PosterCard";
-import { TrailerSheet } from "./TrailerSheet";
 import type { MediaTitle } from "@/lib/media/types";
 import { useWatchlist } from "@/store/watchlist";
 import { cx } from "@/lib/format";
+
+const TrailerSheet = dynamic(() => import("./TrailerSheet").then((m) => m.TrailerSheet), { ssr: false });
 
 /**
  * The featured title at the top of /movies and /series: full-bleed backdrop, a scrim
@@ -17,7 +19,8 @@ import { cx } from "@/lib/format";
 export function MediaHero({ title }: { title: MediaTitle }) {
   const [trailerOpen, setTrailerOpen] = useState(false);
   const [backdropBroken, setBackdropBroken] = useState(false);
-  const saved = useWatchlist((s) => s.items.some((item) => item.id === `${title.kind}:${title.slug}`));
+  const watchKey = `${title.kind}:${title.slug}`;
+  const saved = useWatchlist((s) => Boolean(s.savedMap[watchKey]));
   const toggle = useWatchlist((s) => s.toggle);
 
   const backdrop = backdropBroken
@@ -33,7 +36,7 @@ export function MediaHero({ title }: { title: MediaTitle }) {
 
   return (
     <header className="relative isolate overflow-hidden">
-      <div className="relative h-[430px] w-full desk:h-[470px]">
+      <div className="relative min-h-[390px] h-[420px] sm:h-[440px] w-full desk:h-[470px]">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={backdrop}
@@ -86,7 +89,7 @@ export function MediaHero({ title }: { title: MediaTitle }) {
               {title.overview}
             </p>
 
-            <div className="mt-5 flex items-center gap-2.5">
+            <div className="mt-5 flex flex-wrap items-center gap-2.5">
               <Link
                 href={mediaHref(title)}
                 className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[15px] font-semibold text-black transition-transform active:scale-[0.97] hover:opacity-90"
@@ -120,7 +123,9 @@ export function MediaHero({ title }: { title: MediaTitle }) {
         </div>
       </div>
 
-      <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={title.title} />
+      {trailerOpen && (
+        <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={title.title} />
+      )}
     </header>
   );
 }

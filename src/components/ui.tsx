@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useRef, useState, type ReactNode } from "react";
+import { forwardRef, memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Music2, X } from "lucide-react";
@@ -10,7 +10,7 @@ import { art, cx } from "@/lib/format";
 /*  Artwork                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export function Artwork({
+export const Artwork = memo(function Artwork({
   src,
   size = 300,
   alt = "",
@@ -47,7 +47,7 @@ export function Artwork({
       className={cx("bg-raised object-cover", round ? "rounded-full" : rounded, className)}
     />
   );
-}
+});
 
 /* -------------------------------------------------------------------------- */
 /*  Buttons                                                                    */
@@ -423,7 +423,7 @@ export function SectionHeader({
     </span>
   );
   return (
-    <div className={cx("mb-3 flex items-end justify-between gap-3 px-4 desk:px-8", className)}>
+    <div className={cx("mb-3 flex flex-wrap items-end justify-between gap-x-3 gap-y-2 px-4 desk:px-8", className)}>
       <div className="min-w-0">
         {subtitle && <div className="mb-0.5 text-[13px] font-medium text-fg-2">{subtitle}</div>}
         {href ? (
@@ -449,22 +449,38 @@ export function SectionHeader({
  */
 export function Shelf({ children, className, gap = 14 }: { children: ReactNode; className?: string; gap?: number }) {
   const ref = useRef<HTMLDivElement>(null);
+  const rafRef = useRef(0);
   const [edges, setEdges] = useState({ start: true, end: false });
 
-  const measure = () => {
+  const measure = useCallback(() => {
     const el = ref.current;
     if (!el) return;
-    setEdges({ start: el.scrollLeft < 8, end: el.scrollLeft + el.clientWidth > el.scrollWidth - 8 });
-  };
+    const start = el.scrollLeft < 8;
+    const end = el.scrollLeft + el.clientWidth > el.scrollWidth - 8;
+    setEdges((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+  }, []);
+
+  const scheduleMeasure = useCallback(() => {
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      measure();
+    });
+  }, [measure]);
 
   useEffect(() => {
     measure();
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(scheduleMeasure);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    el.addEventListener("scroll", scheduleMeasure, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", scheduleMeasure);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [measure, scheduleMeasure]);
 
   const page = (dir: 1 | -1) => {
     const el = ref.current;
@@ -476,7 +492,6 @@ export function Shelf({ children, className, gap = 14 }: { children: ReactNode; 
     <div className={cx("group/shelf relative", className)}>
       <div
         ref={ref}
-        onScroll={measure}
         className="no-scrollbar flex snap-x snap-mandatory scroll-px-4 overflow-x-auto px-4 pb-1 desk:scroll-px-8 desk:px-8"
         style={{ gap }}
       >
@@ -575,15 +590,15 @@ export function GroupRow({
   const body = (
     <>
       {icon && <span className={cx("grid h-7 w-7 shrink-0 place-items-center rounded-[7px]", danger ? "text-danger" : "text-fg")}>{icon}</span>}
-      <span className="min-w-0 flex-1 py-3">
+      <span className="min-w-[140px] flex-1 py-3">
         <span className={cx("block text-[15px] leading-snug", danger && "text-danger")}>{title}</span>
         {subtitle && <span className="mt-0.5 block text-[12.5px] leading-snug text-fg-2">{subtitle}</span>}
       </span>
-      {trailing && <span className="flex shrink-0 items-center gap-2">{trailing}</span>}
+      {trailing && <span className="flex max-w-full shrink-0 items-center gap-2 py-2">{trailing}</span>}
       {chevron && <ChevronRight size={18} className="shrink-0 text-fg-3" />}
     </>
   );
-  const cls = "flex min-h-[52px] w-full items-center gap-3 px-4 text-left";
+  const cls = "flex min-h-[52px] w-full flex-wrap items-center gap-x-3 gap-y-0.5 px-4 text-left";
   if (href)
     return (
       <Link href={href} className={cx(cls, "transition-colors hover:bg-fill")}>

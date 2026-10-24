@@ -213,7 +213,7 @@ function Browse({ kind }: { kind: MediaKind }) {
             />
             <MediaGrid>
               {items.map((item, index) => (
-                <PosterCard key={`${item.kind}-${item.id}`} title={item} eager={index < 6} />
+                <PosterCard key={`${item.kind}-${item.id}`} title={item} eager={index < 6} className="cv-card" />
               ))}
             </MediaGrid>
 

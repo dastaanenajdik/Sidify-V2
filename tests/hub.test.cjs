@@ -664,3 +664,41 @@ test('hlsPlayer uses native Apple HLS on Safari, hls.js MSE fallback on Chromium
   assert.ok(unsupportedMessage && /MediaSource Extensions/i.test(unsupportedMessage));
 });
 
+test('FourKHDHubMediaProvider deduplicates concurrent in-flight list and detail scrapes', async () => {
+  let listHits = 0;
+  let detailHits = 0;
+
+  const provider = new ProviderMod.FourKHDHubMediaProvider({
+    baseUrl: 'https://4khdhub.one',
+    dnsLookup: PUBLIC_DNS,
+    fetchImpl: async (url) => {
+      await new Promise((r) => setTimeout(r, 15));
+      if (url.endsWith('/moana-movie-8014/')) {
+        detailHits += 1;
+        return htmlResponse(MOVIE_DETAIL_FIXTURE);
+      }
+      listHits += 1;
+      return htmlResponse(SEARCH_FIXTURE);
+    },
+  });
+
+  const [browsePage, trending, releases] = await Promise.all([
+    provider.browse('movie', { page: 1 }),
+    provider.getTrendingMovies(12),
+    provider.getNewMovieReleases(12),
+  ]);
+  assert.equal(listHits, 1, 'concurrent page-1 browse + trending + releases must share 1 upstream fetch');
+  assert.ok(browsePage.items.length > 0);
+  assert.ok(trending.length > 0);
+  assert.ok(releases.length > 0);
+
+  const [d1, d2] = await Promise.all([
+    provider.getMovieDetails('hub-moana-movie-8014'),
+    provider.getMovieDetails('hub-moana-movie-8014'),
+  ]);
+  assert.equal(detailHits, 1, 'concurrent detail calls (generateMetadata + page) must share 1 upstream fetch');
+  assert.equal(d1?.title.title, 'Moana');
+  assert.equal(d2?.title.title, 'Moana');
+});
+
+

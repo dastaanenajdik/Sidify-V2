@@ -1,29 +1,28 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Languages, Minus, Plus, Search, Share, Timer } from "lucide-react";
 import type { Track } from "@/lib/types";
 import { activeLineIndex, type LyricLine } from "@/lib/lyrics";
-import { useLyricsLookup, useSmoothPosition } from "@/lib/lyricsClient";
+import { advanceMediaClock, needsResync, useLyricsLookup } from "@/lib/lyricsClient";
 import { getLyricsOffset, setLyricsOffset } from "@/lib/lyricsPrefs";
 import { copyText } from "@/lib/clipboard";
 import { seekTo } from "@/lib/audioEngine";
+import { usePlayer } from "@/store/player";
 import { useSettings } from "@/store/settings";
 import { useUi } from "@/store/ui";
 import { cx } from "@/lib/format";
 
 /**
  * Lyrics, Apple-Music style: big bold lines, the sung line bright with a soft
- * wipe across it, the rest dimmer and slightly blurred the further they are.
+ * wipe across it, the rest dimmer the further they are.
  * The list leads the music a little so the next line is already in place, a
- * tap on a line seeks to it, and scrolling by hand clears the blur and pauses
- * the follow for a few seconds.
+ * tap on a line seeks to it, and scrolling by hand pauses follow briefly.
  */
 
 type Variant = "player" | "panel" | "page";
 
 const FALLOFF_ALPHA = [1, 0.8, 0.7, 0.58, 0.46];
-const FALLOFF_BLUR = [0, 1, 1, 1.7, 2.4];
 const SCROLL_LEAD_MS = 420;
 
 const SIZES: Record<Variant, Record<"s" | "m" | "l", number>> = {
@@ -401,7 +400,6 @@ export function SyncedLyrics({
             style={{
               fontSize,
               opacity: state === "active" || selecting ? 1 : FALLOFF_ALPHA[k],
-              filter: reduce || state === "active" ? undefined : `blur(${FALLOFF_BLUR[k]}px)`,
             }}
           >
             <span>{line.text}</span>
@@ -414,9 +412,9 @@ export function SyncedLyrics({
 }
 
 /**
- * Ticks with the media clock (60fps) without re-rendering the list: it only
- * lifts the active / lead line when they change, and paints the wipe straight
- * onto the active row.
+ * Ticks with the media clock (60fps) imperatively with ZERO React re-renders:
+ * updates `--lp` directly on the active DOM node and only lifts active / lead
+ * indices into React state when a line boundary is crossed.
  */
 function LyricsClock({
   lines,
@@ -433,32 +431,71 @@ function LyricsClock({
   onActive: (i: number) => void;
   onLead: (i: number) => void;
 }) {
-  const pos = useSmoothPosition() - offset;
-  const idx = activeLineIndex(lines, pos);
-  const leadIdx = activeLineIndex(lines, pos + SCROLL_LEAD_MS);
+  const positionMs = usePlayer((s) => s.positionMs);
+  const durationMs = usePlayer((s) => s.durationMs);
+  const isPlaying = usePlayer((s) => s.isPlaying);
+
+  const clock = useRef(positionMs);
   const last = useRef({ idx: -2, lead: -2 });
+  const callbacksRef = useRef({ onActive, onLead, lines, offset, active });
 
   useEffect(() => {
-    if (idx !== last.current.idx) {
-      last.current.idx = idx;
-      onActive(idx);
-    }
-    if (leadIdx !== last.current.lead) {
-      last.current.lead = leadIdx;
-      onLead(leadIdx);
-    }
-  }, [idx, leadIdx, onActive, onLead]);
+    callbacksRef.current = { onActive, onLead, lines, offset, active };
+  }, [onActive, onLead, lines, offset, active]);
+
+  const applyAt = useCallback(
+    (mediaMs: number) => {
+      const { lines: curLines, offset: curOffset, onActive: emitActive, onLead: emitLead } = callbacksRef.current;
+      const pos = mediaMs - curOffset;
+      const idx = activeLineIndex(curLines, pos);
+      const leadIdx = activeLineIndex(curLines, pos + SCROLL_LEAD_MS);
+
+      if (idx !== last.current.idx) {
+        last.current.idx = idx;
+        emitActive(idx);
+      }
+      if (leadIdx !== last.current.lead) {
+        last.current.lead = leadIdx;
+        emitLead(leadIdx);
+      }
+
+      if (idx >= 0) {
+        const el = rows.current?.[idx];
+        if (el) {
+          const start = curLines[idx].startMs;
+          const end = curLines[idx + 1]?.startMs ?? start + 4000;
+          const span = Math.max(600, Math.min(end - start, 9000) * 0.92);
+          const p = Math.max(0, Math.min(1, (pos - start) / span));
+          el.style.setProperty("--lp", `${(p * 112 - 6).toFixed(1)}%`);
+        }
+      }
+    },
+    [rows]
+  );
 
   useEffect(() => {
-    if (active < 0) return;
-    const el = rows.current?.[active];
-    if (!el) return;
-    const start = lines[active].startMs;
-    const end = lines[active + 1]?.startMs ?? start + 4000;
-    const span = Math.max(600, Math.min(end - start, 9000) * 0.92);
-    const p = Math.max(0, Math.min(1, (pos - start) / span));
-    el.style.setProperty("--lp", `${(p * 112 - 6).toFixed(1)}%`);
-  });
+    if (needsResync(clock.current, positionMs, isPlaying)) {
+      clock.current = positionMs;
+    }
+    if (!isPlaying) {
+      applyAt(clock.current);
+    }
+  }, [positionMs, isPlaying, offset, lines, applyAt]);
+
+  useEffect(() => {
+    applyAt(clock.current);
+    if (!isPlaying) return;
+    let raf = 0;
+    let prev = performance.now();
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      clock.current = advanceMediaClock(clock.current, now - prev, usePlayer.getState().speed || 1, durationMs);
+      prev = now;
+      applyAt(clock.current);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying, durationMs, lines, offset, applyAt]);
 
   return null;
 }

@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["youtubei.js"],
+  experimental: {
+    optimizePackageImports: ["lucide-react", "framer-motion"],
+  },
   // Movies & series artwork. Cards draw generated SVG art when a title has no poster,
   // but the providers' CDNs have to be allow-listed for next/image consumers:
   // TMDb posters, YouTube stills and Internet Archive item thumbnails.

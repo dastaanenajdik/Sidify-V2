@@ -163,6 +163,18 @@ img {
   }
 }
 
+@layer base {
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--fill-3) transparent;
@@ -263,28 +275,29 @@ img {
 
 @utility chrome-glass {
   background: var(--glass);
-  -webkit-backdrop-filter: blur(30px) saturate(1.7);
-  backdrop-filter: blur(30px) saturate(1.7);
+  -webkit-backdrop-filter: blur(20px) saturate(1.55);
+  backdrop-filter: blur(20px) saturate(1.55);
+  transform: translateZ(0);
 }
 
 /* ── Liquid Glass — iOS 26 inspired ──────────────────────────────────────
-   Translucent, refracted lens: high blur + saturate, multi-layer
-   specular highlights, hairline stroke, deep floating shadow.
-   Meant for the two floating phone pills: mini-player + tab bar.
-   Inspired by Apple's 2025 Liquid Glass — blur(50) + specular lens.
+   Translucent, refracted lens with multi-layer specular highlights,
+   hairline stroke, and floating shadow — tuned for 60/120fps compositing.
    ──────────────────────────────────────────────────────────────────────── */
 
 @utility bar-glass {
   position: relative;
   isolation: isolate;
   overflow: hidden;
+  transform: translateZ(0);
+  contain: layout style;
   background:
     radial-gradient(120% 180% at 14% 0%, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.10) 28%, rgba(255, 255, 255, 0.03) 52%, transparent 70%),
     radial-gradient(118% 145% at 86% 100%, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.02) 32%, transparent 58%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.05) 44%, rgba(255, 255, 255, 0.015) 68%, rgba(255, 255, 255, 0.07) 100%),
     var(--bar);
-  -webkit-backdrop-filter: blur(52px) saturate(2.25) brightness(1.16) contrast(1.04);
-  backdrop-filter: blur(52px) saturate(2.25) brightness(1.16) contrast(1.04);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
   border: 0.5px solid rgba(255, 255, 255, 0.14);
   box-shadow:
     inset 0 1px 0 0 rgba(255, 255, 255, 0.26),
@@ -331,8 +344,8 @@ img {
     radial-gradient(130% 170% at 16% 0%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.58) 28%, rgba(255, 255, 255, 0.18) 54%, transparent 74%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(255, 255, 255, 0.44) 48%, rgba(255, 255, 255, 0.26) 100%),
     var(--bar);
-  -webkit-backdrop-filter: blur(44px) saturate(1.85) brightness(1.08);
-  backdrop-filter: blur(44px) saturate(1.85) brightness(1.08);
+  -webkit-backdrop-filter: blur(24px) saturate(1.65);
+  backdrop-filter: blur(24px) saturate(1.65);
   border-color: rgba(255, 255, 255, 0.72);
   box-shadow:
     inset 0 1px 0 0 rgba(255, 255, 255, 0.94),
@@ -356,34 +369,14 @@ img {
   }
 }
 
-/* ── Liquid moving sheen (fluid shimmer that sweeps across the lens) ──── */
+/* ── Static specular sheen (zero continuous GPU repaint) ─────────────── */
 @utility liquid-sheen {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   overflow: hidden;
   pointer-events: none;
-}
-.liquid-sheen::after {
-  content: "";
-  position: absolute;
-  inset: -40% -20%;
-  background: linear-gradient(100deg, transparent 36%, rgba(255, 255, 255, 0.18) 50%, transparent 64%);
-  transform: translateX(-55%) skewX(-14deg);
-  animation: liquid-sweep 4.2s ease-in-out infinite;
-  mix-blend-mode: overlay;
-  opacity: 0.85;
-}
-[data-theme="light"] .liquid-sheen::after {
-  background: linear-gradient(100deg, transparent 36%, rgba(255, 255, 255, 0.92) 50%, transparent 64%);
-  opacity: 0.55;
-  mix-blend-mode: soft-light;
-}
-@keyframes liquid-sweep {
-  0% { transform: translateX(-58%) skewX(-14deg); opacity: 0; }
-  18% { opacity: 1; }
-  52% { opacity: 0.7; }
-  100% { transform: translateX(58%) skewX(-14deg); opacity: 0; }
+  background: linear-gradient(115deg, rgba(255, 255, 255, 0.09) 0%, transparent 38%, transparent 72%, rgba(255, 255, 255, 0.04) 100%);
 }
 
 /* subtle lens refraction distortion on the very edge (chromatic hint) */
@@ -396,42 +389,32 @@ img {
   opacity: 0.9;
 }
 
-/* pill that marks the selected tab — also liquid */
+/* pill that marks the selected tab — crisp specular highlight without nested backdrop-filter */
 @utility pill-glass {
-  background: rgba(255, 255, 255, 0.15);
-  -webkit-backdrop-filter: blur(18px) saturate(1.6);
-  backdrop-filter: blur(18px) saturate(1.6);
-  border: 0.5px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.16);
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.20),
     inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
     0 2px 10px -4px rgba(0, 0, 0, 0.28);
 }
 [data-theme="light"] .pill-glass {
-  background: rgba(0, 0, 0, 0.07);
+  background: rgba(0, 0, 0, 0.075);
   border-color: rgba(0, 0, 0, 0.06);
   box-shadow:
     inset 0 1px 0 0 rgba(255, 255, 255, 0.72),
     0 2px 8px -4px rgba(0, 0, 0, 0.12);
 }
 
-/* gentle float for the two pills so they feel suspended in liquid */
-@keyframes liquid-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-0.5px); }
-}
 @utility liquid-float {
-  animation: liquid-float 5s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .liquid-float { animation: none; }
-  .liquid-sheen::after { animation: none; opacity: 0; }
+  transform: translateZ(0);
 }
 
 @utility menu-glass {
-  background: color-mix(in srgb, var(--raised) 86%, transparent);
-  -webkit-backdrop-filter: blur(40px) saturate(1.8);
-  backdrop-filter: blur(40px) saturate(1.8);
+  background: color-mix(in srgb, var(--raised) 88%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.65);
+  backdrop-filter: blur(24px) saturate(1.65);
+  transform: translateZ(0);
   box-shadow:
     inset 0 0 0 0.5px var(--edge),
     0 24px 60px -16px rgba(0, 0, 0, 0.6);
@@ -733,10 +716,9 @@ img {
   color: rgba(255, 255, 255, 0.45);
   transform-origin: left center;
   transition:
-    color 0.4s cubic-bezier(0.41, 0, 0.12, 0.99),
-    opacity 0.4s cubic-bezier(0.41, 0, 0.12, 0.99),
-    filter 0.4s cubic-bezier(0.41, 0, 0.12, 0.99),
-    transform 0.4s cubic-bezier(0.41, 0, 0.12, 0.99);
+    color 0.32s cubic-bezier(0.41, 0, 0.12, 0.99),
+    opacity 0.32s cubic-bezier(0.41, 0, 0.12, 0.99),
+    transform 0.36s cubic-bezier(0.41, 0, 0.12, 0.99);
   transform: scale(0.98);
 }
 .lyric-line:hover {
@@ -839,8 +821,8 @@ img {
 }
 .mesh-layer {
   position: absolute;
-  inset: -15%;
-  filter: blur(var(--mesh-blur, 64px)) saturate(1.1);
+  inset: -10%;
+  filter: saturate(1.15);
   transform: translateZ(0);
 }
 .mesh-blob {
@@ -850,10 +832,17 @@ img {
   border-radius: 50%;
   margin-left: -62%;
   margin-top: -62%;
-  transition:
-    background-color 1.4s ease,
-    transform 8s cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: transform;
+  pointer-events: none;
+}
+
+/* Offscreen list & grid rendering optimization */
+.cv-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+.cv-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
 }
 
 /* Mood / genre tiles: a solid stripe and a duotone of the cover. */

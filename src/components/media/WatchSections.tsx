@@ -17,7 +17,7 @@ import type { Episode, MediaReleaseItem, MediaTitle, Season } from "@/lib/media/
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { formatPlaybackTime } from "@/lib/media/resumePoints";
 import { cx } from "@/lib/format";
-import { BetaBadge } from "./BetaPlayerSheet";
+import { BetaBadge } from "./BetaBadge";
 import { VlcPlayButton } from "./VlcPlayButton";
 import { useResumePoint } from "./useResumePoint";
 import type { WatchTarget } from "./watch";
