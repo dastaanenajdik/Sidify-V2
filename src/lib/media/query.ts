@@ -159,6 +159,30 @@ export function relatedTitles(items: MediaTitle[], target: MediaTitle, limit = 1
     .map((row) => row.item);
 }
 
+/* ------------------------------ merging ---------------------------------- */
+
+/**
+ * Merges two catalogues' search results.
+ *
+ * The primary catalogue's titles come first (they are the default answer), then the
+ * exclusive catalogue's — minus anything the primary already returned, matched on the
+ * title and release year.
+ */
+export function mergeSearchResults(primary: MediaTitle[], secondary: MediaTitle[]): MediaTitle[] {
+  const seenTitles = new Set(primary.map((item) => `${item.title.toLowerCase().trim()}|${item.year ?? ""}`));
+  const seenIds = new Set(primary.map((item) => item.id));
+
+  const exclusive: MediaTitle[] = [];
+  for (const item of secondary) {
+    const key = `${item.title.toLowerCase().trim()}|${item.year ?? ""}`;
+    if (seenTitles.has(key) || seenIds.has(item.id)) continue;
+    seenTitles.add(key);
+    seenIds.add(item.id);
+    exclusive.push(item);
+  }
+  return [...primary, ...exclusive];
+}
+
 /* ------------------------------- slugs ----------------------------------- */
 
 export function slugify(text: string): string {

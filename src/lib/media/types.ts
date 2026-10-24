@@ -36,13 +36,16 @@ export interface TrailerRef {
 export interface PlaybackSource {
   url: string;
   /**
-   * `hls` for `.m3u8`, `mp4` / `webm` for progressive browser-compatible files,
-   * `embed` for an official third-party player rendered in an iframe.
+   * `hls` for `.m3u8`, `dash` for `.mpd`, `mp4` / `webm` for progressive
+   * browser-compatible files, `embed` for an official third-party player rendered in
+   * an iframe.
    */
-  type: "hls" | "mp4" | "webm" | "embed";
+  type: "hls" | "dash" | "mp4" | "webm" | "embed";
   label?: string;
   /** Short caveat or technical note shown under the player. */
   note?: string;
+  /** Container hint used to pick the right MIME type for the player. */
+  container?: string;
 }
 
 /** A download offered for a title or item. */
@@ -61,6 +64,17 @@ export interface MediaMirror {
   label: string;
   shortUrl: string;
   host: string;
+  /**
+   * Which catalogue the mirror came from. The resolver routes on this instead of
+   * guessing from the URL, so a direct file from the exclusive catalogue is never
+   * mistaken for a multi-hop mirror of another catalogue.
+   */
+  source?: "vault";
+  /**
+   * Request headers the upstream needs (e.g. a signed CDN cookie). They are relayed
+   * server-side; a browser cannot set `Cookie` on a cross-origin request.
+   */
+  headers?: Array<[string, string]>;
 }
 
 /** A parsed release quality, season pack, or episode encode with mirror short-links. */
@@ -107,9 +121,9 @@ export interface MirrorHop {
 export interface ResolvedMirrorLink {
   server: string;
   url: string;
-  /** True ONLY when verified as a browser-compatible stream (`mp4`, `webm`, `hls`). */
+  /** True ONLY when verified as a browser-compatible stream (`mp4`, `webm`, `hls`, `dash`). */
   playable: boolean;
-  streamType?: "hls" | "mp4" | "webm";
+  streamType?: "hls" | "dash" | "mp4" | "webm";
   delivery: "stream" | "download" | "external";
   container?: string;
   codecNote?: string;

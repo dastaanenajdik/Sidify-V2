@@ -556,6 +556,8 @@ function BetaPlayer({
               url: mirror.shortUrl,
               fileName: release.fileName,
               label: release.title,
+              source: mirror.source,
+              headers: mirror.headers,
               refresh,
               signal: controller.signal,
             });

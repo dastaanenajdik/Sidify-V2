@@ -13,8 +13,9 @@ import { FourKHDHubMediaProvider } from "./hubProvider";
 import { MergedMediaProvider } from "./mergedProvider";
 import type { MediaProvider } from "./provider";
 import { dedupeSources, manifestSources } from "./playback";
-import { railsFor } from "./query";
+import { mergeSearchResults, railsFor } from "./query";
 import { TmdbMediaProvider } from "./tmdbProvider";
+import { getVaultProvider, isVaultSlug, type VaultMediaProvider } from "./vaultProvider";
 import type {
   MediaBrowse,
   MediaDetail,
@@ -22,6 +23,7 @@ import type {
   MediaPage,
   MediaQuery,
   MediaSearchResponse,
+  MediaTitle,
   ProviderInfo,
   Season,
 } from "./types";
@@ -79,6 +81,34 @@ export function mediaProviderInfo(): ProviderInfo {
   return getMediaProvider().info;
 }
 
+/**
+ * The secondary ("exclusive") catalogue.
+ *
+ * It is queried *alongside* the primary provider rather than instead of it, so a search
+ * always returns both catalogues' matches. It is never shown as a separate source:
+ * its titles are marked with the `vault-` slug prefix, which the UI renders as an
+ * "Exclusive" badge.
+ */
+export function getSecondaryProvider(): VaultMediaProvider {
+  return getVaultProvider();
+}
+
+/** Whether the exclusive collection is queried at all (on unless explicitly disabled). */
+export function exclusiveCollectionEnabled(): boolean {
+  const flag = (process.env.MEDIA_EXCLUSIVE_COLLECTION || "1").trim().toLowerCase();
+  return flag !== "0" && flag !== "false" && flag !== "off" && flag !== "no";
+}
+
+/** Titles from the secondary catalogue, best-effort — never throws into a search. */
+async function secondarySearch(query: string, kind: MediaKind | "all", limit: number): Promise<MediaTitle[]> {
+  if (!exclusiveCollectionEnabled()) return [];
+  try {
+    return await getSecondaryProvider().searchTitles(query, kind, limit);
+  } catch {
+    return [];
+  }
+}
+
 /* ------------------------------- playback -------------------------------- */
 
 /** Playback assembly is provider + optional operator manifest only — see `playback.ts`. */
@@ -113,7 +143,7 @@ export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<M
     };
   }
 
-  const [page, facets, trending, recent, topRated, popular, free] = await Promise.all([
+  const [page, facets, trending, recent, topRated, popular, free, exclusive] = await Promise.all([
     provider.browse(kind, query),
     provider.getFacets(kind),
     provider[kind === "movie" ? "getTrendingMovies" : "getTrendingSeries"](12).catch(() => []),
@@ -121,9 +151,21 @@ export async function browseMedia(kind: MediaKind, query: MediaQuery): Promise<M
     provider[kind === "movie" ? "getTopRatedMovies" : "getTopRatedSeries"](12).catch(() => []),
     provider[kind === "movie" ? "getPopularMovies" : "getPopularSeries"](12).catch(() => []),
     kind === "movie" && provider.getFreeToWatch ? provider.getFreeToWatch(12).catch(() => []) : Promise.resolve([]),
+    // The exclusive collection gets its own shelf on the browse page.
+    secondarySearch("2024", kind, 12),
   ]);
 
   const rails = railsFor(kind, { trending, recent, topRated, popular });
+
+  if (exclusive.length > 0) {
+    rails.push({
+      id: "exclusive",
+      title: "Exclusive picks",
+      subtitle: "Titles only available in the exclusive collection",
+      items: exclusive,
+    });
+  }
+
   if (free.length > 0) {
     rails.splice(Math.min(1, rails.length), 0, {
       id: "free",
@@ -150,14 +192,28 @@ export async function browsePage(kind: MediaKind, query: MediaQuery): Promise<Me
 
 export async function searchMedia(query: string, kind: MediaKind | "all" = "all", limit = 24): Promise<MediaSearchResponse> {
   const provider = getMediaProvider();
-  const items = query.trim() ? await provider.searchTitles(query.trim(), kind, limit) : [];
-  return { query, items, provider: provider.info };
+  const term = query.trim();
+  if (!term) return { query, items: [], provider: provider.info };
+
+  // Both catalogues answer every search: the primary provider's matches come first,
+  // then the exclusive catalogue's, minus titles the primary already returned.
+  const [primaryItems, secondaryItems] = await Promise.all([
+    provider.searchTitles(term, kind, limit).catch(() => []),
+    secondarySearch(term, kind, limit),
+  ]);
+
+  const merged = mergeSearchResults(primaryItems, secondaryItems);
+  const exclusiveCount = merged.length - primaryItems.length;
+
+  return { query, items: merged.slice(0, Math.max(limit, exclusiveCount)), provider: provider.info };
 }
 
 /* --------------------------------- detail -------------------------------- */
 
 async function loadDetail(kind: MediaKind, slug: string): Promise<MediaDetail | null> {
-  const provider = getMediaProvider();
+  // Titles from the exclusive catalogue carry the `vault-` prefix and are served by
+  // the secondary provider; everything else comes from the primary one.
+  const provider = isVaultSlug(slug) && exclusiveCollectionEnabled() ? getSecondaryProvider() : getMediaProvider();
   const detail = kind === "movie" ? await provider.getMovieDetails(slug) : await provider.getSeriesDetails(slug);
   if (!detail) return null;
 
@@ -173,5 +229,6 @@ async function loadDetail(kind: MediaKind, slug: string): Promise<MediaDetail | 
 export const getMediaDetail = cache(loadDetail);
 
 export async function getSeasons(kind: MediaKind, slug: string, seasonNumber?: number): Promise<Season[]> {
-  return getMediaProvider().getSeriesSeasons(slug, seasonNumber);
+  const provider = isVaultSlug(slug) && exclusiveCollectionEnabled() ? getSecondaryProvider() : getMediaProvider();
+  return provider.getSeriesSeasons(slug, seasonNumber);
 }

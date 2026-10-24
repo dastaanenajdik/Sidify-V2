@@ -77,6 +77,10 @@ export const mediaApi = {
     url: string;
     fileName?: string;
     label?: string;
+    /** Which catalogue the mirror belongs to, so the right resolver answers. */
+    source?: "vault";
+    /** Upstream request headers (e.g. a signed CDN cookie) to relay server-side. */
+    headers?: Array<[string, string]>;
     refresh?: boolean;
     signal?: AbortSignal;
   }): Promise<MirrorResolveResult> => {
