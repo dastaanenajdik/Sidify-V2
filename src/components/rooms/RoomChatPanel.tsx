@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Check, LoaderCircle, MessageCircle, Send } from "lucide-react";
 import { sendRoomChat, useRoom } from "@/lib/rooms/client";
 import { ROOM_LIMITS, type RoomChatMessage, type RoomState } from "@/lib/rooms/logic";
@@ -32,6 +32,7 @@ export default function RoomChatPanel({
   const [sending, setSending] = useState(false);
   const [pendingMessage, setPendingMessage] = useState<RoomChatMessage | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
+  const initialScrollDone = useRef(false);
   const entries = useMemo(() => {
     const events = room.activity.map((event, i) => ({ kind: "activity" as const, key: `activity-${event.at}-${i}`, at: event.at, event }));
     const storedMessages = room.chat ?? [];
@@ -44,20 +45,18 @@ export default function RoomChatPanel({
 
   // Scroll only the feed, never the page. scrollIntoView() can move the whole
   // app's page when the chat changes, especially after Enter submits a message.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const feed = feedRef.current;
     if (!feed) return;
+    if (!initialScrollDone.current) {
+      // Opening the panel (or refreshing) should always start at the newest message.
+      feed.scrollTop = feed.scrollHeight;
+      initialScrollDone.current = true;
+      return;
+    }
     const distanceFromBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
     if (distanceFromBottom < 100) feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
   }, [room.seq, pendingMessage?.id]);
-
-  useEffect(() => {
-    const id = pendingMessage?.id;
-    if (id && (room.chat ?? []).some((message) => message.id === id)) {
-      setPendingMessage((current) => current?.id === id ? null : current);
-      setSending(false);
-    }
-  }, [room.chat, pendingMessage?.id]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
