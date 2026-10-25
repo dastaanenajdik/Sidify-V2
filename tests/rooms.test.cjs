@@ -132,8 +132,10 @@ test('membership: capacity, kick, host hand-over and the sweep', () => {
 
   // nobody checks in for longer than the grace period → room empties, then dies
   const later = 2_000_000 + L.ROOM_LIMITS.graceMs + 1;
+  const activityBeforeTimeout = [...rec.activity];
   L.sweep(rec, later);
   assert.equal(rec.members.length, 0);
+  assert.deepEqual(rec.activity, activityBeforeTimeout, 'a missed heartbeat is not shown as an explicit dropped-out event');
   assert.ok(!rec.dead);
   L.sweep(rec, later + L.ROOM_LIMITS.emptyTtlMs + 1);
   assert.equal(rec.dead, true);

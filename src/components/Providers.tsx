@@ -14,6 +14,7 @@ import { resumeRoom, useRoom } from "@/lib/rooms/client";
 import { registerServiceWorker, armNextAutoReload } from "@/lib/pwa";
 import BackGuard from "./BackGuard";
 import Toasts from "./Toasts";
+import RoomResumePrompt from "@/components/rooms/RoomResumePrompt";
 
 const NameGate = dynamic(() => import("./NameGate"), { ssr: false });
 const NowPlaying = dynamic(() => import("./player/NowPlaying"), { ssr: false });
@@ -29,7 +30,7 @@ function StoreHydration() {
   useEffect(() => {
     void useSettings.persist.rehydrate();
     void usePlayer.persist.rehydrate();
-    void useRoom.persist.rehydrate();
+    void Promise.resolve(useRoom.persist.rehydrate()).then(resumeRoom);
     void useWatchlist.persist.rehydrate();
     // Seed liked hearts synchronously from localStorage so heart icons never wait on a network fetch.
     const localLiked = likedTracksLocal();
@@ -124,7 +125,6 @@ function EngineBootstrap() {
     initEngine();
     restoreSession();
     applySettings();
-    resumeRoom();
 
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
@@ -234,6 +234,7 @@ export default function Providers({ children }: { children: ReactNode }) {
       <NameGate />
       <DeferredOverlays />
       <BackGuard />
+      <RoomResumePrompt />
       <Toasts />
     </QueryClientProvider>
   );

@@ -22,7 +22,7 @@ import {
 /* -------------------------------------------------------------------------- */
 /*  Listen Together — client.                                                  */
 /*                                                                             */
-/*  Polls the room every 750ms while visible (also the heartbeat), keeps a    */
+/*  Polls the room every 500ms while visible (also the heartbeat), keeps a    */
 /*  server-clock offset from the fastest round trips, and drives the local     */
 /*  engine to match: same track, same play/pause, same position. Local intents */
 /*  go to the room through the engine's bridge and come back as room state.    */
@@ -32,6 +32,7 @@ interface Session {
   code: string;
   token: string;
   memberId: string;
+  name?: string;
 }
 
 export type RoomStatus = "idle" | "connecting" | "live" | "reconnecting";
@@ -46,6 +47,8 @@ interface RoomClientState {
   needsTap: boolean;
   /** ms since each member last checked in, refreshed by cheap polls. */
   presence: Record<string, number>;
+  /** A persisted room seat can be explicitly resumed after leaving the app. */
+  resumePrompt: boolean;
   set: (p: Partial<RoomClientState>) => void;
 }
 
@@ -59,6 +62,7 @@ export const useRoom = create<RoomClientState>()(
       offsetMs: 0,
       needsTap: false,
       presence: {},
+      resumePrompt: false,
       set: (p) => set(p),
     }),
     { name: "sidify-room", skipHydration: true, partialize: (s) => ({ session: s.session }) }
@@ -422,7 +426,7 @@ function schedulePoll(delay: number) {
     await pollOnce();
     if (!R().session) return;
     const visible = typeof document === "undefined" || document.visibilityState === "visible";
-    const base = visible ? 750 : 2500;
+    const base = visible ? 500 : 2500;
     schedulePoll(failures ? Math.min(6000, base * (1 + failures)) : base);
   }, delay);
 }
@@ -434,6 +438,26 @@ function onVisible() {
   }
 }
 
+function onPageHide() {
+  if (!R().session) return;
+  // A document exit is only a temporary suspension: don't report an explicit
+  // leave or drop their seat. Keep the saved token so one-tap rejoin is safe.
+  stopSync();
+  R().set({ room: null, status: "idle", presence: {}, resumePrompt: false });
+}
+
+let resumeLifecycleBound = false;
+
+function onPageShow(event: PageTransitionEvent) {
+  if (event.persisted) resumeRoom();
+}
+
+function bindResumeLifecycle() {
+  if (resumeLifecycleBound || typeof window === "undefined") return;
+  resumeLifecycleBound = true;
+  window.addEventListener("pageshow", onPageShow);
+}
+
 function startSync() {
   if (syncing) return;
   syncing = true;
@@ -441,6 +465,7 @@ function startSync() {
   schedulePoll(0);
   reconcileTimer = setInterval(reconcile, 700);
   document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("pagehide", onPageHide);
 }
 
 function stopSync() {
@@ -452,13 +477,14 @@ function stopSync() {
   reconcileTimer = null;
   clearStart();
   document.removeEventListener("visibilitychange", onVisible);
+  window.removeEventListener("pagehide", onPageHide);
 }
 
 function cleanup(message?: string) {
   stopSync();
   lastSeq = 0;
   samples.length = 0;
-  R().set({ session: null, room: null, status: "idle", needsTap: false, presence: {}, rttMs: null });
+  R().set({ session: null, room: null, status: "idle", needsTap: false, presence: {}, rttMs: null, resumePrompt: false });
   usePlayer.getState().set({ isLoading: false, tiers: {} });
   if (message) toast(message, "Your music keeps playing here", "info");
 }
@@ -482,12 +508,13 @@ export async function createRoom(opts: { name?: string; hostOnly?: boolean } = {
         isPlaying: engineLocal.isPlaying() || p.isPlaying,
       }
     : null;
-  R().set({ status: "connecting" });
+  const name = displayName(opts.name);
+  R().set({ status: "connecting", resumePrompt: false });
   try {
     const t0 = Date.now();
     const { status, data } = await call<RoomReply>("/api/rooms", {
       method: "POST",
-      body: JSON.stringify({ name: displayName(opts.name), hostOnly: !!opts.hostOnly, autoplay: useSettings.getState().autoplay, seed }),
+      body: JSON.stringify({ name, hostOnly: !!opts.hostOnly, autoplay: useSettings.getState().autoplay, seed }),
     });
     if (status >= 400 || !data.code || !data.token || !data.memberId || !data.room) {
       R().set({ status: "idle" });
@@ -496,7 +523,7 @@ export async function createRoom(opts: { name?: string; hostOnly?: boolean } = {
     }
     sample(t0, Date.now(), data.serverMs);
     lastSeq = 0;
-    R().set({ session: { code: data.code, token: data.token, memberId: data.memberId } });
+    R().set({ session: { code: data.code, token: data.token, memberId: data.memberId, name } });
     receive(data.room, "join");
     startSync();
     return data.code;
@@ -512,20 +539,21 @@ export async function joinRoom(rawCode: string, name?: string): Promise<{ ok: bo
   const prev = R().session;
   if (prev && prev.code !== code) await leaveRoom({ quiet: true });
   unlockEngine();
-  R().set({ status: "connecting" });
+  const memberName = displayName(name || (prev?.code === code ? prev.name : undefined));
+  R().set({ status: "connecting", resumePrompt: false });
   try {
     const t0 = Date.now();
     const { status, data } = await call<RoomReply>(`/api/rooms/${code}/join`, {
       method: "POST",
-      body: JSON.stringify({ name: displayName(name), token: prev?.code === code ? prev.token : undefined }),
+      body: JSON.stringify({ name: memberName, token: prev?.code === code ? prev.token : undefined }),
     });
     if (status >= 400 || !data.token || !data.memberId || !data.room) {
-      R().set({ status: prev?.code === code ? R().status : "idle" });
+      R().set({ status: "idle" });
       return { ok: false, error: data.error || "Couldn't join that room" };
     }
     sample(t0, Date.now(), data.serverMs);
     lastSeq = 0;
-    R().set({ session: { code, token: data.token, memberId: data.memberId } });
+    R().set({ session: { code, token: data.token, memberId: data.memberId, name: memberName } });
     receive(data.room, "join");
     startSync();
     return { ok: true };
@@ -548,12 +576,35 @@ export async function leaveRoom(opts: { quiet?: boolean } = {}) {
   if (!opts.quiet) toast("You left the room", "The others carry on listening");
 }
 
-/** Resume a room session that survived a reload. */
+/** Ask before restoring a room session saved across a browser reload/exit. */
 export function resumeRoom() {
-  if (R().session && !syncing) {
-    R().set({ status: "reconnecting" });
-    startSync();
+  bindResumeLifecycle();
+  if (!R().session) return;
+  if (syncing) stopSync();
+  R().set({ room: null, status: "idle", presence: {}, resumePrompt: true });
+}
+
+/** Rejoin the saved room when the listener confirms the prompt. */
+export async function rejoinPreviousRoom(): Promise<boolean> {
+  const session = R().session;
+  if (!session) {
+    R().set({ resumePrompt: false });
+    return false;
   }
+  const result = await joinRoom(session.code, session.name);
+  if (!result.ok) {
+    R().set({ resumePrompt: true });
+    toast("Couldn't rejoin the room", result.error || "Try again in a moment", "warn");
+    return false;
+  }
+  R().set({ resumePrompt: false });
+  toast("Rejoined the room", `Back in room ${session.code}`, "ok");
+  return true;
+}
+
+/** Not now means leave the saved room and discard the local rejoin prompt. */
+export function dismissPreviousRoom() {
+  void leaveRoom({ quiet: true });
 }
 
 export async function sendRoomChat(text: string, id?: string): Promise<boolean> {

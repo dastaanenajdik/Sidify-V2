@@ -75,7 +75,7 @@ export default function RoomChatLauncher() {
         whileHover={{ scale: 1.04 }}
         whileTap={{ scale: 0.96 }}
         transition={{ type: "spring", stiffness: 420, damping: 26 }}
-        className="fixed right-4 bottom-[calc(158px+env(safe-area-inset-bottom,0px))] z-[61] inline-flex h-12 items-center gap-2 rounded-full bg-brand px-4 text-white shadow-[0_8px_28px_rgba(0,0,0,.28)] ring-1 ring-white/15 transition-colors hover:brightness-110 desk:bottom-6"
+        className="fixed right-4 bottom-[calc(146px+env(safe-area-inset-bottom,0px))] z-[61] inline-flex h-12 items-center gap-2 rounded-full bg-brand px-4 text-white shadow-[0_8px_28px_rgba(0,0,0,.28)] ring-1 ring-white/15 transition-colors hover:brightness-110 desk:bottom-4"
       >
         <MessageCircle size={19} />
         <span className="text-[13px] font-semibold">Chat</span>
