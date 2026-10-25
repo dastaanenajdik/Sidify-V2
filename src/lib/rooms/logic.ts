@@ -331,7 +331,11 @@ export function removeMember(rec: RoomRecord, memberId: string, now: number, rea
     rec.hostId = next.id;
     log(rec, now, next.name, "is now the host");
   }
-  if (!rec.members.length) rec.emptySince = now;
+  if (!rec.members.length) {
+    rec.emptySince = now;
+    // Room chat is ephemeral: discard it as soon as the last listener goes offline.
+    rec.chat = [];
+  }
   bump(rec);
 }
 
