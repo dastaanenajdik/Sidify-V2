@@ -282,6 +282,18 @@ function log(rec: RoomRecord, now: number, by: string, text: string) {
   rec.activity = [...rec.activity, { at: now, by, text }].slice(-ROOM_LIMITS.activity);
 }
 
+/** Names of members who newly left between two snapshots of the same room. */
+export function newlyLeftMembers(
+  previous: Pick<RoomState, "code" | "activity"> | null,
+  next: Pick<RoomState, "code" | "activity">
+): string[] {
+  if (!previous || previous.code !== next.code) return [];
+  const seen = new Set(previous.activity.map((event) => `${event.at}:${event.by}:${event.text}`));
+  return next.activity
+    .filter((event) => event.text === "left" && !seen.has(`${event.at}:${event.by}:${event.text}`))
+    .map((event) => event.by);
+}
+
 function bump(rec: RoomRecord, queueChanged = false) {
   rec.seq++;
   if (queueChanged) rec.queueSeq++;

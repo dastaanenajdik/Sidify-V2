@@ -139,6 +139,22 @@ test('membership: capacity, kick, host hand-over and the sweep', () => {
   assert.equal(rec.dead, true);
 });
 
+test('newly left room members are announced once, never from an old/different room snapshot', () => {
+  const previous = L.publicRoom(room());
+  const next = {
+    ...previous,
+    activity: [...previous.activity,
+      { at: 2_000_000, by: 'Aman', text: 'left' },
+      { at: 2_000_001, by: 'Sid', text: 'dropped out' },
+      { at: 2_000_002, by: 'Ravi', text: 'was removed' },
+    ],
+  };
+  assert.deepEqual(L.newlyLeftMembers(previous, next), ['Aman']);
+  assert.deepEqual(L.newlyLeftMembers(next, next), []);
+  assert.deepEqual(L.newlyLeftMembers(null, next), [], 'refreshing into an existing room must not replay old exits');
+  assert.deepEqual(L.newlyLeftMembers(previous, { ...next, code: 'ZZZ999' }), []);
+});
+
 test('tracks are sanitised: bad ids, missing titles and odd artwork are rejected', () => {
   assert.equal(L.cleanTrack({ id: 'x', videoId: 'short', title: 'T' }), null);
   assert.equal(L.cleanTrack({ videoId: ID('a') }), null);

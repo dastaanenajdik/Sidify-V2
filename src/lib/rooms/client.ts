@@ -12,6 +12,7 @@ import {
   ROOM_LIMITS,
   currentOf,
   expectedPosition,
+  newlyLeftMembers,
   normalizeCode,
   type ControlAction,
   type RoomState,
@@ -163,6 +164,9 @@ let lastStartAttempt = 0;
 let notPlayingSince = 0;
 let failures = 0;
 let syncing = false;
+let announcementHoldUntil = 0;
+let departureQueue: string[] = [];
+let announcingDeparture = false;
 
 function clearStart() {
   if (startTimer) clearTimeout(startTimer);
@@ -191,6 +195,7 @@ async function startCurrent(room: RoomState) {
 /** Make the local player match `room`. */
 function apply(room: RoomState, fromControl: boolean) {
   notPlayingSince = 0;
+  if (Date.now() < announcementHoldUntil) return;
   const tracks = room.queue.map(toTrack);
   const tiers: Record<string, "user" | "autoplay"> = {};
   for (const t of room.queue) if (t.tier) tiers[t.id] = t.tier;
@@ -275,25 +280,87 @@ function drift(room: RoomState, threshold: number | null) {
   } else strikes = 0;
 }
 
+function queueDepartureAnnouncement(name: string) {
+  departureQueue.push(name);
+  if (announcingDeparture) return;
+  announcingDeparture = true;
+
+  void (async () => {
+    try {
+      while (departureQueue.length) {
+        const who = departureQueue.shift()!;
+        const { room, session } = R();
+        if (!room || !session || typeof window === "undefined" || !("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") continue;
+
+        const trackId = currentTrack(usePlayer.getState())?.id;
+        const wasPlaying = engineLocal.isPlaying();
+        const startedAt = Date.now();
+        announcementHoldUntil = startedAt + 4000;
+        if (wasPlaying) await engineLocal.setPlaying(false);
+
+        try {
+          const utterance = new SpeechSynthesisUtterance(`${who} left the room`);
+          utterance.rate = 1.25;
+          await new Promise<void>((resolve) => {
+            let finished = false;
+            const finish = () => {
+              if (finished) return;
+              finished = true;
+              clearTimeout(fallback);
+              resolve();
+            };
+            const fallback = setTimeout(finish, 1800);
+            utterance.onend = finish;
+            utterance.onerror = finish;
+            window.speechSynthesis.speak(utterance);
+          });
+        } catch {
+          // Speech is best-effort; still end the short pause and resync audio.
+        }
+        const remainingPause = 1000 - (Date.now() - startedAt);
+        if (remainingPause > 0) await new Promise((resolve) => setTimeout(resolve, remainingPause));
+
+        announcementHoldUntil = 0;
+        const latest = R().room;
+        if (latest && R().session) {
+          // Apply the newest state after the brief announcement pause, so a
+          // play/pause change received during the voice is not lost.
+          apply(latest, true);
+        } else if (wasPlaying && trackId && currentTrack(usePlayer.getState())?.id === trackId) {
+          // Leaving/end-of-room keeps this listener's local music playing.
+          await engineLocal.setPlaying(true);
+        }
+      }
+    } finally {
+      announcementHoldUntil = 0;
+      announcingDeparture = false;
+    }
+  })();
+}
+
 function receive(room: RoomState, source: "poll" | "control" | "join" | "chat") {
   if (room.seq <= lastSeq && source === "poll") return;
   if (room.seq < lastSeq) return;
+  const previous = R().room;
+  const departures = source === "join" ? [] : newlyLeftMembers(previous, room);
   lastSeq = room.seq;
   const presence: Record<string, number> = {};
   for (const m of room.members) presence[m.id] = Math.max(0, serverNow() - m.lastSeen);
   R().set({ room, presence, status: "live" });
   // Chat updates share the room's sequence and polling transport, but should
   // never cause a playback reconciliation.
-  if (source === "chat" || !isMine(room)) return;
-  holdUntil = 0;
-  apply(room, source !== "poll");
+  if (source !== "chat" && isMine(room)) {
+    holdUntil = 0;
+    apply(room, source !== "poll");
+  }
+  for (const name of departures) queueDepartureAnnouncement(name);
 }
 
 function reconcile() {
   const { room, session } = R();
   if (!room || !session) return;
   const p = usePlayer.getState();
-  if (Date.now() < holdUntil || p.isLoading || startTimer) return;
+  if (Date.now() < holdUntil || Date.now() < announcementHoldUntil || p.isLoading || startTimer) return;
   const cur = currentOf(room);
   if (!cur || currentTrack(p)?.id !== cur.id || engineLocal.failedTrackId() === cur.id) return;
   const playingLocally = engineLocal.isPlaying();
