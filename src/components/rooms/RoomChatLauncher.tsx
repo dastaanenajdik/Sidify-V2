@@ -36,8 +36,8 @@ export default function RoomChatLauncher() {
             transition={{ type: "spring", stiffness: 360, damping: 30 }}
             className="fixed inset-x-3 bottom-[calc(222px+env(safe-area-inset-bottom,0px))] z-[60] mx-auto h-[min(58dvh,560px)] max-h-[calc(100dvh-260px-env(safe-area-inset-bottom,0px))] w-auto max-w-[420px] origin-bottom-right desk:inset-x-auto desk:right-6 desk:bottom-20 desk:h-[min(70vh,600px)] desk:max-h-[calc(100dvh-110px)] desk:w-[min(calc(100vw-48px),420px)]"
           >
-            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[20px] bg-raised shadow-[0_18px_70px_rgba(0,0,0,.42)] ring-1 ring-edge">
-              <header className="flex shrink-0 items-center gap-3 border-b border-edge px-4 py-3.5">
+            <div className="bar-glass flex h-full min-h-0 flex-col overflow-hidden rounded-[22px] shadow-[0_22px_70px_rgba(0,0,0,.38)] ring-1 ring-white/15">
+              <header className="relative z-[1] flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-3.5">
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand/15 text-brand">
                   <MessageCircle size={18} />
                 </span>
@@ -58,8 +58,9 @@ export default function RoomChatLauncher() {
                 room={room}
                 you={session.memberId}
                 showHeader={false}
-                className="flex-1 rounded-none bg-transparent shadow-none ring-0"
+                className="relative z-[1] flex-1 rounded-none bg-transparent shadow-none ring-0"
                 feedClassName="flex-1"
+                glass={false}
               />
             </div>
           </motion.section>
