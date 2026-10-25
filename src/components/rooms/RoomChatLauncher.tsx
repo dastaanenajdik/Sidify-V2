@@ -36,8 +36,8 @@ export default function RoomChatLauncher() {
             transition={{ type: "spring", stiffness: 360, damping: 30 }}
             className="fixed inset-x-3 bottom-[calc(222px+env(safe-area-inset-bottom,0px))] z-[60] mx-auto h-[min(58dvh,560px)] max-h-[calc(100dvh-260px-env(safe-area-inset-bottom,0px))] w-auto max-w-[420px] origin-bottom-right desk:inset-x-auto desk:right-6 desk:bottom-20 desk:h-[min(70vh,600px)] desk:max-h-[calc(100dvh-110px)] desk:w-[min(calc(100vw-48px),420px)]"
           >
-            <div className="bar-glass flex h-full min-h-0 flex-col overflow-hidden rounded-[22px] shadow-[0_22px_70px_rgba(0,0,0,.38)] ring-1 ring-white/15">
-              <header className="relative z-[1] flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-3.5">
+            <div className="bar-glass flex h-full min-h-0 flex-col overflow-hidden rounded-[22px] text-fg shadow-[0_22px_70px_rgba(0,0,0,.38)] ring-1 ring-edge">
+              <header className="relative z-[1] flex shrink-0 items-center gap-3 border-b border-edge px-4 py-3.5">
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand/15 text-brand">
                   <MessageCircle size={18} />
                 </span>
@@ -80,7 +80,7 @@ export default function RoomChatLauncher() {
       >
         <MessageCircle size={19} />
         <span className="text-[13px] font-semibold">Chat</span>
-        <span className="grid h-5 min-w-5 place-items-center rounded-full bg-white/20 px-1 text-[10px] font-bold tabular-nums">
+        <span className="grid h-5 min-w-5 place-items-center rounded-full bg-fill-2 px-1 text-[10px] font-bold tabular-nums text-fg">
           {room.members.length}
         </span>
       </motion.button>
