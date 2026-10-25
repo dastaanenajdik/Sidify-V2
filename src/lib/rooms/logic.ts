@@ -25,6 +25,8 @@ export const ROOM_LIMITS = {
   maxHistory: 10,
   startLeadMs: 350,
   activity: 30,
+  chatMessages: 80,
+  chatMessageLength: 300,
 } as const;
 
 /** Six characters; no I, L or O, so a code read aloud can't be misheard. */
@@ -60,6 +62,14 @@ export interface RoomActivity {
   text: string;
 }
 
+export interface RoomChatMessage {
+  id: string;
+  at: number;
+  memberId: string;
+  by: string;
+  text: string;
+}
+
 /** What every member sees. */
 export interface RoomState {
   code: string;
@@ -81,6 +91,7 @@ export interface RoomState {
   queueSeq: number;
   startedBy: string;
   activity: RoomActivity[];
+  chat: RoomChatMessage[];
 }
 
 /** Server-side record: the public state plus member tokens and housekeeping. */
@@ -219,6 +230,7 @@ export function newRoom(opts: {
     queueSeq: 1,
     startedBy: host.name,
     activity: [{ at: opts.now, by: host.name, text: "started the room" }],
+    chat: [],
     tokens: { [host.id]: opts.token },
     emptySince: null,
     lastFillAt: 0,
@@ -252,6 +264,9 @@ export function publicRoom(rec: RoomRecord): RoomState {
     queueSeq: rec.queueSeq,
     startedBy: rec.startedBy,
     activity: rec.activity,
+    // Existing in-memory/database room records created before chat was added
+    // remain readable and simply start with an empty chat history.
+    chat: rec.chat ?? [],
   };
 }
 

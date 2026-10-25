@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Copy, Crown, ListPlus, Loader2, LogOut, Minus, Plus, QrCode, Share2, UserMinus, X } from "lucide-react";
+import { Check, Copy, Crown, ListPlus, Loader2, LogOut, MessageCircle, Minus, Plus, QrCode, Send, Share2, UserMinus, X } from "lucide-react";
 import { api } from "@/lib/clientApi";
 import { addToQueueEnd, next, playTrackNow, prev, togglePlay } from "@/lib/audioEngine";
-import { inviteUrl, joinRoom, leaveRoom, sendControl, useRoom } from "@/lib/rooms/client";
+import { inviteUrl, joinRoom, leaveRoom, sendControl, sendRoomChat, useRoom } from "@/lib/rooms/client";
 import { ROOM_LIMITS, currentOf, expectedPosition, normalizeCode, type RoomState } from "@/lib/rooms/logic";
 import { usePlayer } from "@/store/player";
 import { useSettings } from "@/store/settings";
@@ -389,7 +389,7 @@ function RoomView({ room, you }: { room: RoomState; you: string }) {
             </div>
           </section>
 
-          <Activity room={room} />
+          <RoomChat room={room} you={you} />
         </div>
       </div>
 
@@ -418,22 +418,80 @@ function RoomView({ room, you }: { room: RoomState; you: string }) {
   );
 }
 
-function Activity({ room }: { room: RoomState }) {
-  const items = [...room.activity].reverse().slice(0, 12);
-  if (!items.length) return null;
+function RoomChat({ room, you }: { room: RoomState; you: string }) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const entries = useMemo(() => {
+    const events = room.activity.map((event, i) => ({ kind: "activity" as const, key: `activity-${event.at}-${i}`, at: event.at, event }));
+    const messages = (room.chat ?? []).map((message) => ({ kind: "chat" as const, key: `chat-${message.id}`, at: message.at, message }));
+    return [...events, ...messages].sort((a, b) => a.at - b.at).slice(-60);
+  }, [room.activity, room.chat]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [room.seq]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true);
+    const sent = await sendRoomChat(text);
+    setSending(false);
+    if (sent) setDraft("");
+  }
+
   return (
-    <section>
-      <h2 className="t-section mb-2 px-1">Activity</h2>
-      <ul className="space-y-1.5 px-1">
-        {items.map((a, i) => (
-          <li key={`${a.at}-${i}`} className="flex gap-2 text-[13px]">
-            <span className="shrink-0 text-fg-3 tabular-nums">{new Date(a.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>
-            <span className="min-w-0 text-fg-2">
-              <span className="font-semibold text-fg">{a.by}</span> {a.text}
-            </span>
-          </li>
-        ))}
-      </ul>
+    <section aria-label="Room chat and activity" className="overflow-hidden rounded-[14px] bg-raised ring-1 ring-edge">
+      <div className="flex items-center gap-2 border-b border-edge px-3.5 py-3">
+        <MessageCircle size={17} className="text-accent" aria-hidden="true" />
+        <h2 className="flex-1 text-[14px] font-semibold">Chat &amp; activity</h2>
+        <span className="text-[11px] text-fg-3">Room members only</span>
+      </div>
+      <div className="max-h-[340px] min-h-[120px] space-y-2 overflow-y-auto px-3.5 py-3" aria-live="polite" aria-relevant="additions text">
+        {entries.length === 0 ? (
+          <p className="py-8 text-center text-[13px] text-fg-3">Say hello — everyone in the room will see it.</p>
+        ) : (
+          entries.map((entry) => {
+            const time = new Date(entry.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+            if (entry.kind === "activity") {
+              return (
+                <div key={entry.key} className="flex gap-2 text-[12px] leading-5">
+                  <span className="shrink-0 text-fg-3 tabular-nums">{time}</span>
+                  <p className="min-w-0 text-fg-2"><span className="font-semibold text-fg">{entry.event.by}</span> {entry.event.text}</p>
+                </div>
+              );
+            }
+            const mine = entry.message.memberId === you;
+            return (
+              <div key={entry.key} className={cx("flex", mine ? "justify-end" : "justify-start")}>
+                <div className={cx("max-w-[90%] rounded-[12px] px-3 py-2", mine ? "bg-accent/15" : "bg-fill")}>
+                  <div className="mb-0.5 flex items-baseline gap-2">
+                    <span className="truncate text-[11px] font-semibold text-fg">{mine ? "You" : entry.message.by}</span>
+                    <time className="shrink-0 text-[10px] text-fg-3">{time}</time>
+                  </div>
+                  <p className="break-words text-[13px] leading-[1.45] text-fg">{entry.message.text}</p>
+                </div>
+              </div>
+            );
+          })
+        )}
+        <div ref={bottomRef} />
+      </div>
+      <form onSubmit={submit} className="flex items-center gap-2 border-t border-edge p-2.5">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value.slice(0, ROOM_LIMITS.chatMessageLength))}
+          maxLength={ROOM_LIMITS.chatMessageLength}
+          placeholder="Write a message…"
+          aria-label="Write a room message"
+          className="field h-10 min-w-0 flex-1 !rounded-[11px] text-[13px]"
+        />
+        <IconButton label="Send message" type="submit" tone="fill" size={38} disabled={!draft.trim() || sending}>
+          <Send size={16} />
+        </IconButton>
+      </form>
     </section>
   );
 }
