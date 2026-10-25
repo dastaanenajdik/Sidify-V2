@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Check, LoaderCircle, MessageCircle, Send, Smile } from "lucide-react";
+import { ArrowDown, Check, LoaderCircle, MessageCircle, Send, Smile } from "lucide-react";
 import { sendRoomChat, useRoom } from "@/lib/rooms/client";
 import { ROOM_LIMITS, currentOf, type RoomChatMessage, type RoomState, type RoomTrack } from "@/lib/rooms/logic";
 import { useLyricsLookup } from "@/lib/lyricsClient";
@@ -77,12 +77,16 @@ export default function RoomChatPanel({
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [pendingMessage, setPendingMessage] = useState<RoomChatMessage | null>(null);
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const [lyricsAvailability, setLyricsAvailability] = useState<{ trackId: string; available: boolean }>({ trackId: "", available: false });
   const [lyricsPreference, setLyricsPreference] = useState<{ trackId: string; show: boolean }>({ trackId: "", show: true });
   const inputRef = useRef<HTMLInputElement>(null);
   const caretRef = useRef({ start: 0, end: 0 });
   const feedRef = useRef<HTMLDivElement>(null);
   const initialScrollDone = useRef(false);
+  const lastRoomCodeRef = useRef(room.code);
+  const seenChatIdsRef = useRef<Set<string> | null>(null);
+  const wasNearBottomRef = useRef(true);
   const track = currentOf(room);
   const trackId = track?.id;
   const lyricsAvailable = !!trackId && lyricsAvailability.trackId === trackId && lyricsAvailability.available;
@@ -100,20 +104,55 @@ export default function RoomChatPanel({
     return [...events, ...messages, ...pending].sort((a, b) => a.at - b.at).slice(-60);
   }, [room.activity, room.chat, pendingMessage]);
 
-  // Scroll only the feed, never the page. scrollIntoView() can move the whole
-  // app's page when the chat changes, especially after Enter submits a message.
+  // Scroll only the feed, never the page. If the listener has scrolled away
+  // from the bottom, keep their position and count incoming chat messages.
   useLayoutEffect(() => {
     const feed = feedRef.current;
     if (!feed) return;
+    if (lastRoomCodeRef.current !== room.code) {
+      lastRoomCodeRef.current = room.code;
+      initialScrollDone.current = false;
+      seenChatIdsRef.current = null;
+      wasNearBottomRef.current = true;
+      setNewMessageCount(0);
+    }
+
+    const chat = room.chat ?? [];
+    const previousIds = seenChatIdsRef.current;
+    const unseenCount = previousIds ? chat.reduce((count, message) => count + (previousIds.has(message.id) ? 0 : 1), 0) : 0;
+    seenChatIdsRef.current = new Set(chat.map((message) => message.id));
+
     if (!initialScrollDone.current) {
-      // Opening the panel (or refreshing) should always start at the newest message.
+      // Opening or switching rooms starts at the newest message without an unread badge.
       feed.scrollTop = feed.scrollHeight;
       initialScrollDone.current = true;
+      wasNearBottomRef.current = true;
+      setNewMessageCount(0);
       return;
     }
-    const distanceFromBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
-    if (distanceFromBottom < 100) feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
-  }, [room.seq, pendingMessage?.id]);
+
+    if (wasNearBottomRef.current) {
+      feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
+      setNewMessageCount(0);
+    } else if (unseenCount > 0) {
+      setNewMessageCount((count) => count + unseenCount);
+    }
+  }, [room.code, room.seq, room.chat, pendingMessage?.id]);
+
+  function trackFeedScroll() {
+    const feed = feedRef.current;
+    if (!feed) return;
+    wasNearBottomRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 100;
+    if (wasNearBottomRef.current) setNewMessageCount(0);
+  }
+
+  function scrollToLatest() {
+    const feed = feedRef.current;
+    if (!feed) return;
+    feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
+    wasNearBottomRef.current = true;
+    setNewMessageCount(0);
+  }
 
   function insertEmoji(emoji: string) {
     const start = inputRef.current?.selectionStart ?? caretRef.current.start;
@@ -198,6 +237,7 @@ export default function RoomChatPanel({
       )}
       <div
         ref={feedRef}
+        onScroll={trackFeedScroll}
         className={cx("relative z-[1] min-h-0 space-y-2 overflow-y-auto overscroll-contain px-3.5 py-3 text-fg", feedClassName)}
         aria-live="polite"
         aria-relevant="additions text"
@@ -238,6 +278,17 @@ export default function RoomChatPanel({
           })
         )}
       </div>
+      {newMessageCount > 0 && (
+        <button
+          type="button"
+          onClick={scrollToLatest}
+          aria-label={`Scroll to ${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}`}
+          className="absolute bottom-[64px] left-1/2 z-20 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-[12px] font-bold tabular-nums text-on-primary shadow-[0_4px_18px_rgba(0,0,0,.28)] ring-1 ring-edge transition-transform hover:scale-105 active:scale-95"
+        >
+          <ArrowDown size={14} aria-hidden="true" />
+          <span>{newMessageCount}</span>
+        </button>
+      )}
       <form onSubmit={submit} className="relative z-[1] flex shrink-0 items-center gap-2 border-t border-edge p-2.5">
         {emojiOpen && (
           <div

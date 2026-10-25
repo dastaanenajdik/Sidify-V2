@@ -43,7 +43,7 @@ export default function RoomChatLauncher() {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[14px] font-semibold">Room chat</span>
-                  <span className="block truncate text-[11px] text-fg-2">{room.name} · {room.members.length} listening</span>
+                  <span className="block max-w-full truncate rounded-full bg-white/90 px-2 py-0.5 text-[11px] text-black">{room.name} · {room.members.length} listening</span>
                 </span>
                 <button
                   type="button"
