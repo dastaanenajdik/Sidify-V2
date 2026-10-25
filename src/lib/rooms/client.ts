@@ -275,14 +275,16 @@ function drift(room: RoomState, threshold: number | null) {
   } else strikes = 0;
 }
 
-function receive(room: RoomState, source: "poll" | "control" | "join") {
+function receive(room: RoomState, source: "poll" | "control" | "join" | "chat") {
   if (room.seq <= lastSeq && source === "poll") return;
   if (room.seq < lastSeq) return;
   lastSeq = room.seq;
   const presence: Record<string, number> = {};
   for (const m of room.members) presence[m.id] = Math.max(0, serverNow() - m.lastSeen);
   R().set({ room, presence, status: "live" });
-  if (!isMine(room)) return;
+  // Chat updates share the room's sequence and polling transport, but should
+  // never cause a playback reconciliation.
+  if (source === "chat" || !isMine(room)) return;
   holdUntil = 0;
   apply(room, source !== "poll");
 }
@@ -484,6 +486,35 @@ export function resumeRoom() {
   if (R().session && !syncing) {
     R().set({ status: "reconnecting" });
     startSync();
+  }
+}
+
+export async function sendRoomChat(text: string): Promise<boolean> {
+  const { session } = R();
+  const message = text.trim().slice(0, 300);
+  if (!session || !message) return false;
+  try {
+    const { status, data } = await call<RoomReply>(`/api/rooms/${session.code}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ text: message }),
+    });
+    if (status === 404 || data.ended) {
+      cleanup("This room has ended");
+      return false;
+    }
+    if (status === 403 && data.removed) {
+      cleanup("You were removed from the room");
+      return false;
+    }
+    if (status >= 400) {
+      toast(data.error || "Couldn't send your message", undefined, "warn");
+      return false;
+    }
+    if (data.room) receive(data.room, "chat");
+    return true;
+  } catch {
+    toast("Couldn't send your message", "Check your connection and try again", "warn");
+    return false;
   }
 }
 
