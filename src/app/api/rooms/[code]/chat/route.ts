@@ -12,9 +12,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
   const code = normalizeCode((await params).code);
   const token = req.headers.get("x-room-token");
   let text = "";
+  let messageId = "";
   try {
-    const body = (await req.json()) as { text?: unknown };
+    const body = (await req.json()) as { text?: unknown; id?: unknown };
     text = typeof body.text === "string" ? body.text.replace(/\s+/g, " ").trim().slice(0, ROOM_LIMITS.chatMessageLength) : "";
+    messageId = typeof body.id === "string" && /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(body.id) ? body.id : randomUUID();
   } catch {
     return json({ error: "Enter a message to send" }, 400);
   }
@@ -28,13 +30,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
       sweep(room, now);
       me = memberByToken(room, token);
       if (!me) return false;
-      touch(room, me.id, now);
+      const touched = touch(room, me.id, now);
       // Older rooms may predate the chat field.
       const chat = (room.chat ??= []);
-      chat.push({ id: randomUUID(), at: now, memberId: me.id, by: me.name, text });
-      room.chat = chat.slice(-ROOM_LIMITS.chatMessages);
-      room.seq++;
-      return true;
+      const alreadySent = chat.some((message) => message.id === messageId && message.memberId === me!.id);
+      if (!alreadySent) {
+        chat.push({ id: messageId, at: now, memberId: me.id, by: me.name, text });
+        room.chat = chat.slice(-ROOM_LIMITS.chatMessages);
+        room.seq++;
+      }
+      return !alreadySent || touched;
     });
   } catch (error) {
     console.error("room chat failed", error);

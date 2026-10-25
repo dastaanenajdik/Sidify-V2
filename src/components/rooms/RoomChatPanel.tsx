@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { MessageCircle, Send } from "lucide-react";
-import { sendRoomChat } from "@/lib/rooms/client";
-import { ROOM_LIMITS, type RoomState } from "@/lib/rooms/logic";
+import { Check, LoaderCircle, MessageCircle, Send } from "lucide-react";
+import { sendRoomChat, useRoom } from "@/lib/rooms/client";
+import { ROOM_LIMITS, type RoomChatMessage, type RoomState } from "@/lib/rooms/logic";
 import { cx } from "@/lib/format";
 import { IconButton } from "@/components/ui";
+
+function createMessageId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (digit) => {
+    const random = Math.random() * 16 | 0;
+    return (digit === "x" ? random : (random & 0x3) | 0x8).toString(16);
+  });
+}
 
 export default function RoomChatPanel({
   room,
@@ -22,12 +30,17 @@ export default function RoomChatPanel({
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [pendingMessage, setPendingMessage] = useState<RoomChatMessage | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const entries = useMemo(() => {
     const events = room.activity.map((event, i) => ({ kind: "activity" as const, key: `activity-${event.at}-${i}`, at: event.at, event }));
-    const messages = (room.chat ?? []).map((message) => ({ kind: "chat" as const, key: `chat-${message.id}`, at: message.at, message }));
-    return [...events, ...messages].sort((a, b) => a.at - b.at).slice(-60);
-  }, [room.activity, room.chat]);
+    const storedMessages = room.chat ?? [];
+    const messages = storedMessages.map((message) => ({ kind: "chat" as const, key: `chat-${message.id}`, at: message.at, message, delivery: "sent" as const }));
+    const pending = pendingMessage && !storedMessages.some((message) => message.id === pendingMessage.id)
+      ? [{ kind: "chat" as const, key: `chat-${pendingMessage.id}`, at: pendingMessage.at, message: pendingMessage, delivery: "sending" as const }]
+      : [];
+    return [...events, ...messages, ...pending].sort((a, b) => a.at - b.at).slice(-60);
+  }, [room.activity, room.chat, pendingMessage]);
 
   // Scroll only the feed, never the page. scrollIntoView() can move the whole
   // app's page when the chat changes, especially after Enter submits a message.
@@ -36,16 +49,29 @@ export default function RoomChatPanel({
     if (!feed) return;
     const distanceFromBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
     if (distanceFromBottom < 100) feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
-  }, [room.seq]);
+  }, [room.seq, pendingMessage?.id]);
+
+  useEffect(() => {
+    const id = pendingMessage?.id;
+    if (id && (room.chat ?? []).some((message) => message.id === id)) {
+      setPendingMessage((current) => current?.id === id ? null : current);
+      setSending(false);
+    }
+  }, [room.chat, pendingMessage?.id]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = draft.trim();
     if (!text || sending) return;
+    const id = createMessageId();
+    setPendingMessage({ id, at: Date.now(), memberId: you, by: "", text });
+    setDraft("");
     setSending(true);
-    const sent = await sendRoomChat(text);
+    const sent = await sendRoomChat(text, id);
+    const acknowledged = (useRoom.getState().room?.chat ?? []).some((message) => message.id === id);
     setSending(false);
-    if (sent) setDraft("");
+    setPendingMessage((current) => current?.id === id ? null : current);
+    if (!sent && !acknowledged) setDraft((current) => current || text);
   }
 
   return (
@@ -83,6 +109,11 @@ export default function RoomChatPanel({
                   <div className="mb-0.5 flex items-baseline gap-2">
                     <span className="truncate text-[11px] font-semibold text-fg">{mine ? "You" : entry.message.by}</span>
                     <time className="shrink-0 text-[10px] text-fg-3">{time}</time>
+                    {entry.delivery === "sending" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-fg-3"><LoaderCircle size={11} className="animate-spin" /> Sending…</span>
+                    ) : mine ? (
+                      <Check size={12} className="shrink-0 text-playing" aria-label="Sent" />
+                    ) : null}
                   </div>
                   <p className="break-words text-[13px] leading-[1.45] text-fg">{entry.message.text}</p>
                 </div>
@@ -95,13 +126,16 @@ export default function RoomChatPanel({
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value.slice(0, ROOM_LIMITS.chatMessageLength))}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault();
+          }}
           maxLength={ROOM_LIMITS.chatMessageLength}
           placeholder="Write a message…"
           aria-label="Write a room message"
           className="field h-10 min-w-0 flex-1 !rounded-[11px] text-[13px]"
         />
-        <IconButton label="Send message" type="submit" tone="fill" size={38} disabled={!draft.trim() || sending}>
-          <Send size={16} />
+        <IconButton label={sending ? "Sending message" : "Send message"} type="submit" tone="fill" size={38} disabled={!draft.trim() || sending}>
+          {sending ? <LoaderCircle size={17} className="animate-spin" /> : <Send size={16} />}
         </IconButton>
       </form>
     </section>

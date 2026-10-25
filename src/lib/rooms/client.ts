@@ -21,7 +21,7 @@ import {
 /* -------------------------------------------------------------------------- */
 /*  Listen Together — client.                                                  */
 /*                                                                             */
-/*  Polls the room about once a second (that's also the heartbeat), keeps a    */
+/*  Polls the room every 750ms while visible (also the heartbeat), keeps a    */
 /*  server-clock offset from the fastest round trips, and drives the local     */
 /*  engine to match: same track, same play/pause, same position. Local intents */
 /*  go to the room through the engine's bridge and come back as room state.    */
@@ -355,7 +355,7 @@ function schedulePoll(delay: number) {
     await pollOnce();
     if (!R().session) return;
     const visible = typeof document === "undefined" || document.visibilityState === "visible";
-    const base = visible ? 1000 : 2500;
+    const base = visible ? 750 : 2500;
     schedulePoll(failures ? Math.min(6000, base * (1 + failures)) : base);
   }, delay);
 }
@@ -489,14 +489,14 @@ export function resumeRoom() {
   }
 }
 
-export async function sendRoomChat(text: string): Promise<boolean> {
+export async function sendRoomChat(text: string, id?: string): Promise<boolean> {
   const { session } = R();
   const message = text.trim().slice(0, 300);
   if (!session || !message) return false;
   try {
     const { status, data } = await call<RoomReply>(`/api/rooms/${session.code}/chat`, {
       method: "POST",
-      body: JSON.stringify({ text: message }),
+      body: JSON.stringify({ text: message, id }),
     });
     if (status === 404 || data.ended) {
       cleanup("This room has ended");
