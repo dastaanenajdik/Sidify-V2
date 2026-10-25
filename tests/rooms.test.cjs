@@ -141,6 +141,17 @@ test('membership: capacity, kick, host hand-over and the sweep', () => {
   assert.equal(rec.dead, true);
 });
 
+test('room chat is kept for active members and cleared when the room goes offline', () => {
+  const rec = room();
+  rec.chat = [{ id: 'msg-1', at: 1_000_001, memberId: 'guest', by: 'Aman', text: 'hello' }];
+
+  L.removeMember(rec, 'guest', 1_000_010, 'left');
+  assert.equal(rec.chat.length, 1, 'one listener leaving does not erase chat for the remaining listener');
+
+  L.removeMember(rec, 'host', 1_000_020, 'left');
+  assert.deepEqual(rec.chat, [], 'chat is discarded as soon as the room has no active listeners');
+});
+
 test('newly left room members are announced once, never from an old/different room snapshot', () => {
   const previous = L.publicRoom(room());
   const next = {

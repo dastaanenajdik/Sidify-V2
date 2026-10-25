@@ -1,11 +1,14 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Check, LoaderCircle, MessageCircle, Send, Smile } from "lucide-react";
 import { sendRoomChat, useRoom } from "@/lib/rooms/client";
-import { ROOM_LIMITS, type RoomChatMessage, type RoomState } from "@/lib/rooms/logic";
+import { ROOM_LIMITS, currentOf, type RoomChatMessage, type RoomState, type RoomTrack } from "@/lib/rooms/logic";
+import { useLyricsLookup } from "@/lib/lyricsClient";
 import { cx } from "@/lib/format";
 import { IconButton } from "@/components/ui";
+import { SyncedLyrics, lyricsAreSynced } from "@/components/player/LyricsPane";
+import { useSettings } from "@/store/settings";
 
 function createMessageId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -20,6 +23,40 @@ const ROOM_EMOJIS = [
   "🙌", "👏", "🫶", "❤️", "🔥", "✨", "🎵",
   "🎧", "🎤", "🎉", "💯", "👍", "👎", "🤘",
 ];
+
+function RoomLyricsBackdrop({
+  track,
+  visible,
+  onAvailability,
+}: {
+  track: RoomTrack;
+  visible: boolean;
+  onAvailability: (available: boolean) => void;
+}) {
+  const { loading, started, lines } = useLyricsLookup(track.title, track.artist, track.durationMs);
+  const reduceMotion = useSettings((state) => state.reduceMotion);
+  const hasSyncedLyrics = started && !loading && lyricsAreSynced(lines);
+
+  useEffect(() => {
+    onAvailability(hasSyncedLyrics);
+  }, [hasSyncedLyrics, onAvailability]);
+
+  if (!visible || !hasSyncedLyrics) return null;
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0 flex min-h-0 flex-col overflow-hidden opacity-[0.16]">
+      <SyncedLyrics
+        lines={lines}
+        offset={0}
+        fontSize={18}
+        onArt={false}
+        reduce={reduceMotion}
+        selecting={false}
+        picked={[]}
+        onPick={() => {}}
+      />
+    </div>
+  );
+}
 
 export default function RoomChatPanel({
   room,
@@ -40,10 +77,19 @@ export default function RoomChatPanel({
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [pendingMessage, setPendingMessage] = useState<RoomChatMessage | null>(null);
+  const [lyricsAvailability, setLyricsAvailability] = useState<{ trackId: string; available: boolean }>({ trackId: "", available: false });
+  const [lyricsPreference, setLyricsPreference] = useState<{ trackId: string; show: boolean }>({ trackId: "", show: true });
   const inputRef = useRef<HTMLInputElement>(null);
   const caretRef = useRef({ start: 0, end: 0 });
   const feedRef = useRef<HTMLDivElement>(null);
   const initialScrollDone = useRef(false);
+  const track = currentOf(room);
+  const trackId = track?.id;
+  const lyricsAvailable = !!trackId && lyricsAvailability.trackId === trackId && lyricsAvailability.available;
+  const showLyrics = !trackId || lyricsPreference.trackId !== trackId ? true : lyricsPreference.show;
+  const reportLyricsAvailability = useCallback((available: boolean) => {
+    if (trackId) setLyricsAvailability({ trackId, available });
+  }, [trackId]);
   const entries = useMemo(() => {
     const events = room.activity.map((event, i) => ({ kind: "activity" as const, key: `activity-${event.at}-${i}`, at: event.at, event }));
     const storedMessages = room.chat ?? [];
@@ -108,11 +154,46 @@ export default function RoomChatPanel({
       glass ? "bar-glass shadow-[0_18px_55px_rgba(0,0,0,.24)] ring-1 ring-edge" : "bg-transparent shadow-none ring-0",
       className
     )}>
-      {showHeader && (
-        <div className="relative z-[1] flex shrink-0 items-center gap-2 border-b border-edge px-3.5 py-3">
-          <MessageCircle size={17} className="text-accent" aria-hidden="true" />
-          <h2 className="flex-1 text-[14px] font-semibold">Chat &amp; activity</h2>
-          <span className="text-[11px] text-fg-2">Room members only</span>
+      {track && (
+        <RoomLyricsBackdrop
+          key={track.id}
+          track={track}
+          visible={showLyrics}
+          onAvailability={reportLyricsAvailability}
+        />
+      )}
+      {(showHeader || lyricsAvailable) && (
+        <div className="relative z-[1] flex shrink-0 flex-wrap items-center gap-2 border-b border-edge px-3.5 py-3">
+          {showHeader && (
+            <>
+              <MessageCircle size={17} className="shrink-0 text-accent" aria-hidden="true" />
+              <h2 className="min-w-0 flex-1 truncate text-[14px] font-semibold">Chat &amp; activity</h2>
+              <span className="hidden text-[11px] text-fg-2 sm:inline">Room members only</span>
+            </>
+          )}
+          {lyricsAvailable && trackId && (
+            <div className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-fill p-0.5" aria-label="Synced lyrics display">
+              <span className="px-1.5 text-[10px] font-medium text-fg-2">Lyrics</span>
+              <button
+                type="button"
+                aria-label="Show lyrics"
+                aria-pressed={showLyrics}
+                onClick={() => setLyricsPreference({ trackId, show: true })}
+                className={cx("rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors", showLyrics ? "bg-primary text-on-primary" : "text-fg-2 hover:bg-fill-2")}
+              >
+                Show
+              </button>
+              <button
+                type="button"
+                aria-label="Turn lyrics off"
+                aria-pressed={!showLyrics}
+                onClick={() => setLyricsPreference({ trackId, show: false })}
+                className={cx("rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors", !showLyrics ? "bg-primary text-on-primary" : "text-fg-2 hover:bg-fill-2")}
+              >
+                Off
+              </button>
+            </div>
+          )}
         </div>
       )}
       <div
