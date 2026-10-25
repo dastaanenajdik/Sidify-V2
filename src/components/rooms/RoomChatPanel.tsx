@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Check, LoaderCircle, MessageCircle, Send } from "lucide-react";
+import { Check, LoaderCircle, MessageCircle, Send, Smile } from "lucide-react";
 import { sendRoomChat, useRoom } from "@/lib/rooms/client";
 import { ROOM_LIMITS, type RoomChatMessage, type RoomState } from "@/lib/rooms/logic";
 import { cx } from "@/lib/format";
@@ -15,22 +15,33 @@ function createMessageId(): string {
   });
 }
 
+const ROOM_EMOJIS = [
+  "😀", "😂", "🥹", "😍", "😎", "🤔", "😭",
+  "🙌", "👏", "🫶", "❤️", "🔥", "✨", "🎵",
+  "🎧", "🎤", "🎉", "💯", "👍", "👎", "🤘",
+];
+
 export default function RoomChatPanel({
   room,
   you,
   className,
   feedClassName,
   showHeader = true,
+  glass = true,
 }: {
   room: RoomState;
   you: string;
   className?: string;
   feedClassName?: string;
   showHeader?: boolean;
+  glass?: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const [pendingMessage, setPendingMessage] = useState<RoomChatMessage | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const caretRef = useRef({ start: 0, end: 0 });
   const feedRef = useRef<HTMLDivElement>(null);
   const initialScrollDone = useRef(false);
   const entries = useMemo(() => {
@@ -58,8 +69,26 @@ export default function RoomChatPanel({
     if (distanceFromBottom < 100) feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
   }, [room.seq, pendingMessage?.id]);
 
+  function insertEmoji(emoji: string) {
+    const start = inputRef.current?.selectionStart ?? caretRef.current.start;
+    const end = inputRef.current?.selectionEnd ?? caretRef.current.end;
+    const next = `${draft.slice(0, start)}${emoji}${draft.slice(end)}`;
+    if (next.length > ROOM_LIMITS.chatMessageLength) return;
+    setDraft(next);
+    setEmojiOpen(false);
+    requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      const caret = start + emoji.length;
+      input.setSelectionRange(caret, caret);
+      caretRef.current = { start: caret, end: caret };
+    });
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setEmojiOpen(false);
     const text = draft.trim();
     if (!text || sending) return;
     const id = createMessageId();
@@ -74,7 +103,11 @@ export default function RoomChatPanel({
   }
 
   return (
-    <section aria-label="Room chat and activity" className={cx("flex min-h-0 flex-col overflow-hidden rounded-[14px] bg-raised ring-1 ring-edge", className)}>
+    <section aria-label="Room chat and activity" className={cx(
+      "relative flex min-h-0 flex-col overflow-hidden rounded-[18px]",
+      glass ? "bar-glass shadow-[0_18px_55px_rgba(0,0,0,.24)] ring-1 ring-white/15" : "bg-transparent shadow-none ring-0",
+      className
+    )}>
       {showHeader && (
         <div className="flex shrink-0 items-center gap-2 border-b border-edge px-3.5 py-3">
           <MessageCircle size={17} className="text-accent" aria-hidden="true" />
@@ -104,7 +137,10 @@ export default function RoomChatPanel({
             const mine = entry.message.memberId === you;
             return (
               <div key={entry.key} className={cx("flex", mine ? "justify-end" : "justify-start")}>
-                <div className={cx("max-w-[90%] rounded-[12px] px-3 py-2", mine ? "bg-accent/15" : "bg-fill")}>
+                <div className={cx(
+                  "max-w-[90%] rounded-[14px] px-3 py-2 backdrop-blur-md ring-1",
+                  mine ? "bg-accent/15 ring-accent/15" : "bg-white/[0.08] ring-white/[0.08]"
+                )}>
                   <div className="mb-0.5 flex items-baseline gap-2">
                     <span className="truncate text-[11px] font-semibold text-fg">{mine ? "You" : entry.message.by}</span>
                     <time className="shrink-0 text-[10px] text-fg-3">{time}</time>
@@ -121,19 +157,67 @@ export default function RoomChatPanel({
           })
         )}
       </div>
-      <form onSubmit={submit} className="flex shrink-0 items-center gap-2 border-t border-edge p-2.5">
+      <form onSubmit={submit} className="relative flex shrink-0 items-center gap-2 border-t border-white/10 p-2.5">
+        {emojiOpen && (
+          <div
+            role="dialog"
+            aria-label="Choose an emoji"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                setEmojiOpen(false);
+              }
+            }}
+            className="menu-glass absolute right-2 bottom-[calc(100%+10px)] z-30 w-[232px] rounded-[18px] p-2.5"
+          >
+            <p className="mb-2 px-1 text-[11px] font-semibold tracking-wide text-fg-2">Emoji</p>
+            <div className="grid grid-cols-7 gap-1" role="group" aria-label="Emoji choices">
+              {ROOM_EMOJIS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  aria-label={`Insert ${emoji}`}
+                  onClick={() => insertEmoji(emoji)}
+                  className="grid h-7 w-7 place-items-center rounded-[9px] text-[18px] transition-colors hover:bg-white/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/60"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <input
+          ref={inputRef}
           value={draft}
-          onChange={(event) => setDraft(event.target.value.slice(0, ROOM_LIMITS.chatMessageLength))}
+          onChange={(event) => {
+            setDraft(event.target.value.slice(0, ROOM_LIMITS.chatMessageLength));
+            caretRef.current = { start: event.target.selectionStart ?? 0, end: event.target.selectionEnd ?? 0 };
+          }}
+          onSelect={(event) => {
+            caretRef.current = { start: event.currentTarget.selectionStart ?? 0, end: event.currentTarget.selectionEnd ?? 0 };
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault();
           }}
           maxLength={ROOM_LIMITS.chatMessageLength}
           placeholder="Write a message…"
           aria-label="Write a room message"
-          className="field h-10 min-w-0 flex-1 !rounded-[11px] text-[13px]"
+          className="field h-10 min-w-0 flex-1 !rounded-full !bg-fill backdrop-blur-md text-[13px]"
         />
-        <IconButton label={sending ? "Sending message" : "Send message"} type="submit" tone="fill" size={38} disabled={!draft.trim() || sending}>
+        <IconButton
+          label={emojiOpen ? "Close emoji picker" : "Choose an emoji"}
+          type="button"
+          tone="glass"
+          size={38}
+          active={emojiOpen}
+          aria-expanded={emojiOpen}
+          aria-haspopup="dialog"
+          onClick={() => setEmojiOpen((open) => !open)}
+        >
+          <Smile size={18} />
+        </IconButton>
+        <IconButton label={sending ? "Sending message" : "Send message"} type="submit" tone="glass" size={38} disabled={!draft.trim() || sending}>
           {sending ? <LoaderCircle size={17} className="animate-spin" /> : <Send size={16} />}
         </IconButton>
       </form>
