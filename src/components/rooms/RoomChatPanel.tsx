@@ -104,32 +104,32 @@ export default function RoomChatPanel({
 
   return (
     <section aria-label="Room chat and activity" className={cx(
-      "relative flex min-h-0 flex-col overflow-hidden rounded-[18px]",
-      glass ? "bar-glass shadow-[0_18px_55px_rgba(0,0,0,.24)] ring-1 ring-white/15" : "bg-transparent shadow-none ring-0",
+      "relative flex min-h-0 flex-col overflow-hidden rounded-[18px] text-fg",
+      glass ? "bar-glass shadow-[0_18px_55px_rgba(0,0,0,.24)] ring-1 ring-edge" : "bg-transparent shadow-none ring-0",
       className
     )}>
       {showHeader && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-edge px-3.5 py-3">
+        <div className="relative z-[1] flex shrink-0 items-center gap-2 border-b border-edge px-3.5 py-3">
           <MessageCircle size={17} className="text-accent" aria-hidden="true" />
           <h2 className="flex-1 text-[14px] font-semibold">Chat &amp; activity</h2>
-          <span className="text-[11px] text-fg-3">Room members only</span>
+          <span className="text-[11px] text-fg-2">Room members only</span>
         </div>
       )}
       <div
         ref={feedRef}
-        className={cx("min-h-0 space-y-2 overflow-y-auto overscroll-contain px-3.5 py-3", feedClassName)}
+        className={cx("relative z-[1] min-h-0 space-y-2 overflow-y-auto overscroll-contain px-3.5 py-3 text-fg", feedClassName)}
         aria-live="polite"
         aria-relevant="additions text"
       >
         {entries.length === 0 ? (
-          <p className="py-8 text-center text-[13px] text-fg-3">Say hello — everyone in the room will see it.</p>
+          <p className="py-8 text-center text-[13px] text-fg-2">Say hello — everyone in the room will see it.</p>
         ) : (
           entries.map((entry) => {
             const time = new Date(entry.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
             if (entry.kind === "activity") {
               return (
                 <div key={entry.key} className="flex gap-2 text-[12px] leading-5">
-                  <span className="shrink-0 text-fg-3 tabular-nums">{time}</span>
+                  <span className="shrink-0 text-fg-2 tabular-nums">{time}</span>
                   <p className="min-w-0 text-fg-2"><span className="font-semibold text-fg">{entry.event.by}</span> {entry.event.text}</p>
                 </div>
               );
@@ -139,13 +139,13 @@ export default function RoomChatPanel({
               <div key={entry.key} className={cx("flex", mine ? "justify-end" : "justify-start")}>
                 <div className={cx(
                   "max-w-[90%] rounded-[14px] px-3 py-2 backdrop-blur-md ring-1",
-                  mine ? "bg-accent/15 ring-accent/15" : "bg-white/[0.08] ring-white/[0.08]"
+                  mine ? "bg-accent/15 ring-accent/15" : "bg-fill ring-edge"
                 )}>
                   <div className="mb-0.5 flex items-baseline gap-2">
                     <span className="truncate text-[11px] font-semibold text-fg">{mine ? "You" : entry.message.by}</span>
-                    <time className="shrink-0 text-[10px] text-fg-3">{time}</time>
+                    <time className="shrink-0 text-[10px] text-fg-2">{time}</time>
                     {entry.delivery === "sending" ? (
-                      <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-fg-3"><LoaderCircle size={11} className="animate-spin" /> Sending…</span>
+                      <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-fg-2"><LoaderCircle size={11} className="animate-spin" /> Sending…</span>
                     ) : mine ? (
                       <Check size={12} className="shrink-0 text-playing" aria-label="Sent" />
                     ) : null}
@@ -157,7 +157,7 @@ export default function RoomChatPanel({
           })
         )}
       </div>
-      <form onSubmit={submit} className="relative flex shrink-0 items-center gap-2 border-t border-white/10 p-2.5">
+      <form onSubmit={submit} className="relative z-[1] flex shrink-0 items-center gap-2 border-t border-edge p-2.5">
         {emojiOpen && (
           <div
             role="dialog"
@@ -179,7 +179,7 @@ export default function RoomChatPanel({
                   type="button"
                   aria-label={`Insert ${emoji}`}
                   onClick={() => insertEmoji(emoji)}
-                  className="grid h-7 w-7 place-items-center rounded-[9px] text-[18px] transition-colors hover:bg-white/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/60"
+                  className="grid h-7 w-7 place-items-center rounded-[9px] text-[18px] transition-colors hover:bg-fill-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-fg"
                 >
                   {emoji}
                 </button>
