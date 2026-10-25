@@ -15,7 +15,9 @@ export const ROOM_LIMITS = {
   minMembers: 2,
   maxMembers: 10,
   /** A member who hasn't checked in for this long loses their slot. */
-  graceMs: 45_000,
+  // Allow backgrounded/mobile browsers to suspend timers without immediately
+  // removing a still-open listener from the room.
+  graceMs: 5 * 60_000,
   /** Shown as "away" after this long without a check-in. */
   awayMs: 9_000,
   /** An empty room is deleted after this long. */
@@ -321,7 +323,9 @@ export function removeMember(rec: RoomRecord, memberId: string, now: number, rea
   const tokens = { ...rec.tokens };
   delete tokens[memberId];
   rec.tokens = tokens;
-  log(rec, now, m.name, reason === "left" ? "left" : reason === "removed" ? "was removed" : "dropped out");
+  // Timeouts can be caused by a temporarily suspended browser; do not make
+  // that look like an explicit departure in the activity/chat feed.
+  if (reason !== "timed out") log(rec, now, m.name, reason === "left" ? "left" : "was removed");
   if (rec.hostId === memberId && rec.members.length) {
     const next = [...rec.members].sort((a, b) => a.joinedAt - b.joinedAt)[0];
     rec.hostId = next.id;
