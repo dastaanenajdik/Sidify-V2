@@ -10,6 +10,7 @@ import MeshBackdrop from "../MeshBackdrop";
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
 import { MiniPlayer, MobileNav } from "./MobileChrome";
+import RoomChatLauncher from "@/components/rooms/RoomChatLauncher";
 
 const SidePanel = dynamic(() => import("./SidePanel"), { ssr: false });
 
@@ -51,6 +52,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </div>
       <MiniPlayer />
       <MobileNav />
+      <RoomChatLauncher />
     </div>
   );
 }
