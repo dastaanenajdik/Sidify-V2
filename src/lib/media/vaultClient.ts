@@ -14,6 +14,7 @@ import {
   randomSpoofedIp,
   type VaultRequestHeaders,
 } from "./vaultCrypto";
+import { configuredHeaderProfile, type UpstreamHeaderProfile } from "./upstreamHeaders";
 
 /** API hosts, rotated on failure. */
 const HOST_POOL = [
@@ -96,6 +97,28 @@ function sessionIsValid(session: VaultSession | null): session is VaultSession {
 export interface VaultClientOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Outbound identity. Defaults to `MEDIA_UPSTREAM_HEADER_PROFILE` (mobile). */
+  headerProfile?: UpstreamHeaderProfile;
+  /**
+   * Optional relay in front of the upstream, e.g. a Cloudflare Worker the
+   * operator deployed. The request is still *signed* for the upstream URL; the
+   * relay only changes where the bytes leave from, which is the one thing a
+   * server can do when its own egress range is blocked.
+   */
+  relayUrl?: string | null;
+}
+
+/**
+ * One request, fully signed, as data.
+ *
+ * This is what the browser-side transport needs: `url` + `headers` + `body`
+ * verbatim. Producing it is the server's job because the HMAC key never leaves
+ * the server — see `src/app/api/media/exclusive/ticket/route.ts`.
+ */
+export interface VaultSignedCall {
+  url: string;
+  headers: VaultRequestHeaders;
+  body?: string;
 }
 
 /**
@@ -137,13 +160,77 @@ export class VaultClient {
   /** Structural summary of the most recent rejected response. Diagnostics only. */
   private lastFailure: VaultResponseDiagnostics | null = null;
 
+  private readonly headerProfile: UpstreamHeaderProfile;
+  private readonly relayUrl: string | null;
+
   constructor(options: VaultClientOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    this.headerProfile = options.headerProfile ?? configuredHeaderProfile();
+    this.relayUrl = (options.relayUrl ?? process.env.MEDIA_UPSTREAM_RELAY_URL ?? "").trim() || null;
   }
 
   get userAgent(): string {
     return this.identity.userAgent;
+  }
+
+  /** The host the next signed call will be aimed at. */
+  get activeHost(): string {
+    return HOST_POOL[this.activeHostIndex];
+  }
+
+  /** Where the configured egress relay lives, if any. Diagnostics only. */
+  get egressRelay(): string | null {
+    return this.relayUrl;
+  }
+
+  /**
+   * Builds a signed request without sending it.
+   *
+   * Used by the ticket endpoint to hand a request to the user's browser: the
+   * browser then calls the upstream itself, so the connection carries the
+   * user's residential IP instead of this server's datacenter range. Nothing
+   * secret can be derived from the result — the signature is bound to this
+   * one method + URL + body + timestamp, and expires upstream.
+   */
+  signedCall(
+    method: string,
+    pathAndQuery: string,
+    body: string | undefined,
+    authToken: string | null,
+    options: { forwardedFor?: boolean } = {}
+  ): VaultSignedCall {
+    const url = `${this.activeHost}${pathAndQuery}`;
+    const headers = buildSignedHeaders({
+      method,
+      url,
+      body,
+      authToken,
+      userAgent: this.identity.userAgent,
+      clientInfo: this.identity.clientInfo,
+      // A browser-originated call already carries a real address on the socket;
+      // claiming a different one in a header would be the odd thing.
+      spoofedIp: options.forwardedFor === false ? null : this.spoofedIp,
+      profile: this.headerProfile,
+    });
+    return { url, headers, body };
+  }
+
+  /**
+   * Mints a one-off visitor session for a browser ticket.
+   *
+   * Deliberately *not* the process-wide session: whatever the browser holds must
+   * never be the token the rest of the server is using.
+   */
+  async mintEphemeralSession(): Promise<string> {
+    return (await this.fetchFreshSession()).token;
+  }
+
+  /** Wraps an upstream URL in the configured egress relay, when there is one. */
+  private transportUrl(upstreamUrl: string): string {
+    if (!this.relayUrl) return upstreamUrl;
+    const separator = this.relayUrl.includes("?") ? "&" : "?";
+    return `${this.relayUrl}${separator}u=${encodeURIComponent(upstreamUrl)}`;
   }
 
   /* ------------------------------ session ------------------------------- */
@@ -250,13 +337,14 @@ export class VaultClient {
         userAgent: this.identity.userAgent,
         clientInfo: this.identity.clientInfo,
         spoofedIp: this.spoofedIp,
+        profile: this.headerProfile,
       });
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
       try {
-        const response = await this.fetchImpl(url, {
+        const response = await this.fetchImpl(this.transportUrl(url), {
           method,
           headers,
           body,

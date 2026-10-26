@@ -181,6 +181,25 @@ GET /api/media/exclusive/title/<slug>[?type=movie|series]
        -> { detail, recommendations, provider }
 ```
 
+#### Browser-direct fetching (and when it falls back)
+
+The catalogue blocks or rate-limits shared datacenter ranges, and a serverless
+function egresses from one. So the browser fetches it directly whenever it can:
+
+1. `POST /api/media/exclusive/ticket` — the server signs one batch of upstream
+   requests (no `url` field, no secrets, ≤ 4 calls, `no-store`, rate-limited)
+   and returns them with an anonymous ephemeral visitor token.
+2. The browser sends those signed requests itself, so **the upstream sees the
+   user's address**; payloads are composed by the same code as the server path.
+3. If the upstream's CORS policy refuses, the call quietly falls back to the
+   relay routes above, and if those fail too the last `localStorage` snapshot is
+   shown with a "saved copy, 2 hours ago" label and a **Retry** button. The rest
+   of Sidify is never affected.
+
+`NEXT_PUBLIC_EXCLUSIVE_DIRECT=0` pins the relay path. `MEDIA_UPSTREAM_HEADER_PROFILE`
+(`mobile` | `browser`) and `MEDIA_UPSTREAM_RELAY_URL` cover the server side; see
+[docs/exclusive-collection.md](docs/exclusive-collection.md#two-transports-browser-direct-or-server-relay).
+
 Playback uses Shaka Player with a quality ladder, audio-track picker, subtitles,
 an audio watchdog (decoded audio vs rendered video, with an ordered recovery)
 and resume points shared with the title page.

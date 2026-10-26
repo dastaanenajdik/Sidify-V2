@@ -88,22 +88,25 @@ test('the exclusive page ships a search box of its own', () => {
   assert.match(section, /role="search"/);
 });
 
-test('the exclusive hooks target the exclusive endpoints only', () => {
-  const hooks = fs.readFileSync(
-    path.resolve(__dirname, '../src/lib/media/hooks.ts'),
-    'utf8'
-  );
+test('the exclusive hooks go through the transport loaders, not a bare relay call', () => {
+  const hooks = fs.readFileSync(path.resolve(__dirname, '../src/lib/media/hooks.ts'), 'utf8');
+
+  // Every exclusive hook must use the client-side loaders: they decide between
+  // the user's own connection, the relay, and the saved snapshot.
+  assert.match(hooks, /loadExclusiveHome\(/);
+  assert.match(hooks, /loadExclusiveSearch\(/);
+  assert.match(hooks, /loadExclusiveTitle\(/);
+  assert.match(hooks, /loadExclusiveSuggestions\(/);
+
+  // The relay is still wired, but only as the loader's fallback argument.
   assert.match(hooks, /mediaApi\.exclusiveHome\(/);
   assert.match(hooks, /mediaApi\.exclusiveSearch\(/);
   assert.match(hooks, /mediaApi\.exclusiveTitle\(/);
-  assert.match(hooks, /mediaApi\.exclusiveSuggest\(/);
-  // The exclusive hook must call the exclusive search method.
-  const exclusiveHook = hooks.slice(hooks.indexOf('export function useExclusiveSearch'));
-  assert.match(exclusiveHook.slice(0, exclusiveHook.indexOf('export function', 10)), /mediaApi\.exclusiveSearch\(/);
 
-  const client = fs.readFileSync(
-    path.resolve(__dirname, '../src/lib/media/client.ts'),
-    'utf8'
-  );
+  // The exclusive search hook must never touch the main catalogue's search.
+  const exclusiveHook = hooks.slice(hooks.indexOf('export function useExclusiveSearch'));
+  assert.doesNotMatch(exclusiveHook.slice(0, exclusiveHook.indexOf('export function', 10)), /mediaApi\.search\(/);
+
+  const client = fs.readFileSync(path.resolve(__dirname, '../src/lib/media/client.ts'), 'utf8');
   assert.match(client, /\/api\/media\/exclusive/);
 });

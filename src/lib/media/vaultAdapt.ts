@@ -7,7 +7,8 @@
  *   - play-info        → `MediaReleaseItem` (one per quality, DASH manifest + headers)
  *   - resource items   → `MediaReleaseItem` (direct file links = downloads)
  *
- * Server-only.
+ * Isomorphic on purpose: the same adapters run on the server (relay path) and
+ * in the user's browser (direct path). Nothing here may use a Node built-in.
  */
 
 import type {
@@ -690,12 +691,29 @@ export function isDeprecationNoticeUrl(url: string): boolean {
   );
 }
 
-function decodeBase64(value: string): Buffer | null {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/").replace(/~/g, "/");
+/**
+ * Decodes base64 / base64url to UTF-8 text.
+ *
+ * Deliberately uses `atob` + `TextDecoder` instead of `Buffer`, because this
+ * module is also imported by the browser-side transport: the same payload
+ * adapters run on the server (relay path) and in the user's browser (direct
+ * path, so the upstream sees a residential IP). Both globals exist in Node 18+
+ * and in every browser, so one implementation serves both.
+ */
+function decodeBase64(value: string): string | null {
+  const normalized = value
+    .replace(/\s+/g, "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .replace(/~/g, "/");
   try {
     const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-    const buffer = Buffer.from(padded, "base64");
-    return buffer.length ? buffer : null;
+    const binary = atob(padded);
+    if (!binary.length) return null;
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    return text.length ? text : null;
   } catch {
     return null;
   }
@@ -727,8 +745,7 @@ export function resolveDashManifestFromPolicy(signCookie: string): string | null
       const token = (prefixPart.split(":")[0] ?? prefixPart).trim();
       const decoded = decodeBase64(token);
       if (decoded) {
-        const url = decoded.toString("utf8");
-        const mpd = toDashMpd(url);
+        const mpd = toDashMpd(decoded.trim());
         if (mpd) return mpd;
       }
     }
@@ -737,7 +754,7 @@ export function resolveDashManifestFromPolicy(signCookie: string): string | null
       const decoded = decodeBase64(trimmed.slice("CloudFront-Policy=".length).trim());
       if (!decoded) continue;
       try {
-        const policy = JSON.parse(decoded.toString("utf8")) as {
+        const policy = JSON.parse(decoded) as {
           Statement?: Array<{ Resource?: string }>;
         };
         const resource = policy.Statement?.[0]?.Resource;

@@ -14,6 +14,8 @@
 
 import { createHash, createHmac, randomBytes } from "node:crypto";
 
+import { applyHeaderProfile, type UpstreamHeaderProfile } from "./upstreamHeaders";
+
 /** Shared signing key material. */
 const DEFAULT_SECRET_BYTES = Buffer.from([
   0xef, 0xa8, 0x91, 0x97, 0x4e, 0xec, 0xd3, 0x14, 0x8d, 0xf6, 0x3a, 0xa6, 0x11, 0x60, 0x2d, 0xef,
@@ -115,7 +117,13 @@ export interface VaultRequestHeaders {
   [name: string]: string;
 }
 
-/** All headers an API request needs, including the bearer session token. */
+/**
+ * All headers an API request needs, including the bearer session token.
+ *
+ * `profile` picks the outbound identity (see `upstreamHeaders.ts`). The default
+ * stays `mobile` — the identity this API was reversed from — so enabling the
+ * browser profile can never silently change a working request.
+ */
 export function buildSignedHeaders(params: {
   method: string;
   url: string;
@@ -123,24 +131,35 @@ export function buildSignedHeaders(params: {
   authToken?: string | null;
   userAgent: string;
   clientInfo: string;
-  spoofedIp: string;
+  /**
+   * The `x-forwarded-for` value to present. `null` omits the header entirely,
+   * which is what a *browser-originated* call wants: there the real connection
+   * already carries the user's address, so a fabricated one would only add a
+   * contradiction between the header and the socket.
+   */
+  spoofedIp: string | null;
+  profile?: UpstreamHeaderProfile;
 }): VaultRequestHeaders {
-  const { method, url, body, authToken, userAgent, clientInfo, spoofedIp } = params;
+  const { method, url, body, authToken, userAgent, clientInfo, spoofedIp, profile = "mobile" } = params;
   const timestampMs = Date.now();
   const accept = "application/json";
   const contentType = "application/json";
 
-  const headers: VaultRequestHeaders = {
-    "user-agent": userAgent,
-    accept,
-    "content-type": contentType,
-    connection: "keep-alive",
-    "x-client-token": generateClientToken(timestampMs),
-    "x-tr-signature": generateSignature(method, accept, contentType, url, body, timestampMs),
-    "x-client-info": clientInfo,
-    "x-client-status": "0",
-    "x-forwarded-for": spoofedIp,
-  };
+  const headers: VaultRequestHeaders = applyHeaderProfile(
+    {
+      "user-agent": userAgent,
+      accept,
+      "content-type": contentType,
+      connection: "keep-alive",
+      "x-client-token": generateClientToken(timestampMs),
+      "x-tr-signature": generateSignature(method, accept, contentType, url, body, timestampMs),
+      "x-client-info": clientInfo,
+      "x-client-status": "0",
+      ...(spoofedIp ? { "x-forwarded-for": spoofedIp } : {}),
+    },
+    profile,
+    userAgent
+  );
 
   if (authToken && authToken.trim()) {
     headers.authorization = `Bearer ${authToken.trim()}`;

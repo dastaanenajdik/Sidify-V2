@@ -7,16 +7,16 @@ detail pages, player and downloads. It is the only catalogue `/exclusive` reads.
 Browser
   /exclusive                        src/app/exclusive/page.tsx
     └─ ExclusiveSection             src/components/media/ExclusiveSection.tsx
-        ├─ GET /api/media/exclusive?mode=home
-        │     └─ getExclusiveHome()              src/lib/media/exclusive.ts
-        │         └─ VaultMediaProvider.listing()  (one cached upstream read)
-        ├─ GET /api/media/exclusive?mode=search&q=&type=&genre=&year=&language=&sort=&page=
-        │     └─ searchExclusiveCatalogue()
-        ├─ GET /api/media/exclusive/suggest?q=
-        │     └─ suggestExclusive()
-        └─ GET /api/media/exclusive/title/<slug>
-              └─ getExclusiveTitle() → detail + playback + recommendations
+        └─ useExclusive*            src/lib/media/hooks.ts
+            └─ loadExclusive*       src/lib/media/exclusiveDirect.ts   ← "use client"
+                ├─ 1. direct:   POST /api/media/exclusive/ticket → sign → fetch upstream
+                ├─ 2. relay:    GET  /api/media/exclusive?mode=…
+                └─ 3. snapshot: localStorage copy, labelled with its age
 ```
+
+Every path — direct, relay and snapshot — runs the same composition in
+`src/lib/media/exclusiveCore.ts`, so the rails, filters and recommendations do
+not depend on which transport answered.
 
 ## Endpoints
 
@@ -30,6 +30,91 @@ Browser
 All four answer JSON only. An upstream outage is a coded `502`/`503`, never a
 bare `500`, never HTML, and never an empty-but-successful page — the UI has to
 be able to tell "unavailable" from "no matches".
+
+## Two transports: browser-direct, or server relay
+
+The catalogue refuses, or rate-limits, shared datacenter ranges. A serverless
+function egresses from exactly such a range, so proxying every read through it is
+the one thing that reliably breaks the section in production — while the same
+request from a home connection works. The fix is therefore about **where the
+request originates**, not about headers:
+
+```
+direct (preferred)                          relay (fallback)
+─────────────────                           ────────────────
+browser ──POST /api/media/exclusive/ticket
+        ←─ signed URL + headers + body
+browser ──signed request──────────> upstream browser ──GET /api/media/exclusive──> Vercel ──> upstream
+        ←─ JSON                              ←─ JSON            (upstream sees the function's IP)
+upstream sees the user's IP
+```
+
+`src/lib/media/exclusiveDirect.ts` picks the transport for each call:
+
+| Outcome | What happens | What the user sees |
+| --- | --- | --- |
+| The signed fetch succeeds | transport `direct` | nothing — this is the normal path |
+| `TypeError: Failed to fetch` (CORS refused) | transport disabled for the session, relay used, no retry loop | a one-line note that requests go through Sidify's servers |
+| `502`/`503`/timeout on a single call | that call falls back to the relay; the transport stays on | nothing |
+| Relay also fails | the last snapshot from `localStorage` is rendered | "Showing a saved copy from 2 hours ago" + **Retry** |
+| Nothing cached either | the section's empty state | "The exclusive collection is unavailable" + **Retry** |
+
+A CORS refusal is *expected* on some networks and is never surfaced as an error:
+the browser path is an optimisation, not a requirement.
+
+### What the ticket may contain
+
+`POST /api/media/exclusive/ticket` is the only way the browser can obtain a
+signature, and it is deliberately narrow:
+
+- the caller names a **kind** of call (`home`, `search`, `detail`, `resource`)
+  plus validated parameters — there is no `url`, `host` or `path` field, so the
+  endpoint cannot be used as an open signing oracle;
+- one batch is 1–4 calls and expands to at most 6 signed requests (`home` → its
+  three tabs);
+- the HMAC key never leaves the server. The response carries per-request
+  signatures (bound to method + URL + body + timestamp) and an **anonymous
+  ephemeral visitor token** minted for that browser key and reused for four
+  minutes — never the process-wide session the relay keeps using;
+- browser-bound signatures **omit `x-forwarded-for`**: the request leaves from
+  the user's own connection, so a fabricated address would only contradict the
+  socket it actually arrives on (the relay keeps its spoofed header, because
+  there the origin really is a datacenter);
+- `cache-control: no-store` on every answer, tickets expire after ten minutes,
+  and the route is rate-limited per caller (40 burst, 40/min) with `429` +
+  `retry-after`;
+- if the server cannot mint a session either, it answers `503`
+  `ticket_unavailable` and the browser quietly uses the relay.
+
+### Playback is the one server-assisted step
+
+Direct files (`releases[].mirrors[].shortUrl`) are played by the browser straight
+from the CDN. A signed DASH manifest, however, has to be wrapped in this app's
+same-origin relay token, and only the server holds the cookie that signs it — so
+`POST /api/media/exclusive/playback { slug, type }` returns those sources and the
+browser merges them with everything the catalogue already returned. If that call
+fails, the catalogue's own files are still playable.
+
+### Caching
+
+| Layer | Lifetime | Purpose |
+| --- | --- | --- |
+| React Query (`staleTime`) | 5 min (title pages: 50 min) | back/forward navigation costs nothing |
+| `exclusiveDirect` module cache | 5–10 min | one upstream read per tab, even across query keys |
+| `localStorage` snapshot (`sidify-exclusive-snapshot-v1`) | 7 days | renders *something* when both transports fail |
+
+The snapshot is bounded (24 entries, 400 KB each, 1.5 MB total, newest-first
+eviction, one retry with the newest four on a quota error) and versioned: a
+payload-shape change bumps `SNAPSHOT_VERSION` and old entries are discarded
+instead of being rendered as current.
+
+### Header profiles
+
+`buildSignedHeaders()` applies either the reversed Android identity (default) or
+a coherent Chrome identity (`MEDIA_UPSTREAM_HEADER_PROFILE=browser`). This is a
+**fingerprint** setting, not a fix for IP blocks — a spoofed `User-Agent` cannot
+change where a request comes from. It exists so the browser-direct path can be
+made consistent with the identity the request actually presents.
 
 ## Landing composition
 
