@@ -4,6 +4,7 @@ import { playlists, playlistTracks } from "@/db/schema";
 import { and, asc, eq, max } from "drizzle-orm";
 import type { Track } from "@/lib/types";
 import { withDatabase, withDatabaseWrite } from "@/lib/dbResponses";
+import { readJsonBody } from "@/lib/readJsonBody";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,9 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const pid = Number(id);
-  const { track } = (await req.json()) as { track: Track };
+  const body = await readJsonBody<{ track: Track }>(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const { track } = body;
   if (!track?.id) return NextResponse.json({ error: "track required" }, { status: 400 });
 
   return withDatabaseWrite(async () => {
@@ -58,8 +61,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const pid = Number(id);
-  const { name } = (await req.json()) as { name: string };
-  if (!name?.trim()) return NextResponse.json({ error: "name required" }, { status: 400 });
+  const body = await readJsonBody<{ name: string }>(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const name = typeof body.name === "string" ? body.name : "";
+  if (!name.trim()) return NextResponse.json({ error: "name required" }, { status: 400 });
   return withDatabaseWrite(async () => {
     await db.update(playlists).set({ name: name.trim().slice(0, 80) }).where(eq(playlists.id, pid));
     return NextResponse.json({ ok: true });

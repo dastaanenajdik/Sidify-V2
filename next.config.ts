@@ -40,6 +40,20 @@ const nextConfig: NextConfig = {
         headers: [{ key: "Cache-Control", value: "public, max-age=3600" }],
       },
       {
+        // PWA/app icons and local cover art change only with a release. Next
+        // serves `public/` with `max-age=0` by default, so repeat visits
+        // revalidated (and on flaky networks re-downloaded) every icon and
+        // cover on every load. A week of browser caching with a day of
+        // stale-while-revalidate makes repeat loads instant while a changed
+        // icon still rolls out within days.
+        source: "/:file(icon.*\\.png|favicon\\.ico)",
+        headers: [{ key: "Cache-Control", value: "public, max-age=604800, stale-while-revalidate=86400" }],
+      },
+      {
+        source: "/covers/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=604800, stale-while-revalidate=86400" }],
+      },
+      {
         source: "/(.*)",
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },

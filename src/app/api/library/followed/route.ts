@@ -4,6 +4,7 @@ import { followedArtists } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import type { Artist, FollowedArtistRow } from "@/lib/types";
 import { withDatabase, withDatabaseWrite } from "@/lib/dbResponses";
+import { readJsonBody } from "@/lib/readJsonBody";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { artist } = (await req.json()) as { artist: Artist };
+  const body = await readJsonBody<{ artist: Artist }>(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const { artist } = body;
   if (!artist?.id) return NextResponse.json({ error: "artist required" }, { status: 400 });
   return withDatabaseWrite(async () => {
     await db

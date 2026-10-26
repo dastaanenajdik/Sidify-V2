@@ -4,6 +4,7 @@ import { playlists, playlistTracks } from "@/db/schema";
 import { asc, inArray } from "drizzle-orm";
 import type { PlaylistRow, Track } from "@/lib/types";
 import { withDatabase, withDatabaseWrite } from "@/lib/dbResponses";
+import { readJsonBody } from "@/lib/readJsonBody";
 
 export const dynamic = "force-dynamic";
 
@@ -44,8 +45,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { name } = (await req.json()) as { name: string };
-  const clean = (name || "").trim().slice(0, 80);
+  const body = await readJsonBody<{ name: string }>(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const clean = (typeof body.name === "string" ? body.name : "").trim().slice(0, 80);
   if (!clean) return NextResponse.json({ error: "name required" }, { status: 400 });
   return withDatabaseWrite(async () => {
     const [row] = await db.insert(playlists).values({ name: clean }).returning();
