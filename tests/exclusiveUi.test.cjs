@@ -87,3 +87,33 @@ test('the exclusive page is indexable with its own metadata', () => {
   assert.match(page, /canonical: "\/exclusive"/);
   assert.match(page, /description/);
 });
+
+test('an unresolvable stream list is explained and retryable, never a dead end', () => {
+  const VIEW = read('src/components/media/MediaDetailView.tsx');
+  const PAGE = read('src/components/media/ExclusiveDetailPage.tsx');
+
+  // The empty player area knows why it is empty and can ask again.
+  assert.match(VIEW, /onRetry\?: \(\) => void/);
+  assert.match(VIEW, /streamIssueSentence\(status\.streamIssue, status\.streamIssueStatus\)/);
+  assert.match(VIEW, /Retrying…/);
+  assert.match(PAGE, /<MediaDetailView detail=\{detail\} onRetry=/);
+});
+
+test('detail pages are never served from a stale cache', () => {
+  for (const page of ['src/app/movies/[slug]/page.tsx', 'src/app/series/[slug]/page.tsx']) {
+    const source = read(page);
+    assert.match(source, /export const dynamic = "force-dynamic"/, `${page} renders per request`);
+    assert.doesNotMatch(source, /export const revalidate = 3600/, `${page} keeps no page cache`);
+  }
+});
+
+test('a session rejection is retried once with a fresh token, and reported if it persists', () => {
+  const DIRECT = read('src/lib/media/exclusiveDirect.ts');
+  assert.match(DIRECT, /const SESSION_REJECTED = 440/);
+  assert.match(DIRECT, /isSessionRejection/);
+  assert.match(DIRECT, /forgetBrowserToken\(\);/);
+  assert.match(DIRECT, /exclusiveStatus\.noteStreamIssue/);
+  assert.match(DIRECT, /\[exclusive\] no playable source/);
+  // A title with no playable source must not be pinned in the detail cache.
+  assert.match(DIRECT, /function cacheDetail[\s\S]{0,220}playback \?\? \[\]\)\.length === 0\) return;/);
+});

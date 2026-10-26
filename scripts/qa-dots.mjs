@@ -243,6 +243,17 @@ async function rian() {
     `${segment.status}`
   );
 
+  // A title page is a frame filled by the browser: caching it means an older
+  // deploy's page (one without a player) can outlive the code that renders it.
+  const titlePage = await req("/movies/vault-101-night-train");
+  const cacheControl = (titlePage.headers.get("cache-control") || "").toLowerCase();
+  check(
+    dot,
+    "a title page is never served from a shared cache",
+    titlePage.status !== 200 || (cacheControl.includes("no-store") && !cacheControl.includes("s-maxage")),
+    `${titlePage.status} ${cacheControl || "no cache-control"}`
+  );
+
   const noUrl = await req("/api/media/stream");
   check(dot, "media stream without url is 400 JSON", noUrl.status === 400 && isJson(noUrl), `${noUrl.status}`);
 }

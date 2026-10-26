@@ -13,6 +13,22 @@
 
 export type ExclusiveTransport = "direct" | "relay" | "snapshot";
 
+/**
+ * Why the stream list for the title on screen could not be resolved.
+ *
+ * Playback is the one part of a title read that the catalogue guards hardest
+ * (the old server route answered `440` — its own "session rejected" code), so
+ * "no play button" has several distinguishable causes. Naming them lets the
+ * page say something true instead of a generic "no stream".
+ */
+export type ExclusiveStreamIssue =
+  | "cors_or_network"
+  | "ticket_unavailable"
+  | "session_rejected"
+  | "refused"
+  | "upstream_error"
+  | "empty";
+
 export interface ExclusiveStatusSnapshot {
   /** Which path produced the most recent successful payload. */
   transport: ExclusiveTransport | null;
@@ -26,6 +42,10 @@ export interface ExclusiveStatusSnapshot {
   updatedAt: number;
   /** The last transport error, for the console — never rendered raw. */
   lastError: string | null;
+  /** Why the last title read produced no playable source, if it did not. */
+  streamIssue: ExclusiveStreamIssue | null;
+  /** The upstream status behind `streamIssue`, when there was one. */
+  streamIssueStatus: number | null;
 }
 
 const INITIAL: ExclusiveStatusSnapshot = {
@@ -35,6 +55,8 @@ const INITIAL: ExclusiveStatusSnapshot = {
   directAvailable: false,
   updatedAt: 0,
   lastError: null,
+  streamIssue: null,
+  streamIssueStatus: null,
 };
 
 let current: ExclusiveStatusSnapshot = INITIAL;
@@ -47,7 +69,9 @@ function publish(next: Partial<ExclusiveStatusSnapshot>): void {
     merged.cachedAt === current.cachedAt &&
     merged.directFallbackReason === current.directFallbackReason &&
     merged.directAvailable === current.directAvailable &&
-    merged.lastError === current.lastError
+    merged.lastError === current.lastError &&
+    merged.streamIssue === current.streamIssue &&
+    merged.streamIssueStatus === current.streamIssueStatus
   ) {
     return;
   }
@@ -82,8 +106,45 @@ export const exclusiveStatus = {
   noteError(message: string): void {
     publish({ lastError: message, transport: null, cachedAt: null });
   },
+  /**
+   * Records why a title resolved without a playable source.
+   *
+   * Deliberately separate from `noteError`: the *title* loaded fine (poster,
+   * synopsis, downloads), so this must not blank the transport badge — it only
+   * feeds the sentence shown where the player would be.
+   */
+  noteStreamIssue(issue: ExclusiveStreamIssue, status: number | null = null): void {
+    publish({ streamIssue: issue, streamIssueStatus: status });
+  },
+  clearStreamIssue(): void {
+    if (current.streamIssue === null && current.streamIssueStatus === null) return;
+    publish({ streamIssue: null, streamIssueStatus: null });
+  },
   reset(): void {
     current = INITIAL;
     for (const listener of listeners) listener();
   },
 };
+
+/** One plain sentence for a stream issue — safe to render, never raw upstream text. */
+export function streamIssueSentence(
+  issue: ExclusiveStreamIssue | null,
+  status: number | null = null
+): string | null {
+  switch (issue) {
+    case "cors_or_network":
+      return "This browser could not reach the catalogue — the request was refused before it arrived.";
+    case "ticket_unavailable":
+      return "Stream requests could not be signed just now.";
+    case "session_rejected":
+      return `The catalogue rejected this session${status ? ` (${status})` : ""} — reloading usually issues a fresh one.`;
+    case "refused":
+      return `The catalogue refused the stream list for this title${status ? ` (${status})` : ""}.`;
+    case "upstream_error":
+      return `The catalogue could not serve the stream list${status ? ` (${status})` : ""}.`;
+    case "empty":
+      return "The catalogue answered, but listed no playable stream for this title.";
+    default:
+      return null;
+  }
+}

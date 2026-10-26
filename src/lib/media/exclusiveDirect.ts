@@ -212,6 +212,28 @@ class DirectBlocked extends Error {
 }
 
 /**
+ * The catalogue answered, but not with a payload.
+ *
+ * The status travels with the error because "the session is stale" (`401` or
+ * the gateway's `440`) is actionable — a visitor token can be re-minted and the
+ * call retried — while a `403` or a `5xx` is not.
+ */
+class UpstreamStatusError extends Error {
+  constructor(readonly status: number) {
+    super(`upstream ${status}`);
+    this.name = "UpstreamStatusError";
+  }
+}
+
+/** The gateway's own "session rejected" code (see the debug brief, §14). */
+const SESSION_REJECTED = 440;
+
+function statusOf(error: unknown): number | null {
+  const status = (error as { status?: unknown })?.status;
+  return typeof status === "number" ? status : null;
+}
+
+/**
  * Sends one signed call from the browser.
  *
  * A `TypeError` here is the signature of a CORS refusal (the browser refuses to
@@ -246,8 +268,10 @@ async function sendSigned(call: SignedCall): Promise<unknown> {
     // A stale visitor token is the one rejection worth retrying here: drop it
     // so the next call logs in again. Everything else is a per-call failure the
     // caller handles by falling back to the relay.
-    if (response.status === 401) forgetBrowserToken();
-    throw new Error(`upstream ${response.status}`);
+    // A stale visitor session shows up as `401` or the gateway's `440`; drop it
+    // so the retry path can log in again.
+    if (response.status === 401 || response.status === SESSION_REJECTED) forgetBrowserToken();
+    throw new UpstreamStatusError(response.status);
   }
 
   const text = await response.text();
@@ -286,6 +310,22 @@ let listingCache: DirectCacheEntry<MediaTitle[]> | null = null;
 let listingInFlight: Promise<MediaTitle[]> | null = null;
 const searchCache = new Map<string, DirectCacheEntry<MediaTitle[]>>();
 const detailCache = new Map<string, DirectCacheEntry<MediaDetail>>();
+
+/**
+ * Caches a title read — unless it came back without a playable source.
+ *
+ * A title whose stream list failed (a `440`, a CORS refusal) must not be pinned
+ * for ten minutes: the empty state offers Retry, and Retry has to actually ask
+ * the catalogue again.
+ */
+function cacheDetail(slug: string, detail: MediaDetail): void {
+  if ((detail.playback ?? []).length === 0) return;
+  detailCache.set(slug, { value: detail, expiresAt: Date.now() + DETAIL_TTL_MS });
+  if (detailCache.size > 60) {
+    const oldest = detailCache.keys().next().value;
+    if (oldest) detailCache.delete(oldest);
+  }
+}
 
 /** The reader the composition layer uses when the browser can reach the catalogue. */
 export function directReader(): CatalogueReader {
@@ -367,11 +407,7 @@ export function directReader(): CatalogueReader {
       const built = await fetchTitleDirect(subjectId, kind);
       if (!built) return null;
 
-      detailCache.set(slug, { value: built, expiresAt: Date.now() + DETAIL_TTL_MS });
-      if (detailCache.size > 60) {
-        const oldest = detailCache.keys().next().value;
-        if (oldest) detailCache.delete(oldest);
-      }
+      cacheDetail(slug, built);
       return built;
     },
   };
@@ -393,57 +429,177 @@ interface DirectTitleOptions {
  * ticket) and three direct ones to the catalogue — executed from the viewer's
  * own connection.
  */
+/** One signed call's outcome — a payload or the failure that stopped it. */
+interface CallResult {
+  payload: unknown | null;
+  error: unknown;
+}
+
+const OK_RESULT: CallResult = { payload: null, error: null };
+
+/** A short, log-safe description of one call, used by the console diagnostic. */
+function describeCall(result: CallResult): string {
+  if (!result.error) return result.payload === null ? "missing" : "ok";
+  const status = statusOf(result.error);
+  if (status !== null) return String(status);
+  if (result.error instanceof DirectBlocked) return result.error.reason;
+  return "error";
+}
+
+type TitleCallKind = "detail" | "playback" | "resource";
+
+/**
+ * Asks for tickets for `kinds` and sends them in parallel.
+ *
+ * A transport refusal (`DirectBlocked`) is re-thrown — it means every later
+ * request would fail the same way — while a per-call failure is *returned*, so
+ * one dead endpoint cannot take the other two down with it.
+ */
+async function runTitleCalls(
+  subjectId: string,
+  season: number,
+  episode: number,
+  token: string | null,
+  kinds: readonly TitleCallKind[]
+): Promise<{ calls: SignedCall[]; results: Map<TitleCallKind, CallResult> }> {
+  const episodeHint = season > 0 && episode > 0 ? { se: season, ep: episode } : {};
+  const calls = await fetchTicket(
+    kinds.map((kind) => (kind === "detail" ? { kind, subjectId } : { kind, subjectId, ...episodeHint })),
+    token
+  );
+
+  const results = new Map<TitleCallKind, CallResult>();
+  await Promise.all(
+    kinds.map(async (kind) => {
+      const call = calls.find((entry) => entry.kind === kind);
+      if (!call) {
+        results.set(kind, { payload: null, error: new Error("missing call") });
+        return;
+      }
+      try {
+        results.set(kind, { payload: await sendSigned(call), error: null });
+      } catch (error) {
+        if (error instanceof DirectBlocked) throw error;
+        results.set(kind, { payload: null, error });
+      }
+    })
+  );
+  return { calls, results };
+}
+
+/**
+ * Notes why a title read never got as far as a payload.
+ *
+ * `DirectBlocked` means the browser itself could not make the call (CORS or a
+ * dead network); a ticket failure means this app could not sign one. Both leave
+ * the player area empty, so both get a sentence there.
+ */
+function noteTitleTransportFailure(error: unknown): void {
+  if (error instanceof DirectBlocked) {
+    exclusiveStatus.noteStreamIssue("cors_or_network");
+    return;
+  }
+  const message = (error as Error)?.message ?? "";
+  if (message.startsWith("ticket")) exclusiveStatus.noteStreamIssue("ticket_unavailable");
+}
+
+/** True when the catalogue rejected the session rather than the request. */
+function isSessionRejection(result: CallResult): boolean {
+  const status = statusOf(result.error);
+  return status === 401 || status === SESSION_REJECTED;
+}
+
+/**
+ * Metadata + releases + playback sources, in **one signed batch**.
+ *
+ * Three calls (`detail`, `playback`, `resource`) fit inside the ticket's
+ * four-call budget, so opening a title costs one round trip to this app (the
+ * ticket) and three direct ones to the catalogue — executed from the viewer's
+ * own connection.
+ *
+ * Playback is the endpoint the catalogue guards hardest: it is the one that
+ * used to answer `440` through the server. A `440`/`401` here therefore gets a
+ * bounded retry (a fresh visitor token, then this app's own session), because a
+ * stale session is the most likely reason a title resolves but its stream list
+ * does not — and because the detail call already proved the network works.
+ */
 async function fetchTitleDirect(
   subjectId: string,
   kind: MediaKind,
   options: DirectTitleOptions = {}
 ): Promise<MediaDetail | null> {
-  const token = await ensureBrowserToken();
   const season = options.season ?? 0;
   const episode = options.episode ?? 0;
-  const episodeArgs = season > 0 && episode > 0 ? { season, episode } : {};
 
-  const calls = await fetchTicket(
-    [
-      { kind: "detail", subjectId },
-      { kind: "playback", subjectId, ...(season > 0 && episode > 0 ? { se: season, ep: episode } : {}) },
-      { kind: "resource", subjectId, ...(season > 0 && episode > 0 ? { se: season, ep: episode } : {}) },
-    ],
-    token
+  let token: string | null;
+  let batch: Awaited<ReturnType<typeof runTitleCalls>>;
+  try {
+    // A failure *here* is about reaching the catalogue at all (no ticket, a
+    // blocked transport) — worth naming in the UI, because it is also the
+    // reason the player area stays empty.
+    token = await ensureBrowserToken();
+    batch = await runTitleCalls(subjectId, season, episode, token, ["detail", "playback", "resource"]);
+  } catch (error) {
+    noteTitleTransportFailure(error);
+    throw error;
+  }
+
+  let pending = (["playback", "resource"] as const).filter((callKind) =>
+    isSessionRejection(batch.results.get(callKind) ?? OK_RESULT)
   );
+  if (pending.length && token !== null) {
+    // Two strategies, in order, because both have been seen in production:
+    //   1. the visitor token simply aged out → log in again;
+    //   2. the browser's visitor session is not what this endpoint wants → let
+    //      the ticket route mint this app's own ephemeral session instead (it
+    //      answers 503 when its egress is blocked, which is survivable here).
+    forgetBrowserToken();
+    const attempts: Array<string | null> = [];
+    const fresh = await ensureBrowserToken().catch(() => null);
+    if (fresh) attempts.push(fresh);
+    attempts.push(null);
 
-  const detailCall = calls.find((entry) => entry.kind === "detail");
-  if (!detailCall) return null;
-
-  /** Runs one signed call, treating "this endpoint has nothing" as an empty answer. */
-  const settle = (callKind: SignedCall["kind"]): Promise<unknown | null> =>
-    (async () => {
-      const call = calls.find((entry) => entry.kind === callKind);
-      if (!call) return null;
+    for (const attemptToken of attempts) {
+      if (!pending.length) break;
+      let retried: Awaited<ReturnType<typeof runTitleCalls>>;
       try {
-        return await sendSigned(call);
+        retried = await runTitleCalls(subjectId, season, episode, attemptToken, pending);
       } catch (error) {
         if (error instanceof DirectBlocked) throw error;
-        return null;
+        continue; // this app cannot sign either — try the next strategy
       }
-    })();
+      const stillRejected: Array<(typeof pending)[number]> = [];
+      for (const callKind of pending) {
+        const result = retried.results.get(callKind);
+        if (!result) {
+          stillRejected.push(callKind);
+          continue;
+        }
+        batch.results.set(callKind, result);
+        if (isSessionRejection(result)) stillRejected.push(callKind);
+      }
+      pending = stillRejected;
+    }
+  }
 
-  const [detailPayload, playbackPayload, resourcePayload] = await Promise.all([
-    sendSigned(detailCall),
-    settle("playback"),
-    settle("resource"),
-  ]);
+  const detailCall = batch.calls.find((entry) => entry.kind === "detail") ?? null;
+  const detailResult = batch.results.get("detail") ?? { payload: null, error: new Error("missing call") };
+  const playbackResult = batch.results.get("playback") ?? OK_RESULT;
+  const resourceResult = batch.results.get("resource") ?? OK_RESULT;
 
-  const parsed = detailsPayloadToDetail(detailPayload);
+  // The detail call *is* the page: a failure there is the caller's to fall back on.
+  if (detailResult.error) throw detailResult.error;
+
+  const parsed = detailsPayloadToDetail(detailResult.payload);
   if (!parsed) return null;
 
   // The catalogue's own client identity, taken from the signed batch, so the
   // relayed CDN requests look exactly like the signed ones.
-  const userAgent = headerValue(detailCall.headers, "user-agent") ?? browserUserAgent();
-  const streamReleases = playbackPayload
-    ? playInfoToReleases(playbackPayload, season, episode, userAgent)
+  const userAgent = (detailCall && headerValue(detailCall.headers, "user-agent")) || browserUserAgent();
+  const streamReleases = playbackResult.payload
+    ? playInfoToReleases(playbackResult.payload, season, episode, userAgent)
     : [];
-  const fileReleases = resourceReleases(resourcePayload, episodeArgs);
+  const fileReleases = resourceReleases(resourceResult.payload, season > 0 && episode > 0 ? { season, episode } : {});
 
   // Episode rows get their own files (free: the same flat listing), and what is
   // left stays at the title level as season packs.
@@ -462,7 +618,46 @@ async function fetchTitleDirect(
   const dash = dashPlaybackSources(streamReleases, { origin: pageOrigin() });
   const files = playableFiles(detail);
   detail.playback = mergePlaybackSources(dash, files);
+
+  noteStreamHealth(detail, { playback: playbackResult, resource: resourceResult });
   return detail;
+}
+
+/**
+ * Records why a resolved title has (or has not) a playable source.
+ *
+ * This is the difference between a user staring at "no stream" and a user
+ * (or a bug report) knowing that the catalogue said `440`, that the browser
+ * never reached it, or that it simply lists nothing playable.
+ */
+function noteStreamHealth(
+  detail: MediaDetail,
+  results: { playback: CallResult; resource: CallResult }
+): void {
+  if ((detail.playback ?? []).length > 0) {
+    exclusiveStatus.clearStreamIssue();
+    return;
+  }
+
+  const failure = [results.playback, results.resource].find((result) => result.error) ?? null;
+  let issue: Parameters<typeof exclusiveStatus.noteStreamIssue>[0] = "empty";
+  let status: number | null = null;
+  if (failure) {
+    status = statusOf(failure.error);
+    if (failure.error instanceof DirectBlocked) issue = "cors_or_network";
+    else if (status === 401 || status === SESSION_REJECTED) issue = "session_rejected";
+    else if (status === 403) issue = "refused";
+    else issue = "upstream_error";
+  }
+
+  exclusiveStatus.noteStreamIssue(issue, status);
+  // One line, so a screenshot of the console is enough for a bug report.
+  console.info("[exclusive] no playable source", {
+    playback: describeCall(results.playback),
+    resource: describeCall(results.resource),
+    issue,
+    status,
+  });
 }
 
 function headerValue(headers: Record<string, string>, name: string): string | null {
@@ -500,9 +695,7 @@ export async function directPlaybackSources(
 
   const built = await fetchTitleDirect(subjectId, kind, options);
   if (!built) return [];
-  if (!options.season && !options.episode) {
-    detailCache.set(slug, { value: built, expiresAt: Date.now() + DETAIL_TTL_MS });
-  }
+  if (!options.season && !options.episode) cacheDetail(slug, built);
   return built.playback ?? [];
 }
 
@@ -521,9 +714,7 @@ export async function directDetail(
   }
 
   const built = await fetchTitleDirect(subjectId, kind, options);
-  if (built && !options.season && !options.episode) {
-    detailCache.set(slug, { value: built, expiresAt: Date.now() + DETAIL_TTL_MS });
-  }
+  if (built && !options.season && !options.episode) cacheDetail(slug, built);
   return built;
 }
 

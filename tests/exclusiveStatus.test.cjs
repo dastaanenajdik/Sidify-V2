@@ -158,3 +158,47 @@ test('the banner is quiet in the normal case and loud only about a saved copy', 
   assert.match(source, /plainReason\(status\.directFallbackReason\)/);
   assert.doesNotMatch(source, /\{status\.directFallbackReason\}/);
 });
+
+test('a stream issue is recorded without blanking the transport badge', () => {
+  const { status } = fresh();
+  status.exclusiveStatus.noteSuccess('direct');
+  status.exclusiveStatus.noteStreamIssue('session_rejected', 440);
+
+  const snapshot = status.exclusiveStatus.getSnapshot();
+  assert.equal(snapshot.transport, 'direct', 'the title itself loaded fine');
+  assert.equal(snapshot.streamIssue, 'session_rejected');
+  assert.equal(snapshot.streamIssueStatus, 440);
+  assert.equal(snapshot.lastError, null, 'a missing stream is not a transport error');
+});
+
+test('a resolved source clears the note, and clearing twice is a no-op', () => {
+  const { status } = fresh();
+  let notifications = 0;
+  const unsubscribe = status.exclusiveStatus.subscribe(() => (notifications += 1));
+
+  status.exclusiveStatus.noteStreamIssue('empty');
+  assert.equal(notifications, 1);
+
+  status.exclusiveStatus.clearStreamIssue();
+  assert.equal(status.exclusiveStatus.getSnapshot().streamIssue, null);
+  assert.equal(notifications, 2);
+
+  status.exclusiveStatus.clearStreamIssue();
+  assert.equal(notifications, 2, 'nothing changed, so nobody is notified');
+  unsubscribe();
+});
+
+test('every stream issue has one plain sentence, and none leaks upstream text', () => {
+  const { status } = fresh();
+  const issues = ['cors_or_network', 'ticket_unavailable', 'session_rejected', 'refused', 'upstream_error', 'empty'];
+  for (const issue of issues) {
+    const sentence = status.streamIssueSentence(issue, 440);
+    assert.equal(typeof sentence, 'string');
+    assert.ok(sentence.length > 20, `${issue} explains itself`);
+    assert.doesNotMatch(sentence, /undefined|null|\[object/, `${issue} reads like prose`);
+  }
+
+  assert.match(status.streamIssueSentence('session_rejected', 440), /440/);
+  assert.match(status.streamIssueSentence('refused', 403), /403/);
+  assert.equal(status.streamIssueSentence(null), null);
+});

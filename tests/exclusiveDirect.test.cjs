@@ -77,11 +77,15 @@ function createBrowserWorld({
   upstreamDown = false,
   loginRefused = false,
   playInfoRefused = false,
+  playInfoFirst440 = false,
+  playInfoAlways440 = false,
+  resourceRefused = false,
 } = {}) {
   const storage = memoryStorage();
   const calls = [];
   const upstreamRequests = [];
   const ticketRequests = [];
+  let playInfoAttempts = 0;
 
   const titles = TITLES;
   const json = (payload, status = 200) => new Response(JSON.stringify(payload), { status });
@@ -183,6 +187,11 @@ function createBrowserWorld({
         return json({ data: { subject: { ...subject, description: 'Fixture synopsis.', seasons: { seasons: [] } } } });
       }
       if (href.includes('play-info')) {
+        playInfoAttempts += 1;
+        // The gateway's own "session rejected" code: the most likely reason a
+        // title resolves but its stream list does not.
+        if (playInfoAlways440) return json({ error: 'session' }, 440);
+        if (playInfoFirst440 && playInfoAttempts === 1) return json({ error: 'session' }, 440);
         if (playInfoRefused) return json({ error: 'no streams' }, 404);
         return json({
           data: {
@@ -203,6 +212,7 @@ function createBrowserWorld({
         });
       }
       if (href.includes('subject-api/resource')) {
+        if (resourceRefused) return json({ error: 'no mirrors' }, 403);
         return json({
           data: {
             list: [
@@ -243,7 +253,7 @@ function createBrowserWorld({
     global.fetch = previous.fetch;
   }
 
-  return { direct, status, storage, calls, upstreamRequests, ticketRequests, restore };
+  return { direct, status, storage, calls, upstreamRequests, ticketRequests, playInfoAttempts: () => playInfoAttempts, restore };
 }
 
 /* ------------------------------- fixtures ------------------------------- */
@@ -700,6 +710,107 @@ test('the browser path and the relay path compose byte-identical shelves', async
     assert.deepEqual(viaBrowser.facets.genres, viaRelay.facets.genres);
     assert.deepEqual(viaBrowser.facets.years, viaRelay.facets.years);
     assert.equal(viaBrowser.total, viaRelay.total);
+  } finally {
+    world.restore();
+  }
+});
+
+test('a `440` on the stream list is retried once with a freshly minted visitor token', async () => {
+  const world = createBrowserWorld({ playInfoFirst440: true });
+  try {
+    const payload = await world.direct.loadExclusiveTitle('vault-101-night-train', 'movie', NEVER);
+
+    assert.ok(payload, 'the title still resolved');
+    const dash = payload.detail.playback.find((source) => source.type === 'dash');
+    assert.ok(dash, 'the retry recovered the stream list');
+
+    const logins = world.upstreamRequests.filter((entry) => entry.href.includes('visitor-login'));
+    assert.equal(logins.length, 2, 'a stale session is dropped and the browser logs in again');
+    assert.equal(world.playInfoAttempts(), 2, 'play-info was retried exactly once');
+
+    // The retry carried the new token, not the rejected one.
+    const playCalls = world.upstreamRequests.filter((entry) => entry.href.includes('play-info'));
+    assert.equal(playCalls[1].init.headers.authorization, 'Bearer browser-token-abc123');
+
+    assert.equal(world.status.exclusiveStatus.getSnapshot().streamIssue, null);
+  } finally {
+    world.restore();
+  }
+});
+
+test('the `440` retry is bounded: a second rejection is reported, not looped', async () => {
+  const world = createBrowserWorld({ playInfoAlways440: true, resourceRefused: true });
+  try {
+    const payload = await world.direct.loadExclusiveTitle('vault-101-night-train', 'movie', NEVER);
+
+    assert.ok(payload, 'metadata still renders');
+    assert.equal(payload.detail.playback.length, 0, 'no source is invented');
+    // Three attempts at most: the original call, one with a fresh visitor
+    // token, one signed with this app's own session — never a loop.
+    assert.equal(world.playInfoAttempts(), 3, 'two bounded retries');
+    assert.equal(world.status.exclusiveStatus.getSnapshot().streamIssue, 'session_rejected');
+    assert.equal(world.status.exclusiveStatus.getSnapshot().streamIssueStatus, 440);
+  } finally {
+    world.restore();
+  }
+});
+
+test('a refused stream list explains itself, and a later success clears the note', async () => {
+  const world = createBrowserWorld({ playInfoAlways440: true, resourceRefused: true });
+  try {
+    await world.direct.loadExclusiveTitle('vault-101-night-train', 'movie', NEVER);
+    assert.equal(world.status.exclusiveStatus.getSnapshot().streamIssue, 'session_rejected');
+  } finally {
+    world.restore();
+  }
+
+  // A healthy world starts clean — the note never outlives the failure that set it.
+  const healthy = createBrowserWorld();
+  try {
+    const payload = await healthy.direct.loadExclusiveTitle('vault-101-night-train', 'movie', NEVER);
+    assert.ok(payload.detail.playback.length > 0);
+    assert.equal(healthy.status.exclusiveStatus.getSnapshot().streamIssue, null);
+    assert.equal(healthy.status.streamIssueSentence(null), null);
+  } finally {
+    healthy.restore();
+  }
+});
+
+test('a title without a playable source is not cached, so Retry really retries', async () => {
+  const world = createBrowserWorld({ playInfoRefused: true, resourceRefused: true });
+  try {
+    const first = await world.direct.directDetail('vault-101-night-train', 'movie');
+    assert.ok(first, 'metadata resolved');
+    assert.equal(first.playback.length, 0);
+
+    const requestsBefore = world.upstreamRequests.length;
+    await world.direct.directDetail('vault-101-night-train', 'movie');
+    assert.ok(
+      world.upstreamRequests.length > requestsBefore,
+      'the second call went to the catalogue again instead of serving the empty read from cache'
+    );
+  } finally {
+    world.restore();
+  }
+});
+
+test('a browser that cannot reach the catalogue says so where the player would be', async () => {
+  const world = createBrowserWorld({ corsBlocked: true });
+  try {
+    await assert.rejects(() => world.direct.directDetail('vault-101-night-train', 'movie'));
+    const snapshot = world.status.exclusiveStatus.getSnapshot();
+    assert.equal(snapshot.streamIssue, 'cors_or_network');
+    assert.match(world.status.streamIssueSentence(snapshot.streamIssue), /could not reach the catalogue/);
+  } finally {
+    world.restore();
+  }
+});
+
+test('a ticket this app cannot sign is named as signing, not as a missing stream', async () => {
+  const world = createBrowserWorld({ failTicket: true });
+  try {
+    await assert.rejects(() => world.direct.directDetail('vault-101-night-train', 'movie'));
+    assert.equal(world.status.exclusiveStatus.getSnapshot().streamIssue, 'ticket_unavailable');
   } finally {
     world.restore();
   }
