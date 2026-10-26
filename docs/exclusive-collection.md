@@ -42,12 +42,19 @@ request originates**, not about headers:
 ```
 direct (preferred)                          relay (fallback)
 ─────────────────                           ────────────────
-browser ──POST /api/media/exclusive/ticket
-        ←─ signed URL + headers + body
-browser ──signed request──────────> upstream browser ──GET /api/media/exclusive──> Vercel ──> upstream
-        ←─ JSON                              ←─ JSON            (upstream sees the function's IP)
-upstream sees the user's IP
+browser ──POST /ticket {kind:"login"}  ┐
+        ←─ signed login                │   browser ──GET /api/media/exclusive──> Vercel ──> upstream
+browser ──login POST──────────> upstream│   ←─ JSON            (upstream sees the function's IP)
+        ←─ visitor token               │
+browser ──POST /ticket {token, calls}  ┘
+        ←─ signed URLs + headers + body
+browser ──signed requests────> upstream
+        ←─ JSON
 ```
+
+Both steps of the direct path run on the user's connection, so it works even
+when the deployment cannot reach the catalogue at all. The relay only needs to
+serve the ticket, and signing is local crypto.
 
 `src/lib/media/exclusiveDirect.ts` picks the transport for each call:
 
@@ -76,6 +83,13 @@ signature, and it is deliberately narrow:
   signatures (bound to method + URL + body + timestamp) and an **anonymous
   ephemeral visitor token** minted for that browser key and reused for four
   minutes — never the process-wide session the relay keeps using;
+- **the browser can log itself in.** Signing a login needs only the HMAC key,
+  while *performing* the login needs a connection to the catalogue — the very
+  thing this deployment may not have. So the route signs
+  `{ kind: "login" }`, the browser posts it and gets an anonymous visitor token
+  over its own connection, then sends that token back on the next batch. The
+  token only ever becomes an `authorization` header, which the signature does
+  not cover, so this cannot be turned into "sign my credential for me";
 - browser-bound signatures **omit `x-forwarded-for`**: the request leaves from
   the user's own connection, so a fabricated address would only contradict the
   socket it actually arrives on (the relay keeps its spoofed header, because

@@ -318,6 +318,28 @@ async function naina() {
       : typeof forgedBody?.error === "string");
   check(dot, "the ticket is never an open signing oracle (no caller-supplied URL)", forgedOk, `${forged.status}`);
 
+  const loginTicket = await req("/api/media/exclusive/ticket", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...asCaller(4) },
+    body: JSON.stringify({ calls: [{ kind: "login" }] }),
+  });
+  const loginBody = jsonOf(loginTicket);
+  check(
+    dot,
+    "a login ticket is signed without needing upstream reachability",
+    loginTicket.status === 200 || (loginTicket.status === 503 && loginBody?.code === "ticket_unavailable"),
+    `${loginTicket.status}`
+  );
+  if (loginTicket.status === 200) {
+    const loginCall = Array.isArray(loginBody?.calls) ? loginBody.calls[0] : null;
+    check(
+      dot,
+      "the login ticket carries a signature but no credential",
+      Boolean(loginCall?.["x-tr-signature"] || loginCall?.headers?.["x-tr-signature"]) && !loginCall?.headers?.authorization,
+      loginCall?.id || "(none)"
+    );
+  }
+
   const oversized = await req("/api/media/exclusive/ticket", {
     method: "POST",
     headers: { "content-type": "application/json", ...asCaller(3) },

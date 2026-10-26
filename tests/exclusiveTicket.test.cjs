@@ -55,7 +55,7 @@ function createLoader({ failMint = false } = {}) {
                 'user-agent': 'Fixture/1.0',
                 'x-tr-signature': `sig-${SIGNED_PATHS.length}`,
                 'x-client-token': 'client-token',
-                authorization: `Bearer ${token}`,
+                ...(token ? { authorization: `Bearer ${token}` } : {}),
               },
               body,
             };
@@ -198,6 +198,57 @@ test('ephemeral visitor tokens are reused per browser key and never shared acros
   // Every signed call is bound to the ephemeral token, not to a process session.
   const lastCalls = SIGNED_PATHS.slice(-1);
   assert.equal(lastCalls[0].token, 'visitor-token-0001');
+});
+
+test('a login ticket needs no credential and is signed for the browser', async () => {
+  SIGNED_PATHS.length = 0;
+  AUTH_TOKENS.length = 0;
+  const response = await post({ calls: [{ kind: 'login' }] });
+  assert.equal(response.status, 200, 'signing a login works without any upstream reachability');
+
+  const payload = await response.json();
+  assert.equal(payload.calls.length, 1);
+  const [call] = payload.calls;
+  assert.equal(call.id, 'login');
+  assert.equal(call.kind, 'login');
+  assert.equal(call.method, 'POST');
+  assert.match(call.url, /user-api\/visitor-login$/);
+  assert.equal(call.body, '{}');
+  assert.equal(call.headers.authorization, undefined, 'a login carries no token');
+  assert.ok(call.headers['x-tr-signature'], 'but it is signed');
+
+  assert.equal(AUTH_TOKENS.length, 0, 'signing a login must not require the server to log in');
+});
+
+test("the browser's own token is attached instead of minting one", async () => {
+  SIGNED_PATHS.length = 0;
+  AUTH_TOKENS.length = 0;
+  const response = await post({
+    key: 'browsertoken01',
+    token: 'browser-obtained-token-9999',
+    calls: [{ kind: 'detail', subjectId: '101' }],
+  });
+  assert.equal(response.status, 200);
+
+  assert.equal(AUTH_TOKENS.length, 0, 'no server-side login was needed');
+  assert.equal(SIGNED_PATHS[0].token, 'browser-obtained-token-9999');
+  const payload = await response.json();
+  assert.equal(payload.calls[0].headers.authorization, 'Bearer browser-obtained-token-9999');
+});
+
+test('a junk token is ignored, not echoed', async () => {
+  SIGNED_PATHS.length = 0;
+  const response = await post({
+    key: 'junktoken0001',
+    token: 'x',
+    calls: [{ kind: 'detail', subjectId: '101' }],
+  });
+  assert.equal(response.status, 200);
+  // Too short to be a token, so the route mints its own instead.
+  assert.notEqual(SIGNED_PATHS[0].token, 'x');
+  assert.ok(SIGNED_PATHS[0].token.length > 8);
+  const payload = await response.json();
+  assert.doesNotMatch(payload.calls[0].headers.authorization || '', /Bearer x$/);
 });
 
 /* ------------------------------- rejections ------------------------------ */
