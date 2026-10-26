@@ -67,6 +67,8 @@ import {
 export const DIRECT_ENABLED = process.env.NEXT_PUBLIC_EXCLUSIVE_DIRECT !== "0";
 const DIRECT_TIMEOUT_MS = 12_000;
 const TICKET_TIMEOUT_MS = 10_000;
+/** How long a visitor token the browser obtained itself is reused. */
+const BROWSER_TOKEN_TTL_MS = 10 * 60_000;
 const SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const SNAPSHOT_KEY = "home";
 const SEARCH_SNAPSHOT_PREFIX = "search:";
@@ -91,7 +93,7 @@ function directUsable(): boolean {
 
 interface SignedCall {
   id: string;
-  kind: "home" | "search" | "detail" | "resource";
+  kind: "home" | "search" | "detail" | "resource" | "login";
   method: "GET" | "POST";
   url: string;
   headers: Record<string, string>;
@@ -119,7 +121,8 @@ function ticketKey(): string {
 }
 
 async function fetchTicket(
-  calls: Array<{ kind: string; term?: string; subjectId?: string; se?: number; ep?: number }>
+  calls: Array<{ kind: string; term?: string; subjectId?: string; se?: number; ep?: number }>,
+  token?: string | null
 ): Promise<SignedCall[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TICKET_TIMEOUT_MS);
@@ -128,7 +131,7 @@ async function fetchTicket(
       method: "POST",
       headers: { "content-type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ key: ticketKey(), calls }),
+      body: JSON.stringify(token ? { key: ticketKey(), calls, token } : { key: ticketKey(), calls }),
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`ticket ${response.status}`);
@@ -138,6 +141,58 @@ async function fetchTicket(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/* --------------------------------- login --------------------------------- */
+
+let browserToken: { value: string; expiresAt: number } | null = null;
+
+function tokenFromLoginPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  const direct = record.token;
+  if (typeof direct === "string" && direct.trim().length >= 8) return direct.trim();
+  const nested = record.data;
+  if (nested && typeof nested === "object") {
+    const inner = (nested as Record<string, unknown>).token;
+    if (typeof inner === "string" && inner.trim().length >= 8) return inner.trim();
+  }
+  return null;
+}
+
+/**
+ * The visitor token for this browser.
+ *
+ * Deliberately obtained **here**, not from the server: signing a login needs
+ * only the HMAC key, which the ticket route has, while *performing* the login
+ * needs a connection to the catalogue — the thing this deployment may not have.
+ * The route therefore signs `{ kind: "login" }`, the browser posts it, and the
+ * token comes back over the user's own connection.
+ *
+ * Returns `null` when the login cannot be completed for a reason other than
+ * CORS; the caller then asks for a ticket without a token and the route falls
+ * back to minting one server-side.
+ */
+async function ensureBrowserToken(): Promise<string | null> {
+  if (browserToken && browserToken.expiresAt > Date.now()) return browserToken.value;
+  try {
+    const calls = await fetchTicket([{ kind: "login" }]);
+    const login = calls.find((call) => call.kind === "login");
+    if (!login) return null;
+    const payload = await sendSigned(login);
+    const token = tokenFromLoginPayload(payload);
+    if (!token) return null;
+    browserToken = { value: token, expiresAt: Date.now() + BROWSER_TOKEN_TTL_MS };
+    return token;
+  } catch (error) {
+    if (error instanceof DirectBlocked) throw error;
+    return null;
+  }
+}
+
+/** Drops the cached token, so the next call logs in again. */
+function forgetBrowserToken(): void {
+  browserToken = null;
 }
 
 /* ------------------------------ direct fetch ----------------------------- */
@@ -181,11 +236,10 @@ async function sendSigned(call: SignedCall): Promise<unknown> {
   }
 
   if (!response.ok) {
-    if (response.status === 429 || response.status === 440 || response.status === 403) {
-      // A signed request the upstream refuses is a real rejection, not a CORS
-      // problem: keep the transport, let the caller retry through the relay.
-      throw new Error(`upstream ${response.status}`);
-    }
+    // A stale visitor token is the one rejection worth retrying here: drop it
+    // so the next call logs in again. Everything else is a per-call failure the
+    // caller handles by falling back to the relay.
+    if (response.status === 401) forgetBrowserToken();
     throw new Error(`upstream ${response.status}`);
   }
 
@@ -236,7 +290,8 @@ export function directReader(): CatalogueReader {
       if (listingInFlight) return listingInFlight;
 
       const load = (async () => {
-        const calls = await fetchTicket([{ kind: "home" }]);
+        const token = await ensureBrowserToken();
+        const calls = await fetchTicket([{ kind: "home" }], token);
         const payloads = await Promise.all(
           calls
             .filter((call) => call.kind === "home")
@@ -280,7 +335,8 @@ export function directReader(): CatalogueReader {
       const cached = searchCache.get(key);
       if (cached && cached.expiresAt > Date.now()) return cached.value.slice(0, limit);
 
-      const calls = await fetchTicket([{ kind: "search", term }]);
+      const token = await ensureBrowserToken();
+      const calls = await fetchTicket([{ kind: "search", term }], token);
       const call = calls.find((entry) => entry.kind === "search");
       if (!call) return [];
 
@@ -303,10 +359,14 @@ export function directReader(): CatalogueReader {
         return { ...cached.value, playback: await playbackFor(slug, kind, cached.value) };
       }
 
-      const calls = await fetchTicket([
-        { kind: "detail", subjectId },
-        { kind: "resource", subjectId },
-      ]);
+      const token = await ensureBrowserToken();
+      const calls = await fetchTicket(
+        [
+          { kind: "detail", subjectId },
+          { kind: "resource", subjectId },
+        ],
+        token
+      );
       const detailCall = calls.find((entry) => entry.kind === "detail");
       if (!detailCall) return null;
 

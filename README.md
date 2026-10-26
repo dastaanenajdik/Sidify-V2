@@ -187,8 +187,10 @@ The catalogue blocks or rate-limits shared datacenter ranges, and a serverless
 function egresses from one. So the browser fetches it directly whenever it can:
 
 1. `POST /api/media/exclusive/ticket` — the server signs one batch of upstream
-   requests (no `url` field, no secrets, ≤ 4 calls, `no-store`, rate-limited)
-   and returns them with an anonymous ephemeral visitor token.
+   requests (no `url` field, no secrets, ≤ 4 calls, `no-store`, rate-limited).
+   Signing is local crypto, so this works even if the deployment itself cannot
+   reach the catalogue; the browser then performs the visitor login itself and
+   sends its own token back on the next batch.
 2. The browser sends those signed requests itself, so **the upstream sees the
    user's address**; payloads are composed by the same code as the server path.
 3. If the upstream's CORS policy refuses, the call quietly falls back to the

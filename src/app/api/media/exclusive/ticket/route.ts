@@ -31,6 +31,14 @@ export const runtime = "nodejs";
  *      timestamp, and only useful until the upstream's own skew window
  *      closes) and a **one-off anonymous visitor token** minted for this
  *      ticket — never the process-wide session this server keeps using.
+ *
+ *   3. **The browser can log itself in.** If this deployment cannot reach the
+ *      catalogue at all — the very problem this route exists to work around —
+ *      it can still *sign* a `login` call, because signing is local crypto.
+ *      The browser performs that login itself, then sends its token back on the
+ *      next batch; the token only ever becomes an `authorization` header, which
+ *      the signature does not cover, so a caller cannot turn this into a way to
+ *      have the server sign for arbitrary credentials.
  *   3. **No bulk signing.** One batch is at most four calls; the expanded
  *      total is capped; the route is rate-limited per caller.
  *
@@ -80,7 +88,7 @@ interface RawCall {
 
 interface SignedCallDescriptor {
   id: string;
-  kind: "home" | "search" | "detail" | "resource";
+  kind: "home" | "search" | "detail" | "resource" | "login";
   method: "GET" | "POST";
   url: string;
   headers: Record<string, string>;
@@ -125,7 +133,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const body = await readJsonBody<{ calls?: unknown; key?: unknown }>(req);
+  const body = await readJsonBody<{ calls?: unknown; key?: unknown; token?: unknown }>(req);
   if (!body || !Array.isArray(body.calls)) {
     return NextResponse.json({ error: "Expected { calls: [...] }", code: "bad_request" }, { status: 400 });
   }
@@ -138,6 +146,19 @@ export async function POST(req: NextRequest) {
 
   const ticketKey = typeof body.key === "string" && /^[a-zA-Z0-9_-]{8,64}$/.test(body.key) ? body.key : "anon";
 
+  /**
+   * A visitor token the *browser* obtained itself (see `kind: "login"`).
+   *
+   * It is used verbatim as a bearer credential and is never inspected: the
+   * upstream decides whether it is valid. That keeps the route from becoming a
+   * token oracle — a caller can only attach a credential it already holds, to
+   * one of four known paths.
+   */
+  const browserToken =
+    typeof body.token === "string" && body.token.trim().length >= 8 && body.token.trim().length <= 4096
+      ? body.token.trim()
+      : null;
+
   // Validate first, then sign: a rejected batch must never cost an upstream call.
   const requested: Array<{ kind: SignedCallDescriptor["kind"]; term?: string; subjectId?: string; se?: number; ep?: number }> = [];
   for (const raw of body.calls as RawCall[]) {
@@ -146,6 +167,10 @@ export async function POST(req: NextRequest) {
     }
     const kind = raw.kind;
     if (kind === "home") {
+      requested.push({ kind });
+      continue;
+    }
+    if (kind === "login") {
       requested.push({ kind });
       continue;
     }
@@ -180,13 +205,31 @@ export async function POST(req: NextRequest) {
   const client = getVaultClient();
 
   try {
-    // A visitor token minted for this caller only. It is anonymous, expires on
-    // its own, and is never the session the rest of this server uses.
-    const token = await ephemeralTokenFor(ticketKey, () => client.mintEphemeralSession());
     const expiresAt = Date.now() + TICKET_TTL_MS;
     const calls: SignedCallDescriptor[] = [];
 
+    // A login batch needs no credential of its own — that is the whole point:
+    // the browser can obtain one even when this server cannot reach upstream.
     for (const call of requested) {
+      if (call.kind === "login") {
+        const path = "/wefeed-mobile-bff/user-api/visitor-login";
+        const signed = client.signedCall("POST", path, "{}", null, BROWSER_BOUND);
+        calls.push({ id: "login", kind: "login", method: "POST", url: signed.url, headers: signed.headers, body: "{}", expiresAt });
+      }
+    }
+
+    const needsCredential = requested.some((call) => call.kind !== "login");
+    let token: string | null = null;
+    if (needsCredential) {
+      // The browser's own token is preferred: it proves nothing to this server,
+      // and it works even when this deployment is cut off from the catalogue.
+      // Otherwise mint one for this caller only — anonymous, self-expiring, and
+      // never the session the rest of this server uses.
+      token = browserToken ?? (await ephemeralTokenFor(ticketKey, () => client.mintEphemeralSession()));
+    }
+
+    for (const call of requested) {
+      if (call.kind === "login") continue;
       if (call.kind === "home") {
         for (const tabId of HOME_TAB_IDS) {
           const path = `/wefeed-mobile-bff/tab-operating?page=1&tabId=${encodeURIComponent(tabId)}&version=`;

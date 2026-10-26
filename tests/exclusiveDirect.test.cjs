@@ -71,7 +71,13 @@ function memoryStorage() {
  * loaded fresh against them. Every test gets its own module instances, because
  * `exclusiveDirect` deliberately remembers that the direct path is blocked.
  */
-function createBrowserWorld({ corsBlocked = false, failTicket = false, upstreamDown = false, playback = [] } = {}) {
+function createBrowserWorld({
+  corsBlocked = false,
+  failTicket = false,
+  upstreamDown = false,
+  loginRefused = false,
+  playback = [],
+} = {}) {
   const storage = memoryStorage();
   const calls = [];
   const upstreamRequests = [];
@@ -88,16 +94,27 @@ function createBrowserWorld({ corsBlocked = false, failTicket = false, upstreamD
       ticketRequests.push(JSON.parse(String(init.body || '{}')));
       if (failTicket) return json({ error: 'nope' }, 503);
       const body = JSON.parse(String(init.body || '{}'));
+      // Mirrors the real route: the credential ends up as a bearer header.
+      const auth = body.token ? { authorization: `Bearer ${body.token}` } : {};
       const signed = [];
       for (const call of body.calls || []) {
-        if (call.kind === 'home') {
+        if (call.kind === 'login') {
+          signed.push({
+            id: 'login',
+            kind: 'login',
+            method: 'POST',
+            url: 'https://upstream.test/wefeed-mobile-bff/user-api/visitor-login',
+            headers: { 'x-sig': 'signed' },
+            body: '{}',
+          });
+        } else if (call.kind === 'home') {
           for (const tabId of ['2', '1', '3']) {
             signed.push({
               id: `home:${tabId}`,
               kind: 'home',
               method: 'GET',
               url: `https://upstream.test/wefeed-mobile-bff/tab-operating?page=1&tabId=${tabId}&version=`,
-              headers: { 'x-sig': 'signed', 'x-visitor': 'ephemeral' },
+              headers: { 'x-sig': 'signed', ...auth },
             });
           }
         } else if (call.kind === 'search') {
@@ -106,7 +123,7 @@ function createBrowserWorld({ corsBlocked = false, failTicket = false, upstreamD
             kind: 'search',
             method: 'POST',
             url: 'https://upstream.test/wefeed-mobile-bff/subject-api/search/v2',
-            headers: { 'x-sig': 'signed' },
+            headers: { 'x-sig': 'signed', ...auth },
             body: JSON.stringify({ keyword: call.term, page: 1, perPage: 15, subjectType: 0 }),
           });
         } else if (call.kind === 'detail') {
@@ -115,7 +132,7 @@ function createBrowserWorld({ corsBlocked = false, failTicket = false, upstreamD
             kind: 'detail',
             method: 'GET',
             url: `https://upstream.test/wefeed-mobile-bff/subject-api/get?subjectId=${call.subjectId}`,
-            headers: { 'x-sig': 'signed' },
+            headers: { 'x-sig': 'signed', ...auth },
           });
         } else if (call.kind === 'resource') {
           signed.push({
@@ -123,7 +140,7 @@ function createBrowserWorld({ corsBlocked = false, failTicket = false, upstreamD
             kind: 'resource',
             method: 'GET',
             url: `https://upstream.test/wefeed-mobile-bff/subject-api/resource?subjectId=${call.subjectId}&page=1&perPage=20`,
-            headers: { 'x-sig': 'signed' },
+            headers: { 'x-sig': 'signed', ...auth },
           });
         }
       }
@@ -141,6 +158,10 @@ function createBrowserWorld({ corsBlocked = false, failTicket = false, upstreamD
       if (corsBlocked) throw new TypeError('Failed to fetch');
       if (upstreamDown) return json({ error: 'nope' }, 502);
 
+      if (href.includes('visitor-login')) {
+        if (loginRefused) return json({ error: 'no visitor session for you' }, 403);
+        return json({ data: { token: 'browser-token-abc123' } });
+      }
       if (href.includes('tab-operating')) return json({ data: { items: [{ subjects: titles }] } });
       if (href.includes('subject-api/search/v2')) {
         const keyword = String(JSON.parse(String(init.body || '{}')).keyword || '').toLowerCase();
@@ -276,11 +297,55 @@ test('the ticket holds no secrets and no arbitrary URLs', async () => {
   const world = createBrowserWorld();
   try {
     await world.direct.loadExclusiveHome('all', NEVER);
-    const request = world.ticketRequests[0];
-    assert.deepEqual(Object.keys(request).sort(), ['calls', 'key']);
-    assert.deepEqual(request.calls, [{ kind: 'home' }], 'the browser only names the kind of call');
+
+    const [login, data] = world.ticketRequests;
+    assert.deepEqual(Object.keys(login).sort(), ['calls', 'key'], 'no credential on the login batch');
+    assert.deepEqual(login.calls, [{ kind: 'login' }]);
+    assert.deepEqual(data.calls, [{ kind: 'home' }], 'the browser only names the kind of call');
+    assert.equal(data.token, 'browser-token-abc123', "the browser's own token is what gets attached");
+
     // The signed batch is bounded: three tab calls for one home request.
-    assert.equal(world.upstreamRequests.length, 3);
+    const homeCalls = world.upstreamRequests.filter((entry) => entry.href.includes('tab-operating'));
+    assert.equal(homeCalls.length, 3);
+    assert.ok(
+      homeCalls.every((entry) => entry.init.headers.authorization === 'Bearer browser-token-abc123'),
+      'the credential came from the browser, not from the server'
+    );
+  } finally {
+    world.restore();
+  }
+});
+
+test('the browser logs itself in, so the server never has to reach the catalogue', async () => {
+  const world = createBrowserWorld();
+  try {
+    await world.direct.loadExclusiveHome('all', NEVER);
+
+    const loginRequest = world.upstreamRequests.find((entry) => entry.href.includes('visitor-login'));
+    assert.ok(loginRequest, 'the login POST was made by the browser itself');
+    assert.equal(loginRequest.init.method, 'POST');
+    assert.equal(loginRequest.init.credentials, 'omit');
+    assert.equal(loginRequest.init.headers.authorization, undefined, 'a login needs no credential');
+
+    // …and the login is cached, so a second read reuses the token instead of
+    // asking for another one.
+    const loginsBefore = world.upstreamRequests.filter((entry) => entry.href.includes('visitor-login')).length;
+    await world.direct.loadExclusiveSearch({ q: 'night' }, NEVER);
+    const loginsAfter = world.upstreamRequests.filter((entry) => entry.href.includes('visitor-login')).length;
+    assert.equal(loginsAfter, loginsBefore, 'the visitor token is reused');
+  } finally {
+    world.restore();
+  }
+});
+
+test('a login the catalogue refuses falls back to a server-minted ticket', async () => {
+  const world = createBrowserWorld({ loginRefused: true });
+  try {
+    const home = await world.direct.loadExclusiveHome('all', NEVER);
+    assert.ok(home.rails.length > 0, 'the collection still loads');
+    const last = world.ticketRequests[world.ticketRequests.length - 1];
+    assert.equal(last.token, undefined, 'no browser token means the route mints one');
+    assert.equal(world.direct.directStatus().enabled, true, 'a refused login is not a CORS refusal');
   } finally {
     world.restore();
   }
