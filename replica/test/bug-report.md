@@ -22,13 +22,14 @@ dead end · **S3** confusing state · **S4** polish.
 | 9 | S3 | (self) | The parity matrix silently mis-parsed a row whose feature name contained an unquoted comma, dropping a must-have from the score. | `clone` column read `"details"` on a row with six fields shifted | Features with commas are quoted; the parser now rejects unknown `clone` values and fails the preflight | `tests/replicaParity.test.cjs` |
 | 10 | S4 | Naina | Closing the player left the page scrolled/behind-interactive on mobile, and Escape did nothing. | Manual check of the overlay | Overlay locks body scroll, closes on Escape, focuses the close button, `role="dialog" aria-modal` | `tests/exclusiveUi.test.cjs` |
 | 11 | S1 | Naina | **In production the section said "The exclusive collection is unavailable".** Every read was proxied through the serverless function, whose datacenter egress range the catalogue refuses or rate-limits — the same request from a home connection worked. | Live deploy: `GET /api/media/exclusive?mode=home` → coded `502 network_error`; sandbox reproduced it (`fetch failed` from the function, not the browser) | Reads now originate in the **user's browser**: `POST /api/media/exclusive/ticket` signs one batch of upstream calls (no `url` field, no secrets, ≤ 4 calls, `no-store`, rate-limited), the browser sends them itself, and the same composition code builds the payload. CORS refusal → silent relay fallback → labelled `localStorage` snapshot with Retry. | `tests/exclusiveDirect.test.cjs` (12 cases incl. a forced CORS `TypeError`), `tests/exclusiveTicket.test.cjs` (12), `tests/exclusiveSnapshot.test.cjs` (10), `scripts/qa-dots.mjs` Naina ticket probes |
+| 12 | S1 | Naina | Title pages were still server-rendered for exclusive titles: `/movies/vault-…` asked the provider on the serverless function, so a production visit to a film returned 502/404 from the blocked datacenter IP even though the browser could reach the catalogue. Streams and downloads were resolved by `POST /api/media/exclusive/playback`, which needed the same blocked hop. | Live: `vault-*` detail page 502; the resolution route answered `440` upstream | Detail, streams and mirrors now come from **one signed browser batch** (`detail` + `playback` + `resource`); the resolution endpoint is deleted; `/movies|/series/vault-…` render a frame and resolve client-side, with the last saved copy of the title as fallback. DASH stays on the byte relay only because `Cookie` is a forbidden request header. | `tests/exclusiveDirect.test.cjs` (title batch, no server route), `tests/exclusivePlaybackDirect.test.cjs` (14 cases), `scripts/qa-dots.mjs` (route removed, three kinds in one ticket) |
 
 ## Probes that now pass
 
 ```
 npm run build && npm run start
 node scripts/qa-dots.mjs
-# … 122 passed, 0 failed
+# … 129 passed, 0 failed
 ```
 
 The exclusive contract is asserted with the upstream **offline** (the sandbox

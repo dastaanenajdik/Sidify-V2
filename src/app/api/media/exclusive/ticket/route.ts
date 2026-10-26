@@ -15,6 +15,11 @@ export const runtime = "nodejs";
  *   browser ──ticket──> this route ──(signs with the HMAC key it alone holds)
  *   browser ──signed request──> upstream        ← connection carries the user's IP
  *
+ * The kinds are the whole exclusive surface: `home`, `search`, `detail`
+ * (`subject-api/get`), `playback` (`subject-api/play-info/v2`), `resource`
+ * (download mirrors) and `login`. Every read the section performs — including
+ * the stream list — is signed here and then *executed by the browser*.
+ *
  * Why this exists: the catalogue is reachable from most consumer networks but
  * refuses or rate-limits shared datacenter ranges, which is exactly what a
  * serverless function egresses from. Moving the *originating* side of the
@@ -88,7 +93,7 @@ interface RawCall {
 
 interface SignedCallDescriptor {
   id: string;
-  kind: "home" | "search" | "detail" | "resource" | "login";
+  kind: "home" | "search" | "detail" | "playback" | "resource" | "login";
   method: "GET" | "POST";
   url: string;
   headers: Record<string, string>;
@@ -182,9 +187,12 @@ export async function POST(req: NextRequest) {
       requested.push({ kind, term });
       continue;
     }
-    if (kind === "detail" || kind === "resource") {
+    if (kind === "detail" || kind === "playback" || kind === "resource") {
       if (!isSubjectId(raw.subjectId)) {
-        return NextResponse.json({ error: "A detail/resource call needs a numeric subjectId.", code: "bad_request" }, { status: 400 });
+        return NextResponse.json(
+          { error: "A detail/playback/resource call needs a numeric subjectId.", code: "bad_request" },
+          { status: 400 }
+        );
       }
       requested.push({
         kind,
@@ -262,9 +270,18 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const suffix =
+      const episodeSuffix =
         call.se !== undefined && call.ep !== undefined && call.se > 0 && call.ep > 0 ? `&se=${call.se}&ep=${call.ep}` : "";
-      const path = `/wefeed-mobile-bff/subject-api/resource?subjectId=${call.subjectId}${suffix}&page=1&perPage=20`;
+
+      if (call.kind === "playback") {
+        // The stream list: one DASH manifest + its signed cookie per quality.
+        const path = `/wefeed-mobile-bff/subject-api/play-info/v2?subjectId=${call.subjectId}${episodeSuffix}`;
+        const signed = client.signedCall("GET", path, undefined, token, BROWSER_BOUND);
+        calls.push({ id: "playback", kind: "playback", method: "GET", url: signed.url, headers: signed.headers, expiresAt });
+        continue;
+      }
+
+      const path = `/wefeed-mobile-bff/subject-api/resource?subjectId=${call.subjectId}${episodeSuffix}&page=1&perPage=20`;
       const signed = client.signedCall("GET", path, undefined, token, BROWSER_BOUND);
       calls.push({ id: "resource", kind: "resource", method: "GET", url: signed.url, headers: signed.headers, expiresAt });
     }

@@ -218,6 +218,31 @@ async function rian() {
   }
   const badType = await req("/api/media/title/badtype/x");
   check(dot, "unknown media type is 400 JSON", badType.status === 400 && isJson(badType), `${badType.status}`);
+  // A relay token carries the manifest URL and its directory; anything after the token
+  // is a DASH segment resolved against that directory (and must stay inside it).
+  const relayToken = Buffer.from(
+    JSON.stringify({
+      u: "https://sbcdn3.hakunaymatata.com/dash/1/index.mpd",
+      b: "https://sbcdn3.hakunaymatata.com/dash/1/",
+    })
+  ).toString("base64url");
+
+  const traversal = await req(`/api/media/vault-stream/${relayToken}/..%2F..%2Fsecret.m4s`);
+  check(
+    dot,
+    "the stream relay refuses a segment that escapes the manifest folder",
+    traversal.status === 400 && isJson(traversal),
+    `${traversal.status}`
+  );
+
+  const segment = await req(`/api/media/vault-stream/${relayToken}/1_video_1.m4s`);
+  check(
+    dot,
+    "a segment below the token resolves instead of being rejected as malformed",
+    segment.status !== 400,
+    `${segment.status}`
+  );
+
   const noUrl = await req("/api/media/stream");
   check(dot, "media stream without url is 400 JSON", noUrl.status === 400 && isJson(noUrl), `${noUrl.status}`);
 }
@@ -357,12 +382,47 @@ async function naina() {
     ticketCache || "(none)"
   );
 
+  // Stream resolution is client-side now: the old server hop must be gone, and
+  // its absence must still be a JSON answer rather than an HTML 404 page.
   const playback = await req("/api/media/exclusive/playback", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ slug: "not-a-vault-slug" }),
+    body: JSON.stringify({ slug: "vault-101-night-train" }),
   });
-  check(dot, "playback rejects a non-exclusive slug with a JSON 400", playback.status === 400 && isJson(playback), `${playback.status}`);
+  check(
+    dot,
+    "no server-side playback-resolution route is left",
+    playback.status === 404 && isJson(playback),
+    `${playback.status}`
+  );
+
+  const ticketKinds = await req("/api/media/exclusive/ticket", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...asCaller(5) },
+    // A browser token is what a real client sends after logging in itself, and
+    // it is what lets this probe exercise signing with no upstream access at all.
+    body: JSON.stringify({
+      key: "qadots-browser-1",
+      token: "qa-browser-token-0001",
+      calls: [
+        { kind: "detail", subjectId: "101" },
+        { kind: "playback", subjectId: "101" },
+        { kind: "resource", subjectId: "101" },
+      ],
+    }),
+  });
+  const ticketKindsBody = jsonOf(ticketKinds);
+  check(
+    dot,
+    "detail + playback + resource are signed in one batch",
+    ticketKinds.status === 200
+      ? Array.isArray(ticketKindsBody?.calls) &&
+        ticketKindsBody.calls.some((call) => call.kind === "playback") &&
+        ticketKindsBody.calls.some((call) => call.kind === "detail") &&
+        ticketKindsBody.calls.some((call) => call.kind === "resource")
+      : typeof ticketKindsBody?.error === "string" && ticketKinds.status !== 500,
+    `${ticketKinds.status}`
+  );
 }
 
 /* ----------------------------------- Ved — audio & picture sync --- */
@@ -400,6 +460,31 @@ async function ved() {
 
   const crossSite = await req("/api/media/vault-stream/not-a-token", { headers: { "sec-fetch-site": "cross-site" } });
   check(dot, "the stream relay refuses cross-site hotlinking", crossSite.status === 403 && isJson(crossSite), `${crossSite.status}`);
+
+  // A relay token carries the manifest URL and its directory; anything after the token
+  // is a DASH segment resolved against that directory (and must stay inside it).
+  const relayToken = Buffer.from(
+    JSON.stringify({
+      u: "https://sbcdn3.hakunaymatata.com/dash/1/index.mpd",
+      b: "https://sbcdn3.hakunaymatata.com/dash/1/",
+    })
+  ).toString("base64url");
+
+  const traversal = await req(`/api/media/vault-stream/${relayToken}/..%2F..%2Fsecret.m4s`);
+  check(
+    dot,
+    "the stream relay refuses a segment that escapes the manifest folder",
+    traversal.status === 400 && isJson(traversal),
+    `${traversal.status}`
+  );
+
+  const segment = await req(`/api/media/vault-stream/${relayToken}/1_video_1.m4s`);
+  check(
+    dot,
+    "a segment below the token resolves instead of being rejected as malformed",
+    segment.status !== 400,
+    `${segment.status}`
+  );
 
   const noUrl = await req("/api/media/stream");
   check(dot, "the generic stream proxy rejects a missing url", noUrl.status === 400 && isJson(noUrl), `${noUrl.status}`);

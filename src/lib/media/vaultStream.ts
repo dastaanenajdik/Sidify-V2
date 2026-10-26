@@ -19,10 +19,24 @@
 import dns from "node:dns/promises";
 import { isBlockedIp, type DnsAddress, type DnsLookupFn } from "./safeFetch";
 
-/** Route prefix of the relay. */
-export const VAULT_STREAM_PATH = "/api/media/vault-stream";
+/* The relay token (encode/decode/build/unwrap) lives in `vaultStreamToken.ts`,
+   which has no Node built-ins: the browser builds the same relay URLs as this
+   server does. Re-exported here so existing imports keep working. */
+export {
+  VAULT_STREAM_PATH,
+  buildVaultStreamUrl,
+  decodeVaultStreamToken,
+  encodeVaultStreamToken,
+  unwrapVaultStreamUrl,
+  type VaultStreamDescriptor,
+} from "./vaultStreamToken";
+import { VAULT_STREAM_PATH } from "./vaultStreamToken";
 
-/** Upstream hosts the relay is allowed to reach. */
+/**
+ * Upstream hosts the relay is allowed to reach. Server-side only: the browser
+ * never needs it (it forwards what play-info gave it), and a forged token is
+ * refused here precisely because this list is the check.
+ */
 const ALLOWED_UPSTREAM_HOSTS = new Set([
   "sbcdn3.hakunaymatata.com",
   "sacdn.hakunaymatata.com",
@@ -49,99 +63,6 @@ export function isAllowedVaultUpstreamHost(hostname: string): boolean {
   if (!host) return false;
   if (ALLOWED_UPSTREAM_HOSTS.has(host)) return true;
   return ALLOWED_UPSTREAM_SUFFIXES.some((suffix) => host.endsWith(suffix));
-}
-
-/**
- * A relay descriptor: the upstream URL plus the headers needed to fetch it.
- * Serialised into the relay URL so no server-side state is needed.
- *
- * `b` is the *base* the upstream URL is relative to. DASH manifests reference their
- * segments relatively, so the relay must know both the manifest and the directory the
- * segments live in to rebuild the correct upstream segment URL.
- */
-export interface VaultStreamDescriptor {
-  /** Upstream URL (manifest or segment). */
-  u: string;
-  /** Extra request headers. */
-  h?: Array<[string, string]>;
-  /** Base directory the upstream URL is resolved against (defaults to the URL's dir). */
-  b?: string;
-}
-
-/** Encodes a descriptor into a URL-safe token. */
-export function encodeVaultStreamToken(descriptor: VaultStreamDescriptor): string {
-  return Buffer.from(JSON.stringify(descriptor), "utf8").toString("base64url");
-}
-
-/** Decodes a token produced by `encodeVaultStreamToken`. */
-export function decodeVaultStreamToken(token: string): VaultStreamDescriptor | null {
-  if (!token || token.length > 16384) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object") return null;
-    const record = parsed as Record<string, unknown>;
-    const url = typeof record.u === "string" ? record.u : null;
-    if (!url || !/^https:\/\//i.test(url)) return null;
-
-    const headers: Array<[string, string]> = [];
-    if (Array.isArray(record.h)) {
-      for (const entry of record.h) {
-        if (!Array.isArray(entry) || entry.length !== 2) continue;
-        const [name, value] = entry;
-        if (typeof name !== "string" || typeof value !== "string") continue;
-        if (!RELAYED_HEADER_NAMES.has(name.toLowerCase())) continue;
-        headers.push([name, value.slice(0, 4096)]);
-        if (headers.length >= 8) break;
-      }
-    }
-
-    const base = typeof record.b === "string" ? record.b : undefined;
-    if (base !== undefined && !/^https:\/\//i.test(base)) return null;
-
-    return { u: url, h: headers.length ? headers : undefined, b: base };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Builds the same-origin relay URL for an upstream URL + headers.
- *
- * The token travels in the *path*, not the query: a DASH player resolves its segment
- * URLs relative to the manifest's base, so the base must be a directory path that a
- * segment file name can be appended to.
- *
- * `origin` makes the URL absolute (Shaka needs a scheme); omit it for a relative URL.
- */
-export function buildVaultStreamUrl(
-  upstreamUrl: string,
-  headers?: Array<[string, string]>,
-  origin?: string | null,
-  base?: string
-): string {
-  const token = encodeVaultStreamToken({
-    u: upstreamUrl,
-    h: headers?.length ? headers : undefined,
-    b: base,
-  });
-  const path = `${VAULT_STREAM_PATH}/${token}`;
-  const cleanOrigin = (origin || "").trim().replace(/\/+$/, "");
-  if (!cleanOrigin || cleanOrigin === "null") return path;
-  return `${cleanOrigin}${path}`;
-}
-
-/** Reads the upstream URL out of a relay URL, if it is one. */
-export function unwrapVaultStreamUrl(maybeUrl: string | null | undefined): string | null {
-  if (!maybeUrl) return null;
-  try {
-    const parsed = new URL(maybeUrl, "https://sidify.local");
-    if (!parsed.pathname.startsWith(VAULT_STREAM_PATH)) return null;
-    const token = parsed.pathname.slice(VAULT_STREAM_PATH.length).split("/").filter(Boolean)[0];
-    if (!token) return null;
-    return decodeVaultStreamToken(token)?.u ?? null;
-  } catch {
-    return null;
-  }
 }
 
 export interface VaultStreamDeps {
