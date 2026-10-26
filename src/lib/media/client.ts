@@ -1,6 +1,11 @@
 "use client";
 
 import type {
+  ExclusiveHome,
+  ExclusiveQuery,
+  ExclusiveSearchPage,
+  ExclusiveSuggestions,
+  ExclusiveTitleResponse,
   MediaBrowse,
   MediaDetail,
   MediaKind,
@@ -38,7 +43,18 @@ async function json<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-function queryString(query: MediaQuery & { page?: number; type?: string; limit?: number }): string {
+function queryString(
+  query: MediaQuery & {
+    page?: number;
+    type?: string;
+    limit?: number;
+    mode?: string;
+    genre?: string;
+    year?: string;
+    language?: string;
+    sort?: string;
+  }
+): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null || value === "") continue;
@@ -55,9 +71,35 @@ export const mediaApi = {
   search: (q: string, kind: MediaKind | "all" = "all", limit = 24) =>
     fetch(`/api/media/search?${queryString({ q, type: kind, limit })}`).then((r) => json<MediaSearchResponse>(r)),
 
-  /** The exclusive collection on its own — never mixed with the main catalogue. */
-  exclusive: (q: string, kind: MediaKind | "all" = "all", limit = 24) =>
-    fetch(`/api/media/exclusive?${queryString({ q, type: kind, limit })}`).then((r) => json<MediaSearchResponse>(r)),
+  /** The exclusive landing page: spotlight, rails, genres and facets. */
+  exclusiveHome: (kind: MediaKind | "all" = "all") =>
+    fetch(`/api/media/exclusive?${queryString({ mode: "home", type: kind })}`).then((r) => json<ExclusiveHome>(r)),
+
+  /** A filtered, sorted, paginated page of the exclusive collection. */
+  exclusiveSearch: (params: ExclusiveQuery) =>
+    fetch(
+      `/api/media/exclusive?${queryString({
+        mode: "search",
+        q: params.q,
+        type: params.kind ?? "all",
+        genre: params.genre,
+        year: params.year,
+        language: params.language,
+        sort: params.sort,
+        page: params.page,
+        limit: params.limit,
+      })}`
+    ).then((r) => json<ExclusiveSearchPage>(r)),
+
+  /** One exclusive title with its own playback sources and recommendations. */
+  exclusiveTitle: (slug: string, kind?: MediaKind) =>
+    fetch(`/api/media/exclusive/title/${encodeURIComponent(slug)}${kind ? `?type=${kind}` : ""}`).then((r) =>
+      json<ExclusiveTitleResponse>(r)
+    ),
+
+  /** Typeahead for the exclusive search field. */
+  exclusiveSuggest: (q: string, limit = 8) =>
+    fetch(`/api/media/exclusive/suggest?${queryString({ q, limit })}`).then((r) => json<ExclusiveSuggestions>(r)),
 
   detail: (kind: MediaKind, slug: string) =>
     fetch(`/api/media/title/${kind}/${encodeURIComponent(slug)}`).then((r) => json<MediaDetail>(r)),

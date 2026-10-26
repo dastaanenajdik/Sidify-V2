@@ -42,6 +42,16 @@ export interface ShakaTextTrackOption {
   active: boolean;
 }
 
+/** One selectable video quality (an adaptation set, deduplicated by height). */
+export interface ShakaVideoQualityOption {
+  /** A variant id that carries this height; pass it through `selectVideoQuality`. */
+  id: number;
+  height: number | null;
+  width: number | null;
+  bandwidth: number | null;
+  active: boolean;
+}
+
 export type ShakaFailureKind = "network" | "decode";
 
 export interface ShakaErrorEvent {
@@ -65,6 +75,7 @@ export interface AttachShakaOptions {
   onTracksChanged?: (tracks: {
     audio: ShakaAudioTrackOption[];
     text: ShakaTextTrackOption[];
+    video: ShakaVideoQualityOption[];
   }) => void;
   onFatalError?: (err: ShakaErrorEvent) => void;
 }
@@ -78,6 +89,12 @@ export interface ShakaPlaybackHandle {
   selectAudioTrack: (variantTrackId: number) => void;
   getTextTracks: () => ShakaTextTrackOption[];
   selectTextTrack: (textTrackId: number | null) => Promise<void>;
+  /** Every distinct video height the manifest offers, best first. */
+  getVideoQualities: () => ShakaVideoQualityOption[];
+  /** Pin one height, or pass "auto" to hand control back to ABR. */
+  selectVideoQuality: (height: number | "auto") => void;
+  /** Turn adaptive bitrate on/off without changing the selected variant. */
+  setAdaptationEnabled: (enabled: boolean) => void;
   upgradeProgressiveMp4ToMse: (resumeAt?: number) => Promise<boolean>;
   destroy: () => Promise<void>;
 }
@@ -632,6 +649,40 @@ function extractTextTrackOptions(
 }
 
 /**
+ * Distinct video heights, best first.
+ *
+ * A manifest can carry many variants per height (different codecs, HDR/SDR,
+ * bitrate ladders). The picker only needs one row per height, so each bucket
+ * keeps its highest-bandwidth variant — the id used to select it.
+ */
+function extractVideoQualities(player: ShakaNamespace.Player): ShakaVideoQualityOption[] {
+  let variants: ShakaNamespace.extern.Track[] = [];
+  try {
+    variants = player.getVariantTracks() || [];
+  } catch {
+    return [];
+  }
+
+  const buckets = new Map<number, ShakaNamespace.extern.Track>();
+  const activeVariant = variants.find((track) => track.active);
+  for (const track of variants) {
+    if (typeof track.height !== "number" || track.height <= 0) continue;
+    const current = buckets.get(track.height);
+    if (!current || (track.bandwidth || 0) > (current.bandwidth || 0)) buckets.set(track.height, track);
+  }
+
+  return [...buckets.values()]
+    .sort((a, b) => (b.height || 0) - (a.height || 0))
+    .map((track) => ({
+      id: track.id,
+      height: track.height ?? null,
+      width: track.width ?? null,
+      bandwidth: track.bandwidth ?? null,
+      active: Boolean(activeVariant && track.height === activeVariant.height),
+    }));
+}
+
+/**
  * Dynamically creates and attaches a dedicated `shaka.Player` instance for `video`,
  * configures codec & streaming compatibility (including DDP 5.1 / AC-3 WASM transcoding),
  * and loads the requested media URL.
@@ -654,6 +705,9 @@ export async function attachShakaPlayback(
       selectAudioTrack: () => {},
       getTextTracks: () => [],
       selectTextTrack: async () => {},
+      getVideoQualities: () => [],
+      selectVideoQuality: () => {},
+      setAdaptationEnabled: () => {},
       upgradeProgressiveMp4ToMse: async () => false,
       destroy: async () => {},
     };
@@ -729,6 +783,7 @@ export async function attachShakaPlayback(
     options.onTracksChanged({
       audio: extractDeduplicatedAudioTracks(player),
       text: extractTextTrackOptions(player),
+      video: extractVideoQualities(player),
     });
   };
 
@@ -875,6 +930,38 @@ export async function attachShakaPlayback(
     }
   };
 
+  const getVideoQualities = (): ShakaVideoQualityOption[] => (destroyed ? [] : extractVideoQualities(player));
+
+  const selectVideoQuality = (height: number | "auto"): void => {
+    if (destroyed) return;
+    try {
+      if (height === "auto") {
+        player.configure({ abr: { enabled: true } });
+        emitTracks();
+        return;
+      }
+      const variants = (player.getVariantTracks() || []).filter((track) => track.height === height);
+      if (!variants.length) return;
+      const best = variants.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))[0];
+      // Pin the height first, then select it — the other order lets ABR swap
+      // back to a different rung between the two calls.
+      player.configure({ abr: { enabled: false } });
+      player.selectVariantTrack(best, true);
+      emitTracks();
+    } catch {
+      // Ignore quality selection errors; playback continues on the current rung.
+    }
+  };
+
+  const setAdaptationEnabled = (enabled: boolean): void => {
+    if (destroyed) return;
+    try {
+      player.configure({ abr: { enabled } });
+    } catch {
+      // Ignore configuration errors on already-destroyed players.
+    }
+  };
+
   const upgradeProgressiveMp4ToMse = async (resumeAt?: number): Promise<boolean> => {
     if (destroyed || mimeType === SIDIFY_MP4_MSE_MIME || !isFlacInMp4MseSupported()) {
       return false;
@@ -908,6 +995,9 @@ export async function attachShakaPlayback(
     selectAudioTrack,
     getTextTracks: () => extractTextTrackOptions(player),
     selectTextTrack,
+    getVideoQualities,
+    selectVideoQuality,
+    setAdaptationEnabled,
     upgradeProgressiveMp4ToMse,
     destroy: async () => {
       if (activeSessionsByVideo.get(video)?.id === sessionId) {

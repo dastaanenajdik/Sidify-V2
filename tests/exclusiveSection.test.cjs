@@ -88,12 +88,19 @@ test('the exclusive page ships a search box of its own', () => {
   assert.match(section, /role="search"/);
 });
 
-test('the exclusive search hook targets the exclusive endpoint only', () => {
+test('the exclusive hooks target the exclusive endpoints only', () => {
   const hooks = fs.readFileSync(
     path.resolve(__dirname, '../src/lib/media/hooks.ts'),
     'utf8'
   );
-  assert.match(hooks, /mediaApi\.exclusive\(/);
+  assert.match(hooks, /mediaApi\.exclusiveHome\(/);
+  assert.match(hooks, /mediaApi\.exclusiveSearch\(/);
+  assert.match(hooks, /mediaApi\.exclusiveTitle\(/);
+  assert.match(hooks, /mediaApi\.exclusiveSuggest\(/);
+  // The exclusive hook must call the exclusive search method.
+  const exclusiveHook = hooks.slice(hooks.indexOf('export function useExclusiveSearch'));
+  assert.match(exclusiveHook.slice(0, exclusiveHook.indexOf('export function', 10)), /mediaApi\.exclusiveSearch\(/);
+
   const client = fs.readFileSync(
     path.resolve(__dirname, '../src/lib/media/client.ts'),
     'utf8'

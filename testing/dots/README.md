@@ -29,6 +29,8 @@ file, copying `name` + `instructions` + the permission flags).
 | Dev — Accessibility & SEO Auditor | Keyboard/screen-reader/crawler view | Titles/meta/headings/alt text, soft-404s, indexable dev pages |
 | Zoya — Slow-Network & Offline User | Flaky 3G, installed PWA | Repeat-visit caching, SW/manifest health, timeout behaviour |
 | Rian — Movies & Series Viewer | Film-first user | Media browsing/player flows and provider failure shapes |
+| Naina — Exclusive Binger | Film-first viewer who only opens `/exclusive` | The exclusive catalogue's landing/search/filters/empty states, and that no main-catalogue title leaks in |
+| Ved — Audio & Picture Sync Inspector | Playback engineer | Typed playback sources, quality/audio/subtitle controls, silent-audio recovery, resume |
 
 Run the probes against any running deploy:
 
@@ -64,3 +66,25 @@ Known remaining lever, deliberately not pulled in a bug-fix pass: first-load
 JS is ~314 KB gzip on every page, dominated by the app shell
 (React + framer-motion + player chrome). Moving framer-motion consumers to
 `LazyMotion`/`m` components is the next safe step if more speed is needed.
+
+## Second run — the exclusive collection rebuild
+
+Nine Dots ran over the rebuilt `/exclusive` section and its new player
+(`node scripts/qa-dots.mjs` → 116 checks, 0 failed with the upstream offline).
+The findings, evidence and fixes are in
+[`replica/test/bug-report.md`](../../replica/test/bug-report.md); the recon and
+feature matrix live in [`replica/`](../../replica).
+
+The two new probes:
+
+- **Naina** asserts the home payload is a spotlight + rails contract, that the
+  search page returns items/page/facets, that the page size is capped at 60, that
+  a 5000-character query and an unknown sort never produce a `500`, that suggest
+  returns `{items: []}`, and that a blank/unknown title slug answers JSON 400/404.
+- **Ved** asserts every playback source is typed (`dash|hls|mp4|webm`), absolute
+  and browser-playable, that no MKV is ever offered as a stream, that the relay
+  rejects an invalid token and refuses cross-site hotlinking, and that the title
+  payload can carry audio/quality metadata.
+
+Both accept a **coded upstream error** (`502`/`503`) as a valid answer: the
+sandbox cannot reach the catalogue, and a QA run must never pretend otherwise.

@@ -182,6 +182,17 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
                       <span className="sr-only">out of 10</span>
                     </span>
                   )}
+                  {title.quality && (
+                    <span className="rounded-[4px] bg-white/90 px-1.5 py-[2px] text-[10px] font-black tracking-[0.04em] text-black uppercase">
+                      {title.quality}
+                    </span>
+                  )}
+                  {title.audioLanguages && title.audioLanguages.length > 0 && (
+                    <span className="flex items-center gap-1 rounded-full bg-white/12 px-2 py-[3px] text-[10.5px] font-semibold text-white/80">
+                      <Languages size={11} aria-hidden="true" />
+                      {title.audioLanguages.slice(0, 3).join(" · ")}
+                    </span>
+                  )}
                 </div>
                 <h1 className="text-[30px] leading-[1.05] font-extrabold tracking-[-0.7px] desk:text-[46px] desk:tracking-[-1.2px]">
                   {title.title}
@@ -192,6 +203,21 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
                 )}
                 {title.genres.length > 0 && (
                   <p className="mt-1 text-[13px] text-white/75">{title.genres.map((g) => g.name).join(" · ")}</p>
+                )}
+                {(title.director?.length || title.cast?.length) && (
+                  <p className="mt-2 max-w-[680px] text-[12.5px] leading-relaxed text-white/65">
+                    {title.director?.length ? (
+                      <>
+                        <span className="font-semibold text-white/80">Director:</span> {title.director.join(", ")}
+                      </>
+                    ) : null}
+                    {title.director?.length && title.cast?.length ? <span className="px-2 text-white/35">|</span> : null}
+                    {title.cast?.length ? (
+                      <>
+                        <span className="font-semibold text-white/80">Cast:</span> {title.cast.slice(0, 6).join(", ")}
+                      </>
+                    ) : null}
+                  </p>
                 )}
                 <p className="mt-3 max-w-[680px] text-[14px] leading-relaxed text-white/85 desk:text-[15px]">{title.overview}</p>
 
