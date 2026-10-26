@@ -42,7 +42,10 @@ export default function ExclusiveDetailPage({
     return (
       <>
         <ExclusiveStatusBanner onRetry={() => void query.refetch()} retrying={query.isFetching} />
-        <MediaDetailView detail={detail} />
+        {/* `onRetry` is what turns "no verified stream" into something the
+            viewer can act on: the empty player area explains why and re-runs
+            the one signed batch that resolves detail + streams + mirrors. */}
+        <MediaDetailView detail={detail} onRetry={() => void query.refetch()} retrying={query.isFetching} />
       </>
     );
   }

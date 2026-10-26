@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
@@ -20,6 +20,7 @@ import {
 import { copyText } from "@/lib/clipboard";
 import { mediaArt } from "@/lib/media/art";
 import { audioVerdict, externalPlayerReleases, playableReleases } from "@/lib/media/playbackPlan";
+import { exclusiveStatus, streamIssueSentence } from "@/lib/media/exclusiveStatus";
 import {
   clearResumePoint,
   formatPlaybackTime,
@@ -52,7 +53,23 @@ const TrailerSheet = dynamic(() => import("./TrailerSheet").then((m) => m.Traile
 const VlcPickerSheet = dynamic(() => import("./VlcPickerSheet").then((m) => m.VlcPickerSheet), { ssr: false });
 
 /** Everything on a /movies/[slug] or /series/[slug] page. */
-export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
+/**
+ * The one detail surface for both catalogues.
+ *
+ * `onRetry` is optional and only the exclusive route passes it: when that
+ * collection's stream list cannot be resolved, the browser knows *why* (its own
+ * `exclusiveStatus`), so the empty player area can explain and offer a retry
+ * instead of a dead end.
+ */
+export default function MediaDetailView({
+  detail,
+  onRetry,
+  retrying = false,
+}: {
+  detail: MediaDetail;
+  onRetry?: () => void;
+  retrying?: boolean;
+}) {
   const { title, seasons, related } = detail;
   const [trailerOpen, setTrailerOpen] = useState(false);
   const [backdropBroken, setBackdropBroken] = useState(false);
@@ -324,6 +341,8 @@ export default function MediaDetailView({ detail }: { detail: MediaDetail }) {
               active={activeStreamIndex}
               onSelectActive={setActiveStreamIndex}
               detail={detail}
+              onRetry={onRetry}
+              retrying={retrying}
             />
           )}
 
@@ -641,11 +660,15 @@ function PlaybackSection({
   active,
   onSelectActive,
   detail,
+  onRetry,
+  retrying = false,
 }: {
   playback: PlaybackSource[];
   active: number;
   onSelectActive: (idx: number) => void;
   detail: MediaDetail;
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
   const { title } = detail;
   const pushToast = useUi((s) => s.pushToast);
@@ -656,6 +679,14 @@ function PlaybackSection({
   const streamVideoRef = useRef<HTMLVideoElement | null>(null);
   const shakaHandleRef = useRef<ShakaPlaybackHandle | null>(null);
   const downloads = detail.downloads ?? [];
+  // Only the exclusive route supplies `onRetry`; elsewhere this stays null and
+  // the section renders exactly what it always did.
+  const status = useSyncExternalStore(
+    exclusiveStatus.subscribe,
+    exclusiveStatus.getSnapshot,
+    exclusiveStatus.getServerSnapshot,
+  );
+  const issueSentence = onRetry ? streamIssueSentence(status.streamIssue, status.streamIssueStatus) : null;
 
   // Stable callbacks, so reporting a mode/error doesn't re-run (and re-attach) the player.
   const handleStreamError = useCallback((url: string, reason: string) => {
@@ -688,6 +719,22 @@ function PlaybackSection({
               ? "Use the availability links below to locate official streaming options."
               : "Check the release mirrors or official page if available."}
           </p>
+          {onRetry && (
+            <div className="mt-3 flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={onRetry}
+                disabled={retrying}
+                className="inline-flex items-center gap-1.5 rounded-full bg-fill px-3.5 py-2 text-[13px] font-semibold text-fg transition-colors hover:bg-fill-2 disabled:opacity-60"
+              >
+                <RotateCw size={14} className={retrying ? "animate-spin" : undefined} aria-hidden="true" />
+                {retrying ? "Retrying…" : "Retry"}
+              </button>
+              {issueSentence && (
+                <span className="text-[12.5px] leading-relaxed text-fg-3">{issueSentence}</span>
+              )}
+            </div>
+          )}
           {links.length > 0 && (
             <>
               <ul className="mt-3 flex flex-wrap gap-2">

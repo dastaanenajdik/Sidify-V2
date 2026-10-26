@@ -7,7 +7,18 @@ import { getMediaDetail } from "@/lib/media/service";
 import { isVaultSlug, titleFromVaultSlug } from "@/lib/media/vaultAdapt";
 
 /** Re-render at most hourly; the provider caches its own metadata too. */
-export const revalidate = 3600;
+/**
+ * Never serve a cached copy of this page.
+ *
+ * The exclusive catalogue's pages are a frame whose payload is fetched by the
+ * browser, so there is nothing worth caching — and caching them is actively
+ * harmful: a page rendered by an older deploy kept being served (for up to
+ * `revalidate` seconds) after the client-side player shipped, which is exactly
+ * the "no play button" that was reported. Metadata fetches keep their own
+ * `revalidate` (see the providers), so nothing else loses its cache.
+ */
+export const dynamic = "force-dynamic";
+export const fetchCache = "default-cache";
 
 type Props = { params: Promise<{ slug: string }> };
 

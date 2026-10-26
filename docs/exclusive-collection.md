@@ -139,6 +139,24 @@ If a stream's network request fails, the player switches to the next source — 
 practice the relayed variant of the same manifest — before it shows an error, and
 says which switch it made.
 
+**When the stream list does not resolve.** Playback is the endpoint the catalogue
+guards hardest — the retired server route used to answer its own `440`
+("session rejected"). The browser path therefore treats a `440`/`401` as a
+*session* problem and retries the failed call (never the whole page) in two
+bounded steps: once with a freshly minted visitor token, then once signed with
+this app's own ephemeral session. If it still fails, the empty player area says
+which of these happened — `440`, `403`, unreachable from this browser, signing
+unavailable, or "the catalogue lists nothing playable" — and offers **Retry**.
+An empty read is also never cached, so Retry really re-asks the catalogue.
+
+**No page cache.** `/movies/[slug]` and `/series/[slug]` are `force-dynamic`
+(`fetchCache: default-cache`, so metadata fetches keep their own revalidation).
+They used to be ISR pages with `revalidate = 3600`, which meant a page rendered
+by an older deploy — one where the player did not exist yet — could keep being
+served for up to an hour after the client-side player shipped. That is exactly
+the "no play button" that got reported; a cached frame must never outlive the
+code that renders it.
+
 Exclusive title pages (`/movies/vault-…`, `/series/vault-…`) never call a
 provider on the server: the route renders a frame and lets the browser resolve
 the payload, and falls back to the last saved copy of that title when the network
