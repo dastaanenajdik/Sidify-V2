@@ -1,31 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getExclusiveHome, searchExclusiveCatalogue, toPublicSearchPage } from "@/lib/media/exclusive";
 import { MediaProviderError } from "@/lib/media/provider";
-import { searchExclusive } from "@/lib/media/service";
-import type { MediaKind } from "@/lib/media/types";
+import type { MediaKind, MediaSort } from "@/lib/media/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const SORTS: MediaSort[] = ["trending", "newest", "oldest", "rating", "title"];
+
 /**
- * GET /api/media/exclusive?q=&type=movie|series|all&limit=
+ * GET /api/media/exclusive
  *
- * The exclusive collection on its own: only the titles of the exclusive catalogue
- * ever appear here — never the main catalogue's.
+ *   ?mode=home                          → the landing payload (spotlight, rails,
+ *                                         genres, facets). One upstream read.
+ *   ?q=&type=&genre=&year=&language=
+ *    &sort=&page=&limit=                → a filtered, sorted, paginated page of
+ *                                         the collection, with facets.
  *
- * Results carry the same detail as any other title, so the detail pages, the player
- * and the download picker work exactly as they do elsewhere.
+ * Only the exclusive catalogue answers here: the main catalogue is never
+ * imported, merged or consulted. Every item carries the same detail as any
+ * other title, so its detail page, player and downloads work unchanged.
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const raw = sp.get("type");
-  const kind: MediaKind | "all" = raw === "movie" || raw === "series" ? raw : "all";
-  const limit = Math.min(40, Math.max(1, Number(sp.get("limit") || 24)));
-  const query = (sp.get("q") || "").slice(0, 120);
+  const rawType = sp.get("type");
+  const kind: MediaKind | "all" = rawType === "movie" || rawType === "series" ? rawType : "all";
+
+  const q = (sp.get("q") || "").slice(0, 120);
+  const genre = (sp.get("genre") || "").slice(0, 60) || undefined;
+  const year = (sp.get("year") || "").slice(0, 12) || undefined;
+  const language = (sp.get("language") || "").slice(0, 24) || undefined;
+  const rawSort = sp.get("sort") || "";
+  const sort: MediaSort = (SORTS as string[]).includes(rawSort) ? (rawSort as MediaSort) : "trending";
+  const rawPage = Number(sp.get("page") || 1);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
+  const rawLimit = Number(sp.get("limit") || 24);
+  const limit = Math.min(60, Math.max(1, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 24));
+
+  const explicitSearch = sp.get("mode") === "search";
+  const hasFilters = Boolean(q || genre || year || language || rawSort || sp.get("page"));
+  const wantsSearch = explicitSearch || hasFilters;
 
   try {
-    const data = await searchExclusive(query, kind, limit);
-    return NextResponse.json(data, {
-      headers: { "cache-control": data.items.length ? "public, s-maxage=120, stale-while-revalidate=600" : "no-store" },
+    if (!wantsSearch) {
+      const home = await getExclusiveHome(kind);
+      return NextResponse.json(home, {
+        headers: { "cache-control": "public, s-maxage=300, stale-while-revalidate=1800" },
+      });
+    }
+
+    const result = await searchExclusiveCatalogue({ q, kind, genre, year, language, sort, page, limit });
+    return NextResponse.json(toPublicSearchPage(result), {
+      headers: {
+        "cache-control": result.items.length
+          ? "public, s-maxage=120, stale-while-revalidate=600"
+          : "no-store",
+      },
     });
   } catch (error) {
     const providerError = error instanceof MediaProviderError ? error : null;

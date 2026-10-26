@@ -251,6 +251,71 @@ function genresOf(record: Record<string, unknown>): Genre[] {
   return out;
 }
 
+/**
+ * A list of names from a payload field.
+ *
+ * The catalogue sends arrays of strings, a single comma-separated string, or
+ * arrays of objects with a `name`/`title`. All three shapes are normalised to a
+ * clean, de-duplicated list of display names.
+ */
+export function namesOf(value: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: unknown) => {
+    const name = str(raw) ?? (asRecord(raw) ? str(asRecord(raw)?.name ?? asRecord(raw)?.title) : null);
+    const clean = name?.trim();
+    if (!clean) return;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(clean);
+  };
+
+  if (Array.isArray(value)) {
+    for (const entry of value) push(entry);
+  } else {
+    const text = str(value);
+    if (text) {
+      for (const part of text.split(/[,/|]/)) push(part);
+    }
+  }
+  return out;
+}
+
+/** Audio languages advertised by a subject ("Hindi", "English", …). */
+function audioLanguagesOf(record: Record<string, unknown>): string[] {
+  const direct = namesOf(record.audios ?? record.audioLanguages ?? record.languages);
+  if (direct.length) return direct;
+  // `audios` is sometimes an array of `{ lanName }` / `{ language }` objects.
+  const raw = Array.isArray(record.audios) ? record.audios : [];
+  return namesOf(raw.map((entry) => asRecord(entry)?.lanName ?? asRecord(entry)?.language ?? entry));
+}
+
+/** The best resolution advertised by a subject's `prints`/`quality` fields. */
+function advertisedQuality(record: Record<string, unknown>): string | undefined {
+  const tokens = [
+    ...namesOf(record.prints),
+    ...namesOf(record.quality),
+    ...namesOf(record.resolutions),
+  ];
+  let best: string | undefined;
+  const rank = (value: string) => {
+    const match = value.match(/(\d{3,4})\s*p/i);
+    if (match) return Number(match[1]);
+    if (/4k|uhd/i.test(value)) return 2160;
+    if (/full\s*hd/i.test(value)) return 1080;
+    if (/hd/i.test(value)) return 720;
+    return 0;
+  };
+  for (const token of tokens) {
+    const normalized = token.toLowerCase().includes("4k") ? "2160p" : token;
+    const value = /p$/.test(normalized) ? normalized : `${normalized}`;
+    if (!rank(value)) continue;
+    if (!best || rank(value) > rank(best)) best = value;
+  }
+  return best;
+}
+
 /** A search result / catalogue entry. */
 export function subjectToTitle(value: unknown): MediaTitle | null {
   const record = asRecord(value);
@@ -296,6 +361,10 @@ export function subjectToTitle(value: unknown): MediaTitle | null {
         record.hotValue
     ) ?? undefined,
     officialUrl: str(record.officialUrl) ?? null,
+    cast: namesOf(record.stars ?? record.cast ?? record.actors),
+    director: namesOf(record.director ?? record.directors),
+    audioLanguages: audioLanguagesOf(record),
+    quality: advertisedQuality(record),
   };
 }
 

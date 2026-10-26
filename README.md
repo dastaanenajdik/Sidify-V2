@@ -163,6 +163,28 @@ POST /api/media/resolve   (JSON: { url, fileName?, label?, refresh? })
        -> { status: "resolved" | "partial" | "blocked" | "error", links, externalFallbackUrl?, reason?, message?, hops }
 ```
 
+### Exclusive collection
+
+`/exclusive` is a second, separate catalogue with its own landing page, search,
+filters, recommendations and player. Nothing from the main catalogue is merged
+into it. Design, ranking rules and the playback/audio model are documented in
+[docs/exclusive-collection.md](docs/exclusive-collection.md).
+
+```text
+GET /api/media/exclusive?mode=home[&type=movie|series|all]
+       -> { mode, spotlight, rails, genres, facets, total, updatedAt, provider }
+GET /api/media/exclusive?mode=search&q=&type=&genre=&year=&language=&sort=&page=&limit=
+       -> { mode, query, items, page, totalPages, totalResults, pageSize, filters, facets, genres, provider, tookMs }
+GET /api/media/exclusive/suggest?q=&limit=
+       -> { query, items, tookMs }
+GET /api/media/exclusive/title/<slug>[?type=movie|series]
+       -> { detail, recommendations, provider }
+```
+
+Playback uses Shaka Player with a quality ladder, audio-track picker, subtitles,
+an audio watchdog (decoded audio vs rendered video, with an ordered recovery)
+and resume points shared with the title page.
+
 Manual verification (`curl` + `jq`, normal internet environment with `npm run dev`):
 
 ```bash

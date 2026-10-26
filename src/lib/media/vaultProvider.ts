@@ -33,6 +33,15 @@ import type {
   ProviderInfo,
   Season,
 } from "./types";
+import {
+  dedupeTitles,
+  filterTitles,
+  genresFromTitles,
+  languagesFromTitles,
+  recommendTitles,
+  sortTitles,
+  yearsFromTitles,
+} from "./recommend";
 import { buildVaultStreamUrl } from "./vaultStream";
 
 export const VAULT_PROVIDER_INFO: ProviderInfo = {
@@ -428,60 +437,101 @@ export class VaultMediaProvider implements MediaProvider {
     return this.discoveryQuery("series", limit);
   }
 
+  /**
+   * A filtered, sorted, paginated slice of the collection.
+   *
+   * With no search term the whole cached listing is the pool, so genre/year/
+   * language filters and every sort order work on the catalogue as a whole
+   * instead of only on the first 24 rows.
+   */
   async browse(kind: MediaKind, query: MediaQuery): Promise<MediaPage> {
     const page = Math.max(1, Math.floor(query.page || 1));
     const term = query.q?.trim();
-    if (!term) {
-      const items = await this.discoveryQuery(kind, PAGE_SIZE);
-      return { items, page: 1, totalPages: 1, totalResults: items.length, pageSize: PAGE_SIZE };
-    }
 
-    const limit = page * PAGE_SIZE;
-    const titles = await this.searchTitles(term, kind, limit);
+    const pool = term
+      ? await this.searchTitles(term, "all", PAGE_SIZE * 6)
+      : await this.listing();
+
+    const filtered = filterTitles(pool, {
+      kind,
+      genre: query.genre,
+      language: query.language,
+      year: query.year,
+    });
+    const sorted = sortTitles(filtered, query.sort ?? "trending");
     const start = (page - 1) * PAGE_SIZE;
-    const items = titles.slice(start, start + PAGE_SIZE);
+    const items = sorted.slice(start, start + PAGE_SIZE);
+
     return {
       items,
       page,
-      totalPages: Math.max(1, Math.ceil(titles.length / PAGE_SIZE)),
-      totalResults: titles.length,
+      totalPages: Math.max(1, Math.ceil(sorted.length / PAGE_SIZE)),
+      totalResults: sorted.length,
       pageSize: PAGE_SIZE,
     };
   }
 
   async getGenres(kind: MediaKind): Promise<Genre[]> {
-    const titles = await this.discoveryQuery(kind, 24);
-    const genres = new Map<string, Genre>();
-    for (const title of titles) {
-      for (const genre of title.genres) {
-        if (!genres.has(genre.id)) genres.set(genre.id, genre);
-      }
-    }
-    return [...genres.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return genresFromTitles(await this.kindPool(kind));
   }
 
+  /**
+   * Filter options built from the catalogue itself.
+   *
+   * Years and languages are read from real titles, so a filter never offers a
+   * value that matches nothing (which is what static lists did).
+   */
   async getFacets(kind: MediaKind): Promise<MediaFacets> {
+    const pool = await this.kindPool(kind);
+    const years = yearsFromTitles(pool);
+    const languages = languagesFromTitles(pool);
     const current = new Date().getFullYear();
-    const years: (number | string)[] = [];
-    for (let year = current; year >= current - 20; year--) years.push(year);
-    for (let decade = Math.floor(current / 10) * 10; decade >= 1980; decade -= 10) years.push(`${decade}s`);
+
+    if (!years.length) {
+      for (let year = current; year >= current - 20; year--) years.push(year);
+      for (let decade = Math.floor(current / 10) * 10; decade >= 1980; decade -= 10) years.push(`${decade}s`);
+    }
+    for (let decade = Math.floor(current / 10) * 10; decade >= 1980; decade -= 10) {
+      const bucket = `${decade}s`;
+      if (!years.includes(bucket)) years.push(bucket);
+    }
 
     return {
-      genres: await this.getGenres(kind),
+      genres: genresFromTitles(pool),
       years,
-      languages: [
-        { code: "en", name: "English" },
-        { code: "hi", name: "Hindi" },
-        { code: "es", name: "Spanish" },
-        { code: "fr", name: "French" },
-        { code: "de", name: "German" },
-        { code: "it", name: "Italian" },
-        { code: "ja", name: "Japanese" },
-        { code: "ko", name: "Korean" },
-        { code: "zh", name: "Chinese" },
-        { code: "pt", name: "Portuguese" },
-      ],
+      languages: languages.length
+        ? languages
+        : [
+            { code: "en", name: "English" },
+            { code: "hi", name: "Hindi" },
+            { code: "ta", name: "Tamil" },
+            { code: "te", name: "Telugu" },
+            { code: "ml", name: "Malayalam" },
+            { code: "ko", name: "Korean" },
+            { code: "ja", name: "Japanese" },
+          ],
     };
+  }
+
+  /** The deduplicated listing, filtered to one kind. */
+  private async kindPool(kind: MediaKind): Promise<MediaTitle[]> {
+    try {
+      const pool = await this.listing();
+      return pool.filter((title) => title.kind === kind);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * The whole cached listing (both kinds).
+   *
+   * The exclusive section ranks, filters and paginates this one pool, so a page
+   * view costs at most one upstream round trip — not one per rail.
+   */
+  async listing(): Promise<MediaTitle[]> {
+    const titles = await this.homepage(HOMEPAGE_CACHE_SIZE);
+    return dedupeTitles(titles);
   }
 
   /* -------------------------------- details ------------------------------ */
@@ -683,16 +733,41 @@ export class VaultMediaProvider implements MediaProvider {
     return sources;
   }
 
-  async getRelated(_kind: MediaKind, slug: string, limit = 12): Promise<MediaTitle[]> {
-    const detail = await this.loadDetail(slug, "movie");
+  /**
+   * "More like this" from the same catalogue.
+   *
+   * Genre overlap first, then the seed's own title search as a filler — so the
+   * rail still has something even for a title with no genres in its payload.
+   */
+  async getRelated(kind: MediaKind, slug: string, limit = 12): Promise<MediaTitle[]> {
+    const detail = await this.loadDetail(slug, kind);
     const title = detail?.title;
     if (!title) return [];
+
+    let pool: MediaTitle[] = [];
     try {
-      const titles = await this.searchTitles(title.title, "all", limit + 4);
-      return titles.filter((item) => item.id !== title.id).slice(0, limit);
+      pool = await this.listing();
     } catch {
-      return [];
+      pool = [];
     }
+
+    const related = recommendTitles(title, pool, limit);
+    if (related.length >= limit) return related;
+
+    const seen = new Set(related.map((item) => item.id));
+    seen.add(title.id);
+    try {
+      const searched = await this.searchTitles(title.title, "all", limit + 4);
+      for (const item of searched) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        related.push(item);
+        if (related.length >= limit) break;
+      }
+    } catch {
+      /* the recommendation rail is best-effort */
+    }
+    return related.slice(0, limit);
   }
 }
 

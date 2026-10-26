@@ -180,6 +180,14 @@ export interface MediaTitle {
   popularity?: number;
   officialUrl?: string | null;
   watchProviders?: WatchProviderLink[];
+  /** Billed cast, when the catalogue publishes it. */
+  cast?: string[];
+  /** Director(s), when the catalogue publishes them. */
+  director?: string[];
+  /** Audio languages the catalogue advertises, as display names ("Hindi", "English"). */
+  audioLanguages?: string[];
+  /** Best advertised encode for this title ("2160p", "1080p", …). */
+  quality?: string;
   /** True for freely available titles that stream without a subscription. */
   free?: boolean;
   /** True for catalogue entries that are placeholder data, not a real title. */
@@ -284,4 +292,78 @@ export interface MediaSearchResponse {
   query: string;
   items: MediaTitle[];
   provider: ProviderInfo;
+}
+
+/* ------------------------- exclusive collection -------------------------- */
+
+/**
+ * One shelf of the exclusive collection.
+ *
+ * `layout` is a presentation hint only — the UI decides how to draw a rail:
+ *   `poster` 2:3 cards, `wide` 16:9 stills, `ranked` a numbered top-10 row.
+ */
+export interface ExclusiveRail {
+  id: string;
+  title: string;
+  subtitle?: string;
+  layout?: "poster" | "wide" | "ranked";
+  items: MediaTitle[];
+}
+
+/** Everything the exclusive landing page renders, in one payload. */
+export interface ExclusiveHome {
+  mode: "home";
+  spotlight: MediaTitle | null;
+  rails: ExclusiveRail[];
+  genres: Genre[];
+  facets: MediaFacets;
+  /** Number of deduplicated titles the collection listing currently holds. */
+  total: number;
+  /** ISO timestamp of when this payload was assembled (server clock). */
+  updatedAt: string;
+  provider: ProviderInfo;
+}
+
+/** The filters the exclusive search accepts. */
+export interface ExclusiveQuery {
+  q?: string;
+  kind?: MediaKind | "all";
+  genre?: string;
+  year?: string;
+  language?: string;
+  sort?: MediaSort;
+  page?: number;
+  limit?: number;
+}
+
+/** A filtered, sorted, paginated page of the exclusive collection. */
+export interface ExclusiveSearchPage extends MediaPage {
+  mode: "search";
+  query: string;
+  filters: {
+    kind: MediaKind | "all";
+    genre?: string;
+    year?: string;
+    language?: string;
+    sort: MediaSort;
+  };
+  facets: MediaFacets;
+  genres: Genre[];
+  provider: ProviderInfo;
+  /** Server-side time spent assembling the page, in milliseconds. */
+  tookMs: number;
+}
+
+/** Detail page payload for an exclusive title, with its own recommendations. */
+export interface ExclusiveTitleResponse {
+  detail: MediaDetail;
+  recommendations: MediaTitle[];
+  provider: ProviderInfo;
+}
+
+/** Fast typeahead answer for the exclusive search field. */
+export interface ExclusiveSuggestions {
+  query: string;
+  items: MediaTitle[];
+  tookMs: number;
 }

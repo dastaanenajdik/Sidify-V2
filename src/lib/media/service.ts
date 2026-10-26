@@ -227,8 +227,13 @@ export async function searchMedia(query: string, kind: MediaKind | "all" = "all"
 /**
  * The exclusive collection on its own.
  *
- * Only the exclusive catalogue answers here — the main catalogue never contributes.
- * With no query, the collection's own discovery listings are returned instead.
+ * Only the exclusive catalogue answers here — the main catalogue never
+ * contributes. With no query, the collection's own discovery listing is
+ * returned instead.
+ *
+ * This is the small, single-list flavour of the contract. The section itself
+ * calls the richer `src/lib/media/exclusive.ts` layer (rails, facets, filters,
+ * sorting, recommendations), which builds on the same provider.
  */
 export async function searchExclusive(
   query: string,
@@ -260,9 +265,16 @@ async function loadDetail(kind: MediaKind, slug: string): Promise<MediaDetail | 
   const detail = kind === "movie" ? await provider.getMovieDetails(slug) : await provider.getSeriesDetails(slug);
   if (!detail) return null;
 
+  // Some catalogues (the exclusive one included) do not carry a related rail in
+  // their detail payload. Ask the provider for one instead of rendering an
+  // empty "More like this" heading.
+  const related =
+    detail.related?.length > 0 ? detail.related : await provider.getRelated(kind, slug, 12).catch(() => []);
+
   const providerSources = provider.getPlaybackSources ? await provider.getPlaybackSources(kind, slug) : [];
   return {
     ...detail,
+    related,
     playback: dedupeSources([...manifestSources(kind, slug), ...(detail.playback || []), ...providerSources]),
     attribution: detail.attribution ?? provider.info.attribution,
   };
