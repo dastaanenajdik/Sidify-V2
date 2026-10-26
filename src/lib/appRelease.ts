@@ -23,12 +23,13 @@ export const ANDROID_APP = {
   price: "Free",
   author: "Sidify",
   /**
-   * Tagged asset URL for the current release. The download button, the QR code and
-   * the `/get` short link all read this, so bump `version` / `tag` / `apkUrl`
-   * together when a new build ships.
+   * "Latest release" asset URL: GitHub always serves the newest release's
+   * `app-release.apk` from this stable URL. The download button, the QR code
+   * and the `/get` short link all use this exact link, so a new build is picked
+   * up automatically without editing this file.
    */
   apkUrl:
-    "https://github.com/ifallertzia/ifallmusic/releases/download/v2.7.0/app-release.apk",
+    "https://github.com/ifallertzia/ifallmusic/releases/latest/download/app-release.apk",
   releaseUrl: "https://github.com/ifallertzia/ifallmusic/releases/latest",
   repoUrl: "https://github.com/ifallertzia/ifallmusic",
 } as const;
