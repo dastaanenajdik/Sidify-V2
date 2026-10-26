@@ -239,6 +239,23 @@ export default function MediaDetailView({
                 <p className="mt-3 max-w-[680px] text-[14px] leading-relaxed text-white/85 desk:text-[15px]">{title.overview}</p>
 
                 <div className="mt-5 flex flex-wrap items-center gap-2.5">
+                  {onRetry && allPlayback.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (movieTarget && movieCanPlay) {
+                          openPlay(movieTarget);
+                          return;
+                        }
+                        onRetry();
+                        document.getElementById("play")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }}
+                      className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[15px] font-semibold text-black transition-transform active:scale-[0.97] hover:opacity-90"
+                    >
+                      <Play size={16} fill="currentColor" aria-hidden="true" />
+                      {retrying ? "Finding stream…" : "Play"}
+                    </button>
+                  )}
                   {allPlayback.length > 0 ? (
                     <a
                       href="#play"
@@ -248,7 +265,7 @@ export default function MediaDetailView({
                     </a>
                   ) : movieTarget ? (
                     <>
-                      {movieCanPlay && (
+                      {movieCanPlay && !onRetry && (
                         <button
                           type="button"
                           onClick={() => openPlay(movieTarget)}
@@ -335,7 +352,7 @@ export default function MediaDetailView({
         </header>
 
         <div className="mt-6 space-y-8">
-          {(allPlayback.length > 0 || (releases.length === 0 && !hasEpisodeFiles)) && (
+          {(allPlayback.length > 0 || (releases.length === 0 && !hasEpisodeFiles) || !!onRetry) && (
             <PlaybackSection
               playback={allPlayback}
               active={activeStreamIndex}
@@ -708,7 +725,7 @@ function PlaybackSection({
   if (playback.length === 0) {
     const links = title.watchProviders ?? [];
     return (
-      <section aria-labelledby="where-to-watch" className="px-4 desk:px-8">
+      <section id="play" aria-labelledby="where-to-watch" className="px-4 desk:px-8">
         <div className="rounded-[16px] bg-raised/70 p-4 ring-1 ring-edge desk:p-5">
           <h2 id="where-to-watch" className="t-title">
             Playback &amp; availability
