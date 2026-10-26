@@ -136,6 +136,33 @@ test('signed headers carry the client token, signature and identity', () => {
   assert.equal(headers.authorization, 'Bearer tok');
 });
 
+test('a browser-bound signature omits the spoofed forwarded address', () => {
+  const browser = C.buildSignedHeaders({
+    method: 'GET',
+    url: 'https://api.example.com/x',
+    userAgent: 'UA/1.0',
+    clientInfo: '{}',
+    // The direct path runs in the user's browser: the socket already carries a
+    // real residential address, so a fabricated header would only contradict it.
+    spoofedIp: null,
+  });
+  assert.equal(browser['x-forwarded-for'], undefined);
+  assert.ok(browser['x-tr-signature'], 'the request is still signed');
+  assert.ok(browser['x-client-token'], 'and still identified as a client');
+
+  // Everything else is unchanged, so the two paths remain interchangeable.
+  const relaySide = C.buildSignedHeaders({
+    method: 'GET',
+    url: 'https://api.example.com/x',
+    userAgent: 'UA/1.0',
+    clientInfo: '{}',
+    spoofedIp: '1.2.3.4',
+  });
+  const { ['x-forwarded-for']: _omitted, ...browserRest } = browser;
+  const { ['x-forwarded-for']: _spoofed, ...relayRest } = relaySide;
+  assert.deepEqual(Object.keys(browserRest).sort(), Object.keys(relayRest).sort());
+});
+
 test('signed headers omit authorization when there is no session', () => {
   const headers = C.buildSignedHeaders({
     method: 'GET',

@@ -11,6 +11,7 @@ import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
 import { MiniPlayer, MobileNav } from "./MobileChrome";
 import RoomChatLauncher from "@/components/rooms/RoomChatLauncher";
+import { usePrefetchExclusive } from "@/lib/media/hooks";
 
 const SidePanel = dynamic(() => import("./SidePanel"), { ssr: false });
 
@@ -28,6 +29,10 @@ function LazySidePanel() {
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const mainRef = useRef<HTMLElement>(null);
+
+  // Warm the exclusive collection only for someone already browsing films or
+  // series — a music-only session never touches the second catalogue.
+  usePrefetchExclusive(/^\/(exclusive|movies|series)/.test(pathname ?? ""));
 
   // A new page starts at the top, like a real navigation.
   useEffect(() => {

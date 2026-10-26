@@ -288,6 +288,59 @@ async function naina() {
     home.status !== 200 || /s-maxage=\d+/.test(headers),
     headers || "(none)"
   );
+
+  /* --- the browser-direct transport (see docs/exclusive-collection.md) --- */
+
+  // Each probe comes from its own forwarded address: the ticket route is
+  // rate-limited per caller, and a QA run must not exhaust one bucket.
+  const asCaller = (address) => ({ "x-forwarded-for": `198.18.${address}.1` });
+
+  const emptyTicket = await req("/api/media/exclusive/ticket", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...asCaller(1) },
+    body: JSON.stringify({ calls: [] }),
+  });
+  check(dot, "an empty ticket batch is a JSON 400", emptyTicket.status === 400 && isJson(emptyTicket), `${emptyTicket.status}`);
+
+  const forged = await req("/api/media/exclusive/ticket", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...asCaller(2) },
+    body: JSON.stringify({ calls: [{ kind: "home", url: "https://evil.test/collect", path: "/etc/passwd" }] }),
+  });
+  const forgedBody = jsonOf(forged);
+  const forgedOk =
+    forged.status !== 500 &&
+    isJson(forged) &&
+    (forged.status === 200
+      ? Array.isArray(forgedBody?.calls) &&
+        forgedBody.calls.length > 0 &&
+        forgedBody.calls.every((call) => typeof call?.url === "string" && !call.url.includes("evil.test") && !call.url.includes("/etc/passwd"))
+      : typeof forgedBody?.error === "string");
+  check(dot, "the ticket is never an open signing oracle (no caller-supplied URL)", forgedOk, `${forged.status}`);
+
+  const oversized = await req("/api/media/exclusive/ticket", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...asCaller(3) },
+    body: JSON.stringify({ calls: Array.from({ length: 12 }, () => ({ kind: "home" })) }),
+  });
+  check(dot, "an oversized ticket batch is a JSON 400", oversized.status === 400 && isJson(oversized), `${oversized.status}`);
+
+  const ticketSecrets = /MEDIA_VAULT|hmac|secret/i.test(forged.text) || /MEDIA_VAULT|hmac/i.test(emptyTicket.text);
+  check(dot, "a ticket never echoes a secret", !ticketSecrets);
+  const ticketCache = forged.headers.get("cache-control") || "";
+  check(
+    dot,
+    "a ticket is never cacheable",
+    forged.status !== 200 || /no-store/.test(ticketCache),
+    ticketCache || "(none)"
+  );
+
+  const playback = await req("/api/media/exclusive/playback", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug: "not-a-vault-slug" }),
+  });
+  check(dot, "playback rejects a non-exclusive slug with a JSON 400", playback.status === 400 && isJson(playback), `${playback.status}`);
 }
 
 /* ----------------------------------- Ved — audio & picture sync --- */

@@ -12,6 +12,7 @@ import { cx } from "@/lib/format";
 import { ExclusiveFilters } from "@/components/exclusive/ExclusiveFilters";
 import { ExclusiveHero } from "@/components/exclusive/ExclusiveHero";
 import { ExclusivePlayerSheet } from "@/components/exclusive/ExclusivePlayerSheet";
+import { ExclusiveStatusBanner } from "@/components/exclusive/ExclusiveStatusBanner";
 import { ExclusivePoster } from "@/components/exclusive/ExclusivePoster";
 import { ExclusiveRail } from "@/components/exclusive/ExclusiveRail";
 import { EMPTY_EXCLUSIVE_FILTERS, hasActiveFilters, type ExclusiveFiltersValue } from "@/components/exclusive/types";
@@ -127,11 +128,11 @@ export function ExclusiveSection() {
           <EmptyState
             icon={<Sparkles size={26} />}
             title="The exclusive collection is unavailable"
-            desc="It could not be reached right now. The rest of Sidify keeps working — try again in a moment."
+            desc="It could not be reached just now — this is a network or catalogue hiccup, not you. Everything else in Sidify keeps working."
             action={
               <Button variant="secondary" onClick={() => void home.refetch()} disabled={home.isFetching}>
                 <RefreshCw size={14} className={home.isFetching ? "animate-spin" : undefined} aria-hidden="true" />
-                {home.isFetching ? "Retrying…" : "Try again"}
+                {home.isFetching ? "Retrying…" : "Retry"}
               </Button>
             }
           />
@@ -229,6 +230,8 @@ export function ExclusiveSection() {
           <Button type="submit">Search</Button>
         </div>
       </form>
+
+      <ExclusiveStatusBanner onRetry={() => void home.refetch()} retrying={home.isFetching} />
 
       <ExclusiveFilters
         value={filters}
