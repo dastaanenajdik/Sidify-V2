@@ -29,7 +29,7 @@ import {
   APP_WHATS_NEW,
   INSTALL_STEPS,
 } from "@/lib/appRelease";
-import { qrImagePath, shareText, shortLinkFor } from "@/lib/shortLink";
+import { qrImagePath, shareText } from "@/lib/shortLink";
 import { copyText } from "@/lib/clipboard";
 import { useUi } from "@/store/ui";
 import { LogoMark } from "@/components/Logo";
@@ -96,10 +96,9 @@ export default function AppDownloadPage() {
               size="sm"
               variant="secondary"
               onClick={async () => {
-                const origin = window.location.origin;
                 try {
-                  await copyText(shareText(origin));
-                  useUi.getState().pushToast({ title: "Link copied", desc: shortLinkFor(origin), kind: "ok" });
+                  await copyText(shareText());
+                  useUi.getState().pushToast({ title: "Link copied", desc: ANDROID_APP.apkUrl, kind: "ok" });
                 } catch {
                   useUi.getState().pushToast({ title: "Couldn't copy", kind: "warn" });
                 }

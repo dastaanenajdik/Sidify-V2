@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import QRCode from "qrcode";
-import { shortLinkFor } from "@/lib/shortLink";
+import { ANDROID_APP } from "@/lib/appRelease";
 
 /**
- * QR code for this site's own `/get` short link.
+ * QR code for the direct APK download link (`ANDROID_APP.apkUrl`) — the exact
+ * same GitHub "latest release" URL the Download APK buttons point to, so
+ * scanning the QR starts the same download as tapping the button.
  *
  * Server-rendered on purpose: the QR bytes never touch the dark theme, and the same
  * URL works for the page artwork, a downloaded print file and a plain `<img>` tag.
@@ -16,22 +18,13 @@ const MIN_SIZE = 128;
 const MAX_SIZE = 1024;
 const CACHE = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800";
 
-function siteOrigin(request: Request): string {
-  const h = request.headers;
-  // Trust the proxy headers first: they carry the host the visitor actually typed,
-  // which is what the QR has to encode.
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  const proto = h.get("x-forwarded-proto")?.split(",")[0]?.trim() || new URL(request.url).protocol.replace(":", "");
-  return host ? `${proto}://${host}` : new URL(request.url).origin;
-}
-
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const format = searchParams.get("format") === "svg" ? "svg" : "png";
   const requested = Number(searchParams.get("size"));
   const size = Number.isFinite(requested) ? Math.min(MAX_SIZE, Math.max(MIN_SIZE, Math.round(requested))) : 512;
 
-  const link = shortLinkFor(siteOrigin(request));
+  const link = ANDROID_APP.apkUrl;
   const options = {
     errorCorrectionLevel: "M" as const,
     margin: 2,
