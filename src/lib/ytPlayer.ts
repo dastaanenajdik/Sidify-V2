@@ -8,8 +8,6 @@
  * preserving playback position exactly.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 declare global {
   interface Window {
     YT?: any;

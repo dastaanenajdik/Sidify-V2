@@ -27,10 +27,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning data-theme="dark">
       <head>
-        {/* Warm the Sidify player + artwork hosts so the first song starts sooner. */}
+        {/* Warm the Sidify player + artwork hosts so the first song starts sooner.
+            Artwork <img>s load straight from the YouTube/Google image CDNs, so
+            opening those connections during HTML parse (before the client even
+            knows which covers it needs) takes a full DNS+TLS round-trip off the
+            first posters on slow networks. */}
         <link rel="preconnect" href="https://www.youtube.com" />
         <link rel="preconnect" href="https://www.google.com" />
-        <link rel="dns-prefetch" href="https://i.ytimg.com" />
+        <link rel="preconnect" href="https://i.ytimg.com" />
+        <link rel="preconnect" href="https://lh3.googleusercontent.com" />
         <link rel="dns-prefetch" href="https://www.gstatic.com" />
       </head>
       <body className="antialiased">

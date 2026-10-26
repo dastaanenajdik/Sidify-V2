@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ytRadioNext } from "@/lib/engine";
+import { isVideoId } from "@/lib/parser";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,7 +14,10 @@ export async function GET(req: NextRequest) {
   const videoId = (sp.get("video_id") || sp.get("videoId") || "").trim();
   const limit = Math.min(Number(sp.get("limit")) || 12, 25);
 
-  if (!videoId) return NextResponse.json({ success: true, tracks: [] });
+  // Missing or malformed ids get the same empty answer the client already
+  // handles (AutoPlay must never stall on this route) — but without spending
+  // an upstream InnerTube call on an id that can never resolve.
+  if (!isVideoId(videoId)) return NextResponse.json({ success: true, tracks: [] });
 
   try {
     const tracks = await ytRadioNext(videoId, limit);

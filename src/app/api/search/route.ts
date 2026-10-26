@@ -14,7 +14,10 @@ const VALID_TYPES: SearchKind[] = ["all", "songs", "albums", "artists"];
  *  plus a flat `results` alias. */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const q = (sp.get("q") || "").trim();
+  // Cap the query like /api/media/search does: an unbounded `q` is forwarded
+  // to the upstream search and baked into the public CDN cache key, so a
+  // multi-KB junk query costs a real upstream search for no possible benefit.
+  const q = (sp.get("q") || "").trim().slice(0, 200);
   const requestedType = (sp.get("type") || "all") as SearchKind;
   const type: SearchKind = VALID_TYPES.includes(requestedType) ? requestedType : "all";
   const limit = Math.min(Number(sp.get("limit")) || 20, 30);

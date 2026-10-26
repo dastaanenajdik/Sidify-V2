@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { blockedArtists } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import { withDatabase, withDatabaseWrite } from "@/lib/dbResponses";
+import { readJsonBody } from "@/lib/readJsonBody";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { artistId, name } = (await req.json()) as { artistId: string; name: string };
+  const body = await readJsonBody<{ artistId: string; name: string }>(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const { artistId, name } = body;
   if (!artistId) return NextResponse.json({ error: "artistId required" }, { status: 400 });
   return withDatabaseWrite(async () => {
     await db.insert(blockedArtists).values({ artistId, name: name || "Unknown" }).onConflictDoNothing();

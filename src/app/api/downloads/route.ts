@@ -4,6 +4,7 @@ import { downloads } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import type { DownloadRow, Track } from "@/lib/types";
 import { withDatabase, withDatabaseWrite } from "@/lib/dbResponses";
+import { readJsonBody } from "@/lib/readJsonBody";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const body = (await req.json()) as { track: Track; quality?: string; sizeBytes?: number };
+  const body = await readJsonBody<{ track: Track; quality?: string; sizeBytes?: number }>(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   if (!body.track?.id) return NextResponse.json({ error: "track required" }, { status: 400 });
   return withDatabaseWrite(async () => {
     await db
