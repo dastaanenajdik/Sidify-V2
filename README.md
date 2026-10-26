@@ -202,6 +202,14 @@ function egresses from one. So the browser fetches it directly whenever it can:
 (`mobile` | `browser`) and `MEDIA_UPSTREAM_RELAY_URL` cover the server side; see
 [docs/exclusive-collection.md](docs/exclusive-collection.md#two-transports-browser-direct-or-server-relay).
 
+Title pages resolve entirely in the browser too: one ticket batch signs
+`detail` (`subject-api/get`), `playback` (`subject-api/play-info/v2`) and
+`resource` (download mirrors), and all three run from the viewer's connection —
+there is no server-side resolution endpoint left. A cookie-signed DASH manifest
+still streams through `/api/media/vault-stream/` because a browser cannot send
+the CDN's `Cookie`, but its relay URL is built in the browser; direct MP4/HLS
+files never touch the relay.
+
 Playback uses Shaka Player with a quality ladder, audio-track picker, subtitles,
 an audio watchdog (decoded audio vs rendered video, with an ordered recovery)
 and resume points shared with the title page.

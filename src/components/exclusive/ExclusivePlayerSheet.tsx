@@ -103,6 +103,9 @@ export function ExclusivePlayerSheet({
   const [audioNote, setAudioNote] = useState<string | null>(null);
   const [stats, setStats] = useState<{ height: number; width: number; buffer: number; dropped: number; bandwidth: number } | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
+  /** Sources that already failed in this session — never retried automatically. */
+  const failedSourcesRef = useRef<Set<string>>(new Set());
+  const [autoSwitched, setAutoSwitched] = useState(false);
 
   const resumeKey = `movie-${slug}`;
 
@@ -163,6 +166,22 @@ export function ExclusivePlayerSheet({
           onTracksChanged: onTracks,
           onFatalError: (error) => {
             if (disposed) return;
+
+            // A dead source is usually a dead *route* (a direct CDN fetch the
+            // CDN refuses), not a dead film. Try the next one — typically the
+            // relayed variant of the same manifest — before showing an error.
+            failedSourcesRef.current.add(source.url);
+            const nextIndex = sources.findIndex(
+              (candidate, index) => index !== sourceIndex && !failedSourcesRef.current.has(candidate.url)
+            );
+            if (error.kind === "network" && nextIndex !== -1) {
+              startAtRef.current = videoEl.currentTime || startAtRef.current;
+              setAutoSwitched(true);
+              setSourceIndex(nextIndex);
+              setReloadNonce((value) => value + 1);
+              return;
+            }
+
             setStatus("error");
             setErrorMessage(
               error.kind === "network"
@@ -294,8 +313,9 @@ export function ExclusivePlayerSheet({
       setVideo([]);
       setStats(null);
     };
-    // `source` identity is what matters; the URL is inside it.
-  }, [source, reloadNonce, onTracks]);
+    // `source` identity is what matters; the URL is inside it. `sources` and
+    // `sourceIndex` are read when choosing a fallback stream.
+  }, [source, reloadNonce, onTracks, sources, sourceIndex]);
 
   /* ------------------------------ resume -------------------------------- */
 
@@ -320,6 +340,9 @@ export function ExclusivePlayerSheet({
 
   const selectSource = (index: number) => {
     startAtRef.current = videoRef.current?.currentTime ?? startAtRef.current;
+    // A deliberate choice is not an automatic retry: let it be attempted.
+    const chosen = sources[index];
+    if (chosen) failedSourcesRef.current.delete(chosen.url);
     setSourceIndex(index);
     setReloadNonce((value) => value + 1);
   };
@@ -414,6 +437,16 @@ export function ExclusivePlayerSheet({
             </div>
           )}
         </div>
+
+        {autoSwitched && status !== "error" && (
+          <div
+            role="status"
+            className="flex items-center gap-2 border-b border-edge bg-fill px-4 py-2 text-[12px] text-fg-2 desk:px-6"
+          >
+            <RotateCcw size={13} aria-hidden="true" className="shrink-0" />
+            <span>That stream could not be reached from your connection — switched to another one.</span>
+          </div>
+        )}
 
         {audioNote && (
           <div

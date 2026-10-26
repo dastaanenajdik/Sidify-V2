@@ -251,6 +251,49 @@ test('a junk token is ignored, not echoed', async () => {
   assert.doesNotMatch(payload.calls[0].headers.authorization || '', /Bearer x$/);
 });
 
+test('a playback ticket signs play-info/v2 for the browser', async () => {
+  SIGNED_PATHS.length = 0;
+  const response = await post({ calls: [{ kind: 'playback', subjectId: '101' }] });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+
+  assert.equal(payload.calls.length, 1);
+  const [call] = payload.calls;
+  assert.equal(call.id, 'playback');
+  assert.equal(call.kind, 'playback');
+  assert.equal(call.method, 'GET');
+  assert.equal(call.url, 'https://upstream.test/wefeed-mobile-bff/subject-api/play-info/v2?subjectId=101');
+  assert.ok(call.headers['x-tr-signature'], 'the stream list is signed like every other read');
+  assert.equal(call.headers['x-forwarded-for'], undefined, 'browser-bound: no invented address');
+});
+
+test('an episode playback ticket carries the season and episode', async () => {
+  const response = await post({ calls: [{ kind: 'playback', subjectId: '101', se: 2, ep: 7 }] });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.match(payload.calls[0].url, /play-info\/v2\?subjectId=101&se=2&ep=7$/);
+});
+
+test('detail + playback + resource fit in one batch', async () => {
+  const response = await post({
+    calls: [
+      { kind: 'detail', subjectId: '101' },
+      { kind: 'playback', subjectId: '101' },
+      { kind: 'resource', subjectId: '101' },
+    ],
+  });
+  assert.equal(response.status, 200, 'a title page must cost one ticket');
+  const payload = await response.json();
+  assert.deepEqual(payload.calls.map((call) => call.kind), ['detail', 'playback', 'resource']);
+});
+
+test('a playback ticket without a subject is refused', async () => {
+  for (const call of [{ kind: 'playback' }, { kind: 'playback', subjectId: 'DROP TABLE' }, { kind: 'playback', subjectId: '' }]) {
+    const response = await post({ calls: [call] });
+    assert.equal(response.status, 400, `expected 400 for ${JSON.stringify(call)}`);
+  }
+});
+
 /* ------------------------------- rejections ------------------------------ */
 
 test('malformed batches are rejected before any signing happens', async () => {

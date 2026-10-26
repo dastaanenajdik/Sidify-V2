@@ -234,6 +234,28 @@ export function isVaultSlug(slug: string): boolean {
   return subjectIdFromSlug(slug) !== null;
 }
 
+/**
+ * A human title out of a slug: `vault-101-night-train-2025` → "Night Train 2025".
+ *
+ * Used where a page must render (or title itself) *before* any catalogue call —
+ * an exclusive detail page cannot ask the server for metadata, so the slug is
+ * the only information available during the first paint.
+ */
+export function titleFromVaultSlug(slug: string): string {
+  const subjectId = subjectIdFromSlug(slug);
+  if (!subjectId) return slug;
+  const rest = slug.slice(VAULT_SLUG_PREFIX.length + subjectId.length).replace(/^-/, "");
+  if (!rest) return `Title ${subjectId}`;
+  const minor = new Set(["a", "an", "and", "of", "the", "in", "on", "to", "for", "at", "by"]);
+  return rest
+    .split("-")
+    .filter(Boolean)
+    .map((word, index) =>
+      index > 0 && minor.has(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)
+    )
+    .join(" ");
+}
+
 /** Genres as `{ id, name }` pairs, ids slugified so they can be used as facet filters. */
 function genresOf(record: Record<string, unknown>): Genre[] {
   const raw = record.genre ?? record.genres;

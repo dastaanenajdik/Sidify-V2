@@ -100,14 +100,51 @@ signature, and it is deliberately narrow:
 - if the server cannot mint a session either, it answers `503`
   `ticket_unavailable` and the browser quietly uses the relay.
 
-### Playback is the one server-assisted step
+### Details, streams and downloads: all client-side
 
-Direct files (`releases[].mirrors[].shortUrl`) are played by the browser straight
-from the CDN. A signed DASH manifest, however, has to be wrapped in this app's
-same-origin relay token, and only the server holds the cookie that signs it — so
-`POST /api/media/exclusive/playback { slug, type }` returns those sources and the
-browser merges them with everything the catalogue already returned. If that call
-fails, the catalogue's own files are still playable.
+Opening a title costs **one ticket batch of three calls**, all executed by the
+browser:
+
+```
+POST /api/media/exclusive/ticket { calls: [detail, playback, resource] }
+  ├─ detail    subject-api/get?subjectId=…              → cast, synopsis, seasons
+  ├─ playback  subject-api/play-info/v2?subjectId=…[&se=&ep=]  → DASH manifests + signed cookies
+  └─ resource  subject-api/resource?subjectId=…&page=1   → download mirrors
+```
+
+Each is parsed in the browser by the same adapters the server uses
+(`detailsPayloadToDetail`, `playInfoToReleases`, `resourceItemToRelease`), so a
+title page, its episode list and its download sheet are built without a single
+server-side catalogue call. There is no `POST /api/media/exclusive/playback`
+endpoint any more — that hop (and its `440`s) is gone.
+
+**What still touches the relay, and why.** A DASH manifest is authorised with a
+signed `Cookie`, and `Cookie` is a forbidden header for `fetch`/XHR — no browser
+can send it cross-origin, and a `<video>` cannot either. Those bytes therefore
+stream through `/api/media/vault-stream/<token>`, which re-attaches the cookie.
+Everything about *resolution* is client-side: the manifest URL is decoded from
+the payload, and the token is plain base64url JSON built in the browser
+(`vaultStreamToken.ts`), with no secret and no server round-trip. The relay only
+accepts the CDN hosts on its allowlist and refuses private addresses, so a forged
+token cannot reach anywhere new.
+
+| Source | Path to the viewer |
+| --- | --- |
+| Direct MP4 / WebM / HLS from `resource` | straight from the CDN, no relay |
+| DASH with a signed cookie | `/api/media/vault-stream/<token>` (bytes only) |
+| DASH without a cookie | straight from the CDN, no relay |
+| Episode files (`se`/`ep` in a flat listing) | attached to their episode, same rules |
+
+If a stream's network request fails, the player switches to the next source — in
+practice the relayed variant of the same manifest — before it shows an error, and
+says which switch it made.
+
+Exclusive title pages (`/movies/vault-…`, `/series/vault-…`) never call a
+provider on the server: the route renders a frame and lets the browser resolve
+the payload, and falls back to the last saved copy of that title when the network
+does not cooperate. Playback URLs are deliberately **not** stored in a snapshot —
+a relay token carries a cookie that expires, so replaying it later would only
+produce a broken player.
 
 ### Caching
 
@@ -115,7 +152,7 @@ fails, the catalogue's own files are still playable.
 | --- | --- | --- |
 | React Query (`staleTime`) | 5 min (title pages: 50 min) | back/forward navigation costs nothing |
 | `exclusiveDirect` module cache | 5–10 min | one upstream read per tab, even across query keys |
-| `localStorage` snapshot (`sidify-exclusive-snapshot-v1`) | 7 days | renders *something* when both transports fail |
+| `localStorage` snapshot (`sidify-exclusive-snapshot-v1`) | 7 days | landing page, searches and visited titles when both transports fail |
 
 The snapshot is bounded (24 entries, 400 KB each, 1.5 MB total, newest-first
 eviction, one retry with the newest four on a quota error) and versioned: a
@@ -232,7 +269,12 @@ height disables ABR before selecting the variant.
 The collection's CDN requires a signed cookie. A browser cannot attach that
 cookie to a cross-origin media request, so manifests and segments are relayed by
 `/api/media/vault-stream/<token>/…`; the DASH `<BaseURL>` is rewritten so
-segments stay on the relay too. Direct files (MP4/WebM/HLS) bypass the relay.
+segments stay on the relay too. Anything after the token is a segment path and is
+resolved against the manifest's own directory, never outside it — a traversal or
+absolute segment is a `400` before any upstream call. Direct files
+(MP4/WebM/HLS) bypass the relay. `tests/vaultStreamRoute.test.cjs` covers the
+whole path (manifest, one segment, nested segments, stale query strings, byte
+ranges, traversal, bad tokens, cross-site, `HEAD`).
 
 ## Player surface
 

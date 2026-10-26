@@ -76,7 +76,7 @@ function createBrowserWorld({
   failTicket = false,
   upstreamDown = false,
   loginRefused = false,
-  playback = [],
+  playInfoRefused = false,
 } = {}) {
   const storage = memoryStorage();
   const calls = [];
@@ -134,6 +134,14 @@ function createBrowserWorld({
             url: `https://upstream.test/wefeed-mobile-bff/subject-api/get?subjectId=${call.subjectId}`,
             headers: { 'x-sig': 'signed', ...auth },
           });
+        } else if (call.kind === 'playback') {
+          signed.push({
+            id: 'playback',
+            kind: 'playback',
+            method: 'GET',
+            url: `https://upstream.test/wefeed-mobile-bff/subject-api/play-info/v2?subjectId=${call.subjectId}`,
+            headers: { 'x-sig': 'signed', 'user-agent': 'Fixture-UA/1.0', ...auth },
+          });
         } else if (call.kind === 'resource') {
           signed.push({
             id: 'resource',
@@ -147,8 +155,9 @@ function createBrowserWorld({
       return json({ issuedAt: Date.now(), expiresAt: Date.now() + 600_000, calls: signed });
     }
 
-    if (href.startsWith('/api/media/exclusive/playback')) {
-      return json({ sources: playback });
+    if (href.includes('/api/media/exclusive/playback')) {
+      // The route is gone; any call to it is a bug the tests should see.
+      throw new Error('the server playback route must not be called');
     }
 
     if (href.startsWith('https://upstream.test/')) {
@@ -172,6 +181,26 @@ function createBrowserWorld({
         const id = Number(href.match(/subjectId=(\d+)/)?.[1] || 0);
         const subject = titles.find((title) => title.subjectId === id) || titles[0];
         return json({ data: { subject: { ...subject, description: 'Fixture synopsis.', seasons: { seasons: [] } } } });
+      }
+      if (href.includes('play-info')) {
+        if (playInfoRefused) return json({ error: 'no streams' }, 404);
+        return json({
+          data: {
+            title: 'Night Train',
+            streams: [
+              {
+                id: 7,
+                format: 'MP4',
+                codecName: 'H264',
+                size: 2_400_000_000,
+                resolutions: '1080,720',
+                // The signed cookie also carries the manifest's own prefix.
+                signCookie: 'Edge-Cache-Cookie=urlprefix=' + Buffer.from('https://media.test/dash/101/').toString('base64url') + ':sign=abc:t=1700000000',
+                url: 'https://media.test/dash/101/index.mpd',
+              },
+            ],
+          },
+        });
       }
       if (href.includes('subject-api/resource')) {
         return json({
@@ -490,39 +519,105 @@ test('an empty search returns the listing (a landing page, not an empty result s
   }
 });
 
-test('a title page merges the browser catalogue with server-resolved playback', async () => {
-  const world = createBrowserWorld({
-    playback: [
-      { id: 'dash', url: '/api/media/vault-stream/abc/manifest.mpd', kind: 'dash', quality: '1080p', label: 'Server' },
-    ],
-  });
+test('a title page resolves detail, streams and mirrors in one signed batch', async () => {
+  const world = createBrowserWorld();
   try {
     const payload = await world.direct.loadExclusiveTitle('vault-101-night-train', 'movie', NEVER);
     assert.ok(payload, 'the title resolved');
     assert.equal(payload.detail.title.slug, 'vault-101-night-train');
     assert.equal(payload.detail.title.kind, 'movie');
-    assert.ok(payload.detail.playback.length >= 1, 'playback sources are attached');
-    assert.ok(
-      payload.detail.playback.some((source) => source.url.includes('/api/media/vault-stream/')),
-      'the server-signed stream is kept'
+
+    // ONE ticket batch asked for exactly the three reads a title page needs.
+    const dataTicket = world.ticketRequests.find((request) =>
+      (request.calls || []).some((call) => call.kind === 'detail')
     );
-    assert.ok(
-      payload.detail.releases.length >= 1,
-      'direct files from the catalogue are offered as releases'
+    assert.ok(dataTicket, 'a ticket was requested');
+    assert.deepEqual(
+      dataTicket.calls.map((call) => call.kind).sort(),
+      ['detail', 'playback', 'resource'],
+      'detail + playback + resource travel together'
     );
+
+    // …and all three were executed against the catalogue, not through this app.
+    const upstream = world.upstreamRequests.map((entry) => entry.href);
+    assert.ok(upstream.some((href) => href.includes('subject-api/get')));
+    assert.ok(upstream.some((href) => href.includes('play-info/v2')));
+    assert.ok(upstream.some((href) => href.includes('subject-api/resource')));
+
+    // The DASH manifest came from play-info, and its relay URL was built here.
+    const dash = payload.detail.playback.find((source) => source.type === 'dash');
+    assert.ok(dash, 'a DASH source exists');
+    assert.ok(dash.url.includes('/api/media/vault-stream/'), 'the signed manifest goes through the byte relay');
+    assert.equal(dash.label, '1080p DASH');
+    const token = dash.url.split('/api/media/vault-stream/')[1];
+    const descriptor = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+    assert.equal(descriptor.u, 'https://media.test/dash/101/index.mpd');
+    assert.equal(descriptor.b, 'https://media.test/dash/101/');
+    assert.ok(
+      (descriptor.h || []).some(([name]) => name.toLowerCase() === 'cookie'),
+      'the CDN cookie travels inside the relay token'
+    );
+
+    // Download mirrors were parsed in the browser too.
+    assert.ok(payload.detail.releases.length >= 1, 'download links are offered');
     assert.ok(payload.recommendations.length >= 1, 'the rest of the collection seeds recommendations');
   } finally {
     world.restore();
   }
 });
 
-test('a dead playback route still leaves the catalogue data usable', async () => {
+test('the browser builds the relay URL itself — no server call, no 440', async () => {
   const world = createBrowserWorld();
+  try {
+    // Any call to the removed server endpoint throws inside the fake fetch, so
+    // this completing at all proves the resolution happened in the browser.
+    const sources = await world.direct.directPlaybackSources('vault-101-night-train', 'movie');
+    assert.ok(sources.length >= 1);
+    assert.ok(sources.every((source) => ['dash', 'mp4', 'hls'].includes(source.type)));
+    assert.deepEqual(world.direct.directStatus(), { enabled: true, reason: null }, 'the transport is healthy');
+  } finally {
+    world.restore();
+  }
+});
+
+test('a payload without a stream list still yields the file links', async () => {
+  const world = createBrowserWorld({ playInfoRefused: true });
   try {
     const payload = await world.direct.loadExclusiveTitle('vault-101-night-train', 'movie', NEVER);
     assert.ok(payload);
-    assert.ok(Array.isArray(payload.detail.playback), 'playback is always a list');
-    assert.equal(world.direct.directStatus().enabled, true, 'a playback hiccup does not disable the transport');
+    assert.equal(payload.detail.playback.filter((source) => source.type === 'dash').length, 0);
+    assert.ok(payload.detail.releases.length >= 1, 'the download mirrors survive a missing play-info');
+    assert.equal(world.direct.directStatus().enabled, true);
+  } finally {
+    world.restore();
+  }
+});
+
+test('a title visited before opens from its saved copy when the network dies', async () => {
+  const healthy = createBrowserWorld();
+  let snapshot = null;
+  try {
+    await healthy.direct.loadExclusiveTitle('vault-101-night-train', 'movie', NEVER);
+    snapshot = healthy.storage.getItem('sidify-exclusive-snapshot-v1');
+  } finally {
+    healthy.restore();
+  }
+  assert.ok(snapshot, 'the title was saved');
+
+  const world = createBrowserWorld({ corsBlocked: true });
+  try {
+    world.storage.setItem('sidify-exclusive-snapshot-v1', snapshot);
+    const payload = await world.direct.loadExclusiveTitle('vault-101-night-train', 'movie', async () => {
+      throw new Error('relay 502');
+    });
+    assert.equal(payload.detail.title.slug, 'vault-101-night-train');
+    assert.ok(payload.detail.seasons !== undefined, 'the page still has its shape');
+    // The saved copy must not offer an expired relayed stream.
+    assert.equal(
+      payload.detail.playback.filter((source) => source.url.includes('/api/media/vault-stream/')).length,
+      0
+    );
+    assert.equal(world.status.exclusiveStatus.getSnapshot().transport, 'snapshot');
   } finally {
     world.restore();
   }
@@ -553,6 +648,13 @@ test('the direct module never imports a server secret', () => {
   assert.doesNotMatch(source, /process\.env\.MEDIA_VAULT/, 'no upstream secret is read in the browser');
   assert.doesNotMatch(source, /Buffer\./, 'no Node-only globals');
   assert.match(source, /^"use client";/m);
+
+  for (const module of ['vaultPlayback.ts', 'vaultStreamToken.ts']) {
+    const text = fs.readFileSync(path.join(SRC, 'lib/media', module), 'utf8');
+    assert.doesNotMatch(text, /Buffer\./, `${module} must run in a browser`);
+    assert.doesNotMatch(text, /node:/, `${module} must not import a Node built-in`);
+    assert.doesNotMatch(text, /createHmac|MEDIA_VAULT/, `${module} must not carry a secret`);
+  }
 });
 
 test('the browser path and the relay path compose byte-identical shelves', async () => {
