@@ -96,6 +96,12 @@ test('an unresolvable stream list is explained and retryable, never a dead end',
   assert.match(VIEW, /onRetry\?: \(\) => void/);
   assert.match(VIEW, /streamIssueSentence\(status\.streamIssue, status\.streamIssueStatus\)/);
   assert.match(VIEW, /Retrying…/);
+  // Even when stream resolution returns nothing, the hero keeps a Play action;
+  // it retries resolution and scrolls to the diagnostic/player section.
+  assert.match(VIEW, /onRetry && allPlayback\.length === 0/);
+  assert.match(VIEW, /Finding stream…/);
+  assert.match(VIEW, /scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
+  assert.match(VIEW, /\|\| !!onRetry/);
   assert.match(PAGE, /<MediaDetailView detail=\{detail\} onRetry=/);
 });
 
