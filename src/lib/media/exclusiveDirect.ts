@@ -80,9 +80,9 @@ function disableDirect(reason: string): void {
   if (directDisabledReason) return;
   directDisabledReason = reason;
   exclusiveStatus.noteDirectFallback(reason);
-  if (process.env.NODE_ENV !== "production") {
-    console.info(`[exclusive] direct transport unavailable (${reason}); using the relay.`);
-  }
+  // One line, once per session: the fastest way to tell whether a deployment is
+  // actually being served from the browser or falling back to the relay.
+  console.info(`[exclusive] direct transport unavailable (${reason}); using the relay.`);
 }
 
 function directUsable(): boolean {
@@ -479,6 +479,21 @@ function snapshotHome(kind: MediaKind | "all"): { home: ExclusiveHome; at: numbe
   };
 }
 
+/**
+ * Keeps the last good landing payload's titles as the offline copy.
+ *
+ * Only the titles are stored, not the assembled page: facets, rails and the
+ * spotlight are rebuilt from them for free, and the stored payload stays small
+ * enough for a 400 KB budget.
+ */
+function snapshotFromHome(home: ExclusiveHome): void {
+  const pool: MediaTitle[] = [];
+  if (home.spotlight) pool.push(home.spotlight);
+  for (const rail of home.rails ?? []) pool.push(...rail.items);
+  if (!pool.length) return;
+  writeSnapshot(SNAPSHOT_KEY, dedupeTitles(pool));
+}
+
 function providerInfoForCollection(): ExclusiveTitleResponse["provider"] {
   return {
     id: "vault",
@@ -509,6 +524,9 @@ export async function loadExclusiveHome(
 
   try {
     const home = await relay();
+    // Relay answers seed the same snapshot, so a visitor whose network never
+    // allows the direct path still gets a saved copy the day the relay fails.
+    snapshotFromHome(home);
     exclusiveStatus.noteSuccess("relay", null);
     return home;
   } catch (error) {

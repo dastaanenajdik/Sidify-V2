@@ -407,6 +407,46 @@ test('when both transports fail, the saved copy is shown and labelled', async ()
   }
 });
 
+test('a relay answer seeds the snapshot, so later outages still show something', async () => {
+  const world = createBrowserWorld({ corsBlocked: true });
+  try {
+    const title = {
+      id: 'vault-101',
+      slug: 'vault-101-night-train',
+      title: 'Night Train',
+      kind: 'movie',
+      overview: '',
+      genres: [{ id: 'thriller', name: 'Thriller' }],
+      language: 'en',
+    };
+    const relayHome = {
+      mode: 'home',
+      provider: { id: 'vault', label: 'Vault', attribution: 'relayed', demo: false },
+      spotlight: title,
+      rails: [{ id: 'top10', title: 'Top 10', items: [title] }],
+      genres: [],
+      facets: { genres: [], years: [], languages: [] },
+      total: 1,
+      tookMs: 1,
+    };
+
+    await world.direct.loadExclusiveHome('all', async () => relayHome);
+    const stored = world.direct.cachedListing();
+    assert.ok(stored, 'the relay payload was saved as a snapshot');
+    assert.equal(stored.titles.length, 1, 'duplicates are collapsed');
+    assert.equal(stored.titles[0].slug, 'vault-101-night-train');
+
+    // And that snapshot is what comes back when the relay dies later.
+    const fallback = await world.direct.loadExclusiveHome('all', async () => {
+      throw new Error('relay 502');
+    });
+    assert.ok(fallback.rails.length > 0);
+    assert.equal(world.status.exclusiveStatus.getSnapshot().transport, 'snapshot');
+  } finally {
+    world.restore();
+  }
+});
+
 test('with no direct path and no snapshot, the relay error is the one raised', async () => {
   const world = createBrowserWorld({ corsBlocked: true });
   try {
