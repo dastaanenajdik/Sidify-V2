@@ -18,6 +18,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ code
   const code = normalizeCode((await params).code);
   const token = req.headers.get("x-room-token");
   const since = Number(req.nextUrl.searchParams.get("since") || 0);
+  const seenId = req.nextUrl.searchParams.get("seen");
   const now = Date.now();
   let me: RoomMember | null = null;
   let incoming: RoomSignal[] = [];
@@ -28,9 +29,22 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ code
       const swept = sweep(r, now);
       me = memberByToken(r, token);
       const touched = me ? touch(r, me.id, now) : false;
+      // Read receipts: advance this member's "read up to" cursor when they've
+      // seen a newer chat message than before.
+      let seenAdvanced = false;
+      if (me && seenId && r.chat && r.chat.length) {
+        const target = r.chat.findIndex((m) => m.id === seenId);
+        if (target >= 0) {
+          const current = me.readUpTo ? r.chat.findIndex((m) => m.id === me!.readUpTo) : -1;
+          if (target > current) {
+            me.readUpTo = seenId;
+            seenAdvanced = true;
+          }
+        }
+      }
       // Deliver any WebRTC envelopes addressed to this seat and clear them.
       if (me) incoming = takeSignals(r, me.id);
-      return swept || touched || incoming.length > 0;
+      return swept || touched || seenAdvanced || incoming.length > 0;
     });
   } catch (e) {
     console.error("room read failed", e);

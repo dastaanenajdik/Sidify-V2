@@ -1,8 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowDown, Check, LoaderCircle, MessageCircle, Send, Smile } from "lucide-react";
-import { sendRoomChat, useRoom } from "@/lib/rooms/client";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  ArrowDown,
+  Check,
+  CheckCheck,
+  LoaderCircle,
+  MessageCircle,
+  Pencil,
+  Reply,
+  Send,
+  Smile,
+  X,
+} from "lucide-react";
+import { editRoomChat, markSeen, sendRoomChat, waitForRoomChatMessage, useRoom } from "@/lib/rooms/client";
 import { ROOM_LIMITS, currentOf, type RoomChatMessage, type RoomState, type RoomTrack } from "@/lib/rooms/logic";
 import { useLyricsLookup } from "@/lib/lyricsClient";
 import { cx } from "@/lib/format";
@@ -23,6 +34,42 @@ const ROOM_EMOJIS = [
   "🙌", "👏", "🫶", "❤️", "🔥", "✨", "🎵",
   "🎧", "🎤", "🎉", "💯", "👍", "👎", "🤘",
 ];
+
+// Turn bare URLs in chat text into clickable links. Trailing punctuation that
+// is usually just sentence-ending (., !, ), …) is kept outside the link.
+const URL_RE = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+const TRAILING_PUNCT = /[.,;:!?)\]}'"`]+$/;
+
+function linkify(text: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(text)) !== null) {
+    const raw = match[0];
+    const trail = raw.match(TRAILING_PUNCT)?.[0] ?? "";
+    const core = raw.slice(0, raw.length - trail.length);
+    if (match.index > last) nodes.push(text.slice(last, match.index));
+    const href = core.startsWith("http") ? core : `https://${core}`;
+    nodes.push(
+      <a
+        key={`link-${key++}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(event) => event.stopPropagation()}
+        className="break-words text-accent underline underline-offset-2 hover:opacity-80"
+      >
+        {core}
+      </a>
+    );
+    if (trail) nodes.push(<span key={`trail-${key++}`}>{trail}</span>);
+    last = match.index + raw.length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
 
 function RoomLyricsBackdrop({
   track,
@@ -58,6 +105,8 @@ function RoomLyricsBackdrop({
   );
 }
 
+type ReplyTarget = { id: string; by: string; text: string };
+
 export default function RoomChatPanel({
   room,
   you,
@@ -77,10 +126,14 @@ export default function RoomChatPanel({
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [pendingMessage, setPendingMessage] = useState<RoomChatMessage | null>(null);
+  const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [lyricsAvailability, setLyricsAvailability] = useState<{ trackId: string; available: boolean }>({ trackId: "", available: false });
   const [lyricsPreference, setLyricsPreference] = useState<{ trackId: string; show: boolean }>({ trackId: "", show: true });
   const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const caretRef = useRef({ start: 0, end: 0 });
   const feedRef = useRef<HTMLDivElement>(null);
   const initialScrollDone = useRef(false);
@@ -94,6 +147,7 @@ export default function RoomChatPanel({
   const reportLyricsAvailability = useCallback((available: boolean) => {
     if (trackId) setLyricsAvailability({ trackId, available });
   }, [trackId]);
+
   const entries = useMemo(() => {
     const events = room.activity.map((event, i) => ({ kind: "activity" as const, key: `activity-${event.at}-${i}`, at: event.at, event }));
     const storedMessages = room.chat ?? [];
@@ -103,6 +157,26 @@ export default function RoomChatPanel({
       : [];
     return [...events, ...messages, ...pending].sort((a, b) => a.at - b.at).slice(-60);
   }, [room.activity, room.chat, pendingMessage]);
+
+  // Map each chat id to its position, so a delivered message can learn whether
+  // anyone else has read past it (read receipts).
+  const chatIndexById = useMemo(() => {
+    const map = new Map<string, number>();
+    (room.chat ?? []).forEach((message, i) => map.set(message.id, i));
+    return map;
+  }, [room.chat]);
+
+  // Highest chat index any *other* member has read up to. A message at or below
+  // this frontier has been seen by someone else → double tick.
+  const seenFrontier = useMemo(() => {
+    let max = -1;
+    for (const member of room.members) {
+      if (member.id === you || !member.readUpTo) continue;
+      const idx = chatIndexById.get(member.readUpTo);
+      if (idx !== undefined && idx > max) max = idx;
+    }
+    return max;
+  }, [room.members, chatIndexById, you]);
 
   // Scroll only the feed, never the page. If the listener has scrolled away
   // from the bottom, keep their position and count incoming chat messages.
@@ -115,6 +189,8 @@ export default function RoomChatPanel({
       seenChatIdsRef.current = null;
       wasNearBottomRef.current = true;
       setNewMessageCount(0);
+      setReplyTarget(null);
+      setEditingId(null);
     }
 
     const chat = room.chat ?? [];
@@ -139,11 +215,25 @@ export default function RoomChatPanel({
     }
   }, [room.code, room.seq, room.chat, pendingMessage?.id]);
 
+  // Read receipts: mark the latest message as seen whenever we're parked at the
+  // bottom of an open, visible chat.
+  useEffect(() => {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    const chat = room.chat ?? [];
+    const last = chat[chat.length - 1];
+    if (last && wasNearBottomRef.current) markSeen(last.id);
+  }, [room.chat, room.seq]);
+
   function trackFeedScroll() {
     const feed = feedRef.current;
     if (!feed) return;
     wasNearBottomRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 100;
-    if (wasNearBottomRef.current) setNewMessageCount(0);
+    if (wasNearBottomRef.current) {
+      setNewMessageCount(0);
+      const chat = room.chat ?? [];
+      const last = chat[chat.length - 1];
+      if (last) markSeen(last.id);
+    }
   }
 
   function scrollToLatest() {
@@ -177,14 +267,34 @@ export default function RoomChatPanel({
     const text = draft.trim();
     if (!text || sending) return;
     const id = createMessageId();
-    setPendingMessage({ id, at: Date.now(), memberId: you, by: "", text });
+    const replyingTo = replyTarget ? { id: replyTarget.id, by: replyTarget.by, text: replyTarget.text } : null;
+    // Optimistic bubble stays in "Sending…" only until the server (echo or the
+    // very next poll) confirms it — so it can never get stuck forever.
+    setPendingMessage({ id, at: Date.now(), memberId: you, by: "", text, replyTo: replyingTo });
     setDraft("");
+    setReplyTarget(null);
     setSending(true);
-    const sent = await sendRoomChat(text, id);
-    const acknowledged = (useRoom.getState().room?.chat ?? []).some((message) => message.id === id);
+    await sendRoomChat(text, id, replyingTo?.id ?? null);
+    const delivered = await waitForRoomChatMessage(id, 2000);
     setSending(false);
-    setPendingMessage((current) => current?.id === id ? null : current);
-    if (!sent && !acknowledged) setDraft((current) => current || text);
+    setPendingMessage((current) => (current?.id === id ? null : current));
+    if (!delivered) setDraft((current) => current || text);
+  }
+
+  function startEditing(message: RoomChatMessage) {
+    if (message.memberId !== you) return;
+    setReplyTarget(null);
+    setEditingId(message.id);
+    setEditDraft(message.text);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  async function saveEdit() {
+    if (!editingId) return;
+    const text = editDraft.trim();
+    if (!text) return;
+    const ok = await editRoomChat(editingId, text);
+    if (ok) setEditingId(null);
   }
 
   return (
@@ -255,23 +365,108 @@ export default function RoomChatPanel({
                 </div>
               );
             }
-            const mine = entry.message.memberId === you;
+            const message = entry.message;
+            const mine = message.memberId === you;
+            const index = chatIndexById.get(message.id);
+            const seen = mine && typeof index === "number" && index <= seenFrontier;
+            const isEditing = editingId === message.id;
             return (
-              <div key={entry.key} className={cx("flex", mine ? "justify-end" : "justify-start")}>
+              <div key={entry.key} className={cx("group/chat flex", mine ? "justify-end" : "justify-start")}>
                 <div className={cx(
-                  "max-w-[90%] rounded-[14px] px-3 py-2 backdrop-blur-md ring-1",
+                  "relative max-w-[90%] rounded-[14px] px-3 py-2 backdrop-blur-md ring-1",
                   mine ? "bg-accent/15 ring-accent/15" : "bg-fill ring-edge"
                 )}>
-                  <div className="mb-0.5 flex items-baseline gap-2">
-                    <span className="truncate text-[11px] font-semibold text-fg">{mine ? "You" : entry.message.by}</span>
-                    <time className="shrink-0 text-[10px] text-fg-2">{time}</time>
-                    {entry.delivery === "sending" ? (
-                      <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-fg-2"><LoaderCircle size={11} className="animate-spin" /> Sending…</span>
-                    ) : mine ? (
-                      <Check size={12} className="shrink-0 text-playing" aria-label="Sent" />
-                    ) : null}
-                  </div>
-                  <p className="break-words text-[13px] leading-[1.45] text-fg">{entry.message.text}</p>
+                  {message.replyTo && (
+                    <div className="mb-1.5 rounded-[10px] border-l-2 border-accent/60 bg-black/10 py-1 pl-2 pr-2 text-[11px]">
+                      <span className="font-semibold text-fg">{mine ? "You" : message.replyTo.by}</span>
+                      <p className="line-clamp-2 break-words text-fg-2">{linkify(message.replyTo.text)}</p>
+                    </div>
+                  )}
+                  {isEditing ? (
+                    <div className="flex flex-col gap-2">
+                      <textarea
+                        ref={textareaRef}
+                        value={editDraft}
+                        onChange={(event) => setEditDraft(event.target.value.slice(0, ROOM_LIMITS.chatMessageLength))}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            void saveEdit();
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            setEditingId(null);
+                          }
+                        }}
+                        rows={2}
+                        className="w-full resize-none rounded-[10px] bg-fill-2 px-2 py-1.5 text-[13px] text-fg outline-none ring-1 ring-edge focus:ring-accent"
+                        aria-label="Edit your message"
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(null)}
+                          className="rounded-full px-3 py-1 text-[12px] font-semibold text-fg-2 hover:bg-fill-2"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void saveEdit()}
+                          disabled={!editDraft.trim()}
+                          className="rounded-full bg-primary px-3 py-1 text-[12px] font-semibold text-on-primary disabled:opacity-40"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mb-0.5 flex items-baseline gap-2">
+                        <span className="truncate text-[11px] font-semibold text-fg">{mine ? "You" : message.by}</span>
+                        <time className="shrink-0 text-[10px] text-fg-2">{time}{message.edited ? " · edited" : ""}</time>
+                        {entry.delivery === "sending" ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-fg-2"><LoaderCircle size={11} className="animate-spin" /> Sending…</span>
+                        ) : mine ? (
+                          seen ? (
+                            <CheckCheck size={13} className="shrink-0 text-playing" aria-label="Seen" />
+                          ) : (
+                            <Check size={12} className="shrink-0 text-fg-2" aria-label="Sent" />
+                          )
+                        ) : null}
+                      </div>
+                      <p
+                        onClick={() => mine && startEditing(message)}
+                        className={cx("break-words text-[13px] leading-[1.45] text-fg", mine && "cursor-pointer")}
+                      >
+                        {linkify(message.text)}
+                      </p>
+                    </>
+                  )}
+                  {/* Hover actions: reply to anyone, edit your own. */}
+                  {!isEditing && (
+                    <div className="absolute -top-3 right-1 z-10 flex items-center gap-0.5 rounded-full bg-fill-2 px-0.5 py-0.5 opacity-0 shadow-[0_4px_14px_rgba(0,0,0,.25)] ring-1 ring-edge transition-opacity group-hover/chat:opacity-100 focus-within:opacity-100 max-desk:opacity-70">
+                      <button
+                        type="button"
+                        aria-label="Reply to this message"
+                        title="Reply"
+                        onClick={() => setReplyTarget({ id: message.id, by: mine ? "You" : message.by, text: message.text })}
+                        className="grid h-6 w-6 place-items-center rounded-full text-fg-2 transition-colors hover:bg-fill hover:text-fg"
+                      >
+                        <Reply size={13} />
+                      </button>
+                      {mine && (
+                        <button
+                          type="button"
+                          aria-label="Edit your message"
+                          title="Edit"
+                          onClick={() => startEditing(message)}
+                          className="grid h-6 w-6 place-items-center rounded-full text-fg-2 transition-colors hover:bg-fill hover:text-fg"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -288,6 +483,17 @@ export default function RoomChatPanel({
           <ArrowDown size={14} aria-hidden="true" />
           <span>{newMessageCount}</span>
         </button>
+      )}
+      {replyTarget && (
+        <div className="relative z-[1] flex items-center gap-2 border-t border-edge bg-fill/60 px-3 py-2">
+          <div className="min-w-0 flex-1 rounded-[10px] bg-fill-2 px-2.5 py-1.5">
+            <p className="text-[10px] font-semibold text-accent">Replying to {replyTarget.by}</p>
+            <p className="truncate text-[12px] text-fg-2">{replyTarget.text}</p>
+          </div>
+          <IconButton label="Cancel reply" type="button" tone="glass" size={32} onClick={() => setReplyTarget(null)}>
+            <X size={15} />
+          </IconButton>
+        </div>
       )}
       <form onSubmit={submit} className="relative z-[1] flex shrink-0 items-center gap-2 border-t border-edge p-2.5">
         {emojiOpen && (
