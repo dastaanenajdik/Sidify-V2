@@ -251,3 +251,33 @@ test('voice call: publicRoom defaults voice state for older records', () => {
   assert.deepEqual(pub.voiceCall, []);
   assert.deepEqual(pub.signals, []);
 });
+
+test('voice presence watcher: ringing out must not end while the peer is still in the room', () => {
+  const members = [{ id: 'me', name: 'Sid' }, { id: 'them', name: 'Aman' }];
+  const decide = (status, voiceCall, peerId = 'them') =>
+    L.decideVoicePresenceAction({ status, peerId, you: 'me', members, voiceCall });
+
+  assert.equal(decide('idle', []), 'none');
+  assert.equal(decide('idle', ['them']), 'ring', 'their presence starts an incoming ring');
+  assert.equal(decide('idle', ['me']), 'clear-stale', 'our own orphaned presence is cleaned');
+  assert.equal(decide('ringing', []), 'cancel-ring', 'caller hung up before we answered');
+
+  // The regression: the callee is not in voiceCall until they accept, so an
+  // outgoing ring must survive their absence from the call list.
+  assert.equal(decide('requesting', ['me']), 'none');
+  assert.equal(decide('requesting', ['me', 'them']), 'none');
+  assert.equal(decide('requesting', ['me'], null), 'none');
+  assert.equal(
+    L.decideVoicePresenceAction({ status: 'requesting', peerId: 'them', you: 'me', members: [{ id: 'me', name: 'Sid' }], voiceCall: ['me'] }),
+    'end-left-room',
+    'only the peer leaving the room itself ends an outgoing ring'
+  );
+
+  assert.equal(decide('connecting', ['me']), 'end-left-call');
+  assert.equal(decide('live', ['me', 'them']), 'none');
+  assert.equal(decide('live', ['me']), 'end-left-call');
+  assert.equal(
+    L.decideVoicePresenceAction({ status: 'live', peerId: 'them', you: 'me', members: [{ id: 'me', name: 'Sid' }], voiceCall: ['me'] }),
+    'end-left-room'
+  );
+});
