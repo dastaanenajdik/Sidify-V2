@@ -34,7 +34,16 @@ queue" user-block ke end me, `ensureAutoplayBuffer()` (queue khatam hone se pehl
 `store.ts` (Postgres `listen_rooms` row-lock transaction, warna in-memory), `server.ts` (AutoPlay fill via
 `ytRadioNext`), routes `src/app/api/rooms/**` (create / poll+heartbeat / join / control / leave),
 client `lib/rooms/client.ts` (~1s poll, clock offset fastest round-trip se, drift correction 120ms on control /
-1.2s × 2 strikes + 6s cooldown, start anchor +350ms), pages `src/app/rooms/**`.
+1.2s × 2 strikes + 6s cooldown, start anchor +350ms; negotiation ke time ~60ms urgent poll), pages
+`src/app/rooms/**`.
+
+**1:1 calls** — `lib/rooms/voice.ts` (zustand call state + WebRTC engine: voice aur 4K video dono),
+`lib/rooms/media.ts` (pure 4K constraint ladder, low-latency SDP rewrite, codec priority, adaptive
+bitrate, `tests/callMedia.test.cjs`), UI `components/rooms/RoomCall.tsx` + `VideoStage.tsx`
+(4K tile, live resolution/fps/RTT, local PiP, mic/cam/music controls). `RoomState.callMode`
+batata hai ki incoming ring voice hai ya video; signal envelopes 64 KB tak (4K SDP ke liye). Voice
+call me `setMusicDuck()` gana 22% karta hai; **video call me gana full volume pe bajta rehta hai**
+(optional duck button ke saath). Media P2P hai — server sirf SDP/ICE relay karta hai.
 
 **Removed** — `UpdatePopups` (what's-new + background-playback guide popups), deluxe backdrop
 (`public/art/*`, `lib/backdrop.ts`, `store/backdrop.ts`), home APK banner, accent picker. `/app` aur `/get`

@@ -1,27 +1,65 @@
 "use client";
 
 /**
- * Listen Together — 1:1 voice call engine.
+ * Listen Together — 1:1 voice AND 4K video call engine.
  *
  * The media itself never touches our servers: two browsers connect directly
- * with WebRTC (Opus, HD constraints, echo cancellation + noise suppression).
- * Only tiny SDP/ICE envelopes are relayed, through the room's existing
- * polling transport (POST /api/rooms/{code}/signal → collected on the next
- * GET). Free STUN servers handle NAT traversal; while a call is live the
- * shared music is ducked via setMusicDuck() so speech stays intelligible.
+ * with WebRTC. Only tiny SDP/ICE envelopes are relayed, through the room's
+ * existing polling transport (POST /api/rooms/{code}/signal → collected on the
+ * next GET). During negotiation that poll is temporarily sped up so SDP and
+ * ICE arrive promptly; once connected, media is pure peer-to-peer.
+ *
+ * Voice calls: 48 kHz fullband Opus with echo cancellation / noise
+ * suppression, 10 ms frames and no FEC, and the shared music ducks to 22%.
+ *
+ * Video calls: the same audio path PLUS a 3840×2160/60 camera track, VP9/H.264
+ * preference, a 24 Mbps ceiling (adapted to the measured link so frames never
+ * queue up behind congestion), `maintain-resolution` encoding, and zero-hint
+ * jitter/playout buffers on the receiver. Crucially, video calls do NOT duck
+ * the shared music — the song keeps playing at full volume. Echo cancellation
+ * on the mic keeps the speaker's own playback out of their outgoing audio, and
+ * a "Duck music" control is there for anyone who wants the old behaviour.
  */
 
 import { create } from "zustand";
-import { setIncomingSignalHandler, useRoom } from "./client";
-import type { RoomSignal } from "./logic";
+import { setCallSignalingUrgent, setIncomingSignalHandler, useRoom } from "./client";
+import { callModeOf, type CallMode, type RoomSignal } from "./logic";
+import {
+  AUDIO_BITRATE_VIDEO,
+  AUDIO_BITRATE_VOICE,
+  orderVideoCodecs,
+  qualityLabel,
+  targetBitrate,
+  tuneSdp,
+  VIDEO_CONSTRAINTS,
+  VIDEO_FPS,
+  VIDEO_MAX_BITRATE,
+} from "./media";
 import { setMusicDuck } from "@/lib/audioEngine";
 import { useUi } from "@/store/ui";
 
 export type VoiceStatus = "idle" | "ringing" | "requesting" | "connecting" | "live";
 
+/** Live, measured call quality shown on the video stage. */
+export interface CallQuality {
+  width: number;
+  height: number;
+  fps: number;
+  /** ICE candidate-pair round-trip time, i.e. the transport's real latency. */
+  rttMs: number | null;
+  /** Current video send ceiling in kbps. */
+  bitrateKbps: number;
+  label: string;
+}
+
 interface VoiceState {
   status: VoiceStatus;
+  /** voice = audio only; video = 4K camera + audio. */
+  mode: CallMode;
   micOn: boolean;
+  camOn: boolean;
+  /** True while the shared song is lowered under the call. */
+  musicDucked: boolean;
   peerId: string | null;
   peerName: string | null;
   /** Local mic is picking up speech. */
@@ -31,18 +69,29 @@ interface VoiceState {
   /** ICE dropped momentarily and is trying to recover. */
   reconnecting: boolean;
   error: string | null;
+  /** Local camera+mic stream for the self-view tile. */
+  localStream: MediaStream | null;
+  /** Peer's stream for the big tile (audio is played by the hidden element). */
+  remoteStream: MediaStream | null;
+  quality: CallQuality | null;
   set: (p: Partial<VoiceState>) => void;
 }
 
 export const useVoice = create<VoiceState>()((set) => ({
   status: "idle",
+  mode: "voice",
   micOn: false,
+  camOn: false,
+  musicDucked: false,
   peerId: null,
   peerName: null,
   speaking: false,
   peerSpeaking: false,
   reconnecting: false,
   error: null,
+  localStream: null,
+  remoteStream: null,
+  quality: null,
   set: (p) => set(p),
 }));
 
@@ -61,21 +110,27 @@ const ICE_CONFIG: RTCConfiguration = {
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun.cloudflare.com:3478" },
   ],
-  iceCandidatePoolSize: 4,
+  // Pre-gather more candidates: fewer negotiation round trips before first frame.
+  iceCandidatePoolSize: 8,
   bundlePolicy: "max-bundle",
+  rtcpMuxPolicy: "require",
 };
 
-/** HD voice: 48 kHz fullband capture with the platform's speech clean-up. */
-const HD_MIC: MediaStreamConstraints["audio"] = {
+/**
+ * Low-latency mic capture. `latency: 0` and `voiceIsolation` are newer hints
+ * that Chromium honours and other engines safely ignore; the whole object is
+ * tried first and a plain `{ audio: true }` fallback covers strict engines.
+ */
+const HD_MIC = {
   echoCancellation: true,
   noiseSuppression: true,
   autoGainControl: true,
   channelCount: 1,
   sampleRate: 48000,
-};
+  latency: 0,
+  voiceIsolation: true,
+} as MediaTrackConstraints;
 
-/** Opus at 64 kbps is transparent for speech and survives weak connections. */
-const VOICE_MAX_BITRATE = 64_000;
 /** Give up ringing if the other side never answers. */
 const RING_TIMEOUT_MS = 45_000;
 
@@ -84,18 +139,24 @@ const RING_TIMEOUT_MS = 45_000;
 let pc: RTCPeerConnection | null = null;
 let role: "caller" | "callee" | null = null;
 let peer: { id: string; name: string } | null = null;
+let mode: CallMode = "voice";
 let localStream: MediaStream | null = null;
 let micTrack: MediaStreamTrack | null = null;
+let camTrack: MediaStreamTrack | null = null;
 let remoteStream: MediaStream | null = null;
 let remoteAudio: HTMLAudioElement | null = null;
+let videoSender: RTCRtpSender | null = null;
+let currentBitrate = VIDEO_MAX_BITRATE;
+let statsTimer: ReturnType<typeof setInterval> | null = null;
+let statsBusy = false;
 let pendingCandidates: RTCIceCandidateInit[] = [];
 let pendingOffer: RoomSignal | null = null;
 let ringTimer: ReturnType<typeof setTimeout> | null = null;
 let restartAttempted = false;
 /**
  * Bumped on every teardown so an async start/accept flow that was awaiting
- * (mic prompt, SDP, fetch) knows it belongs to a dead call and bails quietly
- * instead of touching a closed peer connection or re-opening the mic.
+ * (mic/camera prompt, SDP, fetch) knows it belongs to a dead call and bails
+ * quietly instead of touching a closed peer connection or re-opening the mic.
  */
 let callGeneration = 0;
 
@@ -119,7 +180,7 @@ async function sendSignal(
     const res = await fetch(`/api/rooms/${session.code}/signal`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-room-token": session.token },
-      body: JSON.stringify({ kind, to, data, join: opts.join, leave: opts.leave }),
+      body: JSON.stringify({ kind, to, data, mode, join: opts.join, leave: opts.leave }),
       keepalive: kind === "bye",
     });
     return res.ok;
@@ -128,7 +189,7 @@ async function sendSignal(
   }
 }
 
-/* ------------------------------ microphone in ------------------------------ */
+/* --------------------------- microphone + camera in ------------------------ */
 
 async function openMicrophone(): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
@@ -141,28 +202,151 @@ async function openMicrophone(): Promise<MediaStream> {
   }
 }
 
-async function attachMic(peerConn: RTCPeerConnection, generation: number) {
-  const stream = await openMicrophone();
+/**
+ * Walk the 4K → QHD → 1080p → 720p ladder. `ideal` constraints never fail on
+ * a lesser camera, but a driver can still reject an exact combination, so the
+ * next rung (and finally a bare `video: true`) keeps the call connectable.
+ */
+async function openCamera(): Promise<MediaStreamTrack | null> {
+  const devices = navigator.mediaDevices;
+  if (!devices?.getUserMedia) return null;
+  for (const constraints of VIDEO_CONSTRAINTS) {
+    try {
+      const stream = await devices.getUserMedia({ audio: false, video: constraints });
+      const track = stream.getVideoTracks()[0] ?? null;
+      if (track) return track;
+      stream.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* try the next rung */
+    }
+  }
+  try {
+    const stream = await devices.getUserMedia({ audio: false, video: true });
+    return stream.getVideoTracks()[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function openMedia(callMode: CallMode): Promise<MediaStream> {
+  const audio = await openMicrophone();
+  if (callMode === "voice") return audio;
+  const camera = await openCamera();
+  if (!camera) {
+    // No camera (permission denied / none attached): still connect the call
+    // with audio rather than failing the whole conversation.
+    toast("Camera unavailable", "Connected with audio — check camera permissions", "warn");
+    return audio;
+  }
+  return new MediaStream([...audio.getAudioTracks(), camera]);
+}
+
+/** Ask the peer connection + platform for the shortest possible playout queue. */
+function applyLowLatency(receiver: RTCRtpReceiver) {
+  try {
+    // Milliseconds; 0 keeps only the platform's irreducible safety buffer.
+    receiver.jitterBufferTarget = 0;
+  } catch {
+    /* Firefox/Safari don't expose this hint yet */
+  }
+  try {
+    const r = receiver as RTCRtpReceiver & { playoutDelayHint?: number };
+    if ("playoutDelayHint" in r) r.playoutDelayHint = 0;
+  } catch {
+    /* Chromium-only hint */
+  }
+}
+
+/**
+ * Video send parameters: full resolution, high priority, no queued frames.
+ * `networkPriority` / `degradationPreference` are not writable on every
+ * engine, so a rejected `setParameters` is retried with the essential bitrate
+ * knobs only — the 4K ceiling must not be lost to an optional hint.
+ */
+async function applyVideoParameters(sender: RTCRtpSender, bitrate: number) {
+  for (const extras of [true, false]) {
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings?.length) params.encodings = [{}];
+      const enc = params.encodings[0];
+      enc.maxBitrate = bitrate;
+      enc.maxFramerate = VIDEO_FPS;
+      enc.scaleResolutionDownBy = 1;
+      if (extras) {
+        enc.networkPriority = "high";
+        enc.priority = "high";
+        // Never silently shrink the 2160p frame to hide a slow link — spend
+        // fewer bits on it instead, which also avoids rescaling buffers.
+        params.degradationPreference = "maintain-resolution";
+      }
+      await sender.setParameters(params);
+      return;
+    } catch {
+      /* try the reduced set, then leave the engine's defaults alone */
+    }
+  }
+}
+
+/** Put 4K-capable codecs first on the video transceiver, before SDP is made. */
+function preferVideoCodecs(conn: RTCPeerConnection) {
+  try {
+    const caps = typeof RTCRtpSender !== "undefined" ? RTCRtpSender.getCapabilities("video") : null;
+    if (!caps?.codecs?.length) return;
+    const ordered = orderVideoCodecs(caps.codecs);
+    for (const transceiver of conn.getTransceivers()) {
+      if (transceiver.sender.track?.kind === "video" || transceiver.receiver.track.kind === "video") {
+        transceiver.setCodecPreferences(ordered);
+      }
+    }
+  } catch {
+    /* codec preferences are an optimisation, not a requirement */
+  }
+}
+
+async function attachMedia(peerConn: RTCPeerConnection, callMode: CallMode, generation: number) {
+  const stream = await openMedia(callMode);
   if (generation !== callGeneration) {
     // The call was torn down while the permission prompt was open: release
-    // the stream the user just granted so no mic light stays on.
+    // the streams the user just granted so no mic/camera light stays on.
     stream.getTracks().forEach((track) => track.stop());
     throw new Error("stale");
   }
   localStream = stream;
   micTrack = stream.getAudioTracks()[0] ?? null;
+  camTrack = stream.getVideoTracks()[0] ?? null;
   if (micTrack && "contentHint" in micTrack) micTrack.contentHint = "speech";
-  for (const track of stream.getAudioTracks()) {
+  if (camTrack) {
+    if ("contentHint" in camTrack) camTrack.contentHint = "motion";
+    camTrack.onended = () => V().set({ camOn: false });
+  }
+  V().set({ localStream: stream, micOn: !!micTrack, camOn: !!camTrack });
+
+  for (const track of stream.getTracks()) {
     const sender = peerConn.addTrack(track, stream);
-    try {
-      const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-      params.encodings[0].maxBitrate = VOICE_MAX_BITRATE;
-      await sender.setParameters(params);
-    } catch {
-      /* older WebRTC engines without encoding controls — defaults are already Opus */
+    if (track.kind === "audio") {
+      const bitrate = callMode === "video" ? AUDIO_BITRATE_VIDEO : AUDIO_BITRATE_VOICE;
+      for (const priority of [true, false]) {
+        try {
+          const params = sender.getParameters();
+          if (!params.encodings?.length) params.encodings = [{}];
+          params.encodings[0].maxBitrate = bitrate;
+          if (priority) {
+            params.encodings[0].networkPriority = "high";
+            params.encodings[0].priority = "high";
+          }
+          await sender.setParameters(params);
+          break;
+        } catch {
+          /* defaults are already Opus */
+        }
+      }
+    } else {
+      videoSender = sender;
+      currentBitrate = VIDEO_MAX_BITRATE;
+      await applyVideoParameters(sender, currentBitrate);
     }
   }
+  preferVideoCodecs(peerConn);
   setupLocalMeter(stream);
 }
 
@@ -178,18 +362,31 @@ function createPeerConnection(): RTCPeerConnection {
   };
 
   conn.ontrack = (event) => {
-    remoteStream = event.streams[0] ?? new MediaStream([event.track]);
-    attachRemoteAudio(remoteStream);
-    setupRemoteMeter(remoteStream);
+    applyLowLatency(event.receiver);
+    const track = event.track;
+    remoteStream ??= new MediaStream();
+    if (!remoteStream.getTracks().some((t) => t.id === track.id)) remoteStream.addTrack(track);
+    if (track.kind === "audio") {
+      attachRemoteAudio(remoteStream);
+      if (!remoteAnalyser) setupRemoteMeter(remoteStream);
+    }
+    // A fresh MediaStream instance gives React a new identity on every track,
+    // so the video tile attaches as soon as the first frame is available.
+    V().set({ remoteStream: new MediaStream(remoteStream.getTracks()) });
   };
 
   conn.onconnectionstatechange = () => {
     switch (conn.connectionState) {
-      case "connected":
+      case "connected": {
         restartAttempted = false;
-        V().set({ status: "live", reconnecting: false });
-        setMusicDuck(true);
+        setCallSignalingUrgent(false);
+        // Voice calls duck the song; video calls keep it playing at full volume.
+        const duck = mode === "voice";
+        setMusicDuck(duck);
+        V().set({ status: "live", reconnecting: false, musicDucked: duck });
+        startStats(conn);
         break;
+      }
       case "disconnected":
         V().set({ reconnecting: true });
         break;
@@ -211,8 +408,8 @@ async function recoverOrDrop(conn: RTCPeerConnection) {
     V().set({ reconnecting: true });
     try {
       const offer = await conn.createOffer({ iceRestart: true });
-      await conn.setLocalDescription(offer);
-      await sendSignal("offer", peer.id, offer.sdp ?? "");
+      const sdp = await applyLocalDescription(conn, offer);
+      await sendSignal("offer", peer.id, sdp);
       return;
     } catch {
       /* fall through to hang-up */
@@ -237,6 +434,30 @@ function attachRemoteAudio(stream: MediaStream) {
 
 /* ----------------------------- SDP/ICE signaling --------------------------- */
 
+/**
+ * Install a local description after applying the 4K/low-latency SDP tuning.
+ * If an engine rejects the rewritten SDP, retry with the browser's original —
+ * a call with default settings beats no call at all.
+ */
+async function applyLocalDescription(conn: RTCPeerConnection, desc: RTCSessionDescriptionInit): Promise<string> {
+  let tuned: string | null = null;
+  try {
+    tuned = tuneSdp(desc.sdp ?? "", mode);
+  } catch {
+    tuned = null;
+  }
+  if (tuned) {
+    try {
+      await conn.setLocalDescription({ type: desc.type, sdp: tuned });
+      return conn.localDescription?.sdp ?? tuned;
+    } catch {
+      /* retry untouched below */
+    }
+  }
+  await conn.setLocalDescription(desc);
+  return conn.localDescription?.sdp ?? desc.sdp ?? "";
+}
+
 async function flushCandidates(conn: RTCPeerConnection) {
   const queued = pendingCandidates;
   pendingCandidates = [];
@@ -259,8 +480,8 @@ async function handleOffer(sig: RoomSignal) {
   await pc.setRemoteDescription({ type: "offer", sdp: sig.data });
   await flushCandidates(pc);
   const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  const delivered = await sendNegotiation("answer", sig.from, answer.sdp ?? "", true);
+  const sdp = await applyLocalDescription(pc, answer);
+  const delivered = await sendNegotiation("answer", sig.from, sdp, true);
   if (!delivered) throw new Error("signaling");
 }
 
@@ -328,8 +549,84 @@ async function onSignals(signals: RoomSignal[]) {
           return;
       }
     } catch (error) {
-      console.error("voice signal failed", error);
+      console.error("call signal failed", error);
     }
+  }
+}
+
+/* --------------------------- live quality + bitrate ------------------------ */
+
+function startStats(conn: RTCPeerConnection) {
+  stopStats();
+  statsTimer = setInterval(() => void collectStats(conn), 1000);
+  void collectStats(conn);
+}
+
+function stopStats() {
+  if (statsTimer) clearInterval(statsTimer);
+  statsTimer = null;
+  statsBusy = false;
+}
+
+/**
+ * Read the real inbound resolution/fps and the transport RTT, show them, and
+ * steer the send bitrate to the measured available bandwidth. A congested
+ * 4K stream is what produces "video lag": packets queue, so we lower the bits
+ * (keeping 2160p) instead of letting a backlog build up.
+ */
+async function collectStats(conn: RTCPeerConnection) {
+  if (statsBusy || conn.signalingState === "closed") return;
+  statsBusy = true;
+  try {
+    const report = await conn.getStats();
+    let rttMs: number | null = null;
+    let available = 0;
+    let width = 0;
+    let height = 0;
+    let fps = 0;
+    report.forEach((entry) => {
+      if (entry.type === "candidate-pair") {
+        const pair = entry as RTCIceCandidatePairStats;
+        if (pair.state === "succeeded") {
+          if (typeof pair.currentRoundTripTime === "number") rttMs = pair.currentRoundTripTime * 1000;
+          if (typeof pair.availableOutgoingBitrate === "number") available = pair.availableOutgoingBitrate;
+        }
+      } else if (entry.type === "inbound-rtp") {
+        const inbound = entry as RTCInboundRtpStreamStats;
+        if (inbound.kind === "video" && (inbound.frameWidth ?? 0) > 0) {
+          width = inbound.frameWidth ?? 0;
+          height = inbound.frameHeight ?? 0;
+          fps = inbound.framesPerSecond ?? 0;
+        }
+      }
+    });
+    if (!width && camTrack) {
+      const settings = camTrack.getSettings();
+      width = settings.width ?? 0;
+      height = settings.height ?? 0;
+      fps = settings.frameRate ?? 0;
+    }
+    V().set({
+      quality: {
+        width,
+        height,
+        fps,
+        rttMs,
+        bitrateKbps: Math.round(currentBitrate / 1000),
+        label: qualityLabel(width, height),
+      },
+    });
+    if (mode === "video" && videoSender) {
+      const wanted = targetBitrate(available, currentBitrate);
+      if (wanted !== currentBitrate) {
+        currentBitrate = wanted;
+        await applyVideoParameters(videoSender, currentBitrate);
+      }
+    }
+  } catch {
+    /* getStats is informational; never let it disturb a live call */
+  } finally {
+    statsBusy = false;
   }
 }
 
@@ -415,13 +712,19 @@ function stopMeters() {
 function resetStore() {
   V().set({
     status: "idle",
+    mode: "voice",
     micOn: false,
+    camOn: false,
+    musicDucked: false,
     peerId: null,
     peerName: null,
     speaking: false,
     peerSpeaking: false,
     reconnecting: false,
     error: null,
+    localStream: null,
+    remoteStream: null,
+    quality: null,
   });
 }
 
@@ -432,10 +735,15 @@ function teardown() {
     clearTimeout(ringTimer);
     ringTimer = null;
   }
+  stopStats();
   stopMeters();
+  setCallSignalingUrgent(false);
   localStream?.getTracks().forEach((track) => track.stop());
   localStream = null;
   micTrack = null;
+  camTrack = null;
+  videoSender = null;
+  currentBitrate = VIDEO_MAX_BITRATE;
   if (remoteAudio) {
     remoteAudio.srcObject = null;
     remoteAudio.remove();
@@ -458,26 +766,20 @@ function teardown() {
   pendingOffer = null;
   peer = null;
   role = null;
+  mode = "voice";
   restartAttempted = false;
   setMusicDuck(false);
+  V().set({ localStream: null, remoteStream: null, quality: null });
 }
 
 function failCall(message: string) {
   const peerId = peer?.id ?? null;
   teardown();
-  V().set({
-    status: "idle",
-    micOn: false,
-    peerId: null,
-    peerName: null,
-    speaking: false,
-    peerSpeaking: false,
-    reconnecting: false,
-    error: message,
-  });
-  // Release the server-side voice seat so the other side stops ringing.
+  resetStore();
+  V().set({ error: message });
+  // Release the server-side call seat so the other side stops ringing.
   if (peerId) void sendSignal("bye", peerId, "", { leave: true });
-  toast("Voice call unavailable", message, "warn");
+  toast("Call unavailable", message, "warn");
 }
 
 /** POST an offer/answer once, with a single retry for cold starts/flaky mobile networks. */
@@ -490,23 +792,25 @@ async function sendNegotiation(kind: "offer" | "answer", to: string, sdp: string
   return ok;
 }
 
-/** Outgoing call from the room's "Start voice call" button. */
-export async function startCall(peerId: string, peerName: string) {
+/** Outgoing call from the room's "Voice call" / "Video call" buttons. */
+export async function startCall(peerId: string, peerName: string, callMode: CallMode = "voice") {
   const session = useRoom.getState().session;
   if (!session || V().status !== "idle") return;
   if (peerId === session.memberId) return;
   const generation = callGeneration;
   role = "caller";
   peer = { id: peerId, name: peerName };
-  V().set({ status: "requesting", peerId, peerName, micOn: true, error: null, reconnecting: false });
+  mode = callModeOf(callMode);
+  setCallSignalingUrgent(true);
+  V().set({ status: "requesting", mode, peerId, peerName, micOn: true, camOn: false, musicDucked: false, error: null, reconnecting: false });
   try {
     const conn = createPeerConnection();
     pc = conn;
-    await attachMic(conn, generation);
+    await attachMedia(conn, mode, generation);
     if (generation !== callGeneration) return;
     const offer = await conn.createOffer();
-    await conn.setLocalDescription(offer);
-    const ok = await sendNegotiation("offer", peerId, offer.sdp ?? "", true);
+    const sdp = await applyLocalDescription(conn, offer);
+    const ok = await sendNegotiation("offer", peerId, sdp, true);
     if (generation !== callGeneration) return;
     if (!ok) throw new Error("signaling");
     ringTimer = setTimeout(() => failCall("No answer — they may be away"), RING_TIMEOUT_MS);
@@ -515,8 +819,8 @@ export async function startCall(peerId: string, peerName: string) {
     console.error("startCall failed", error);
     failCall(
       error instanceof Error && error.message === "unsupported"
-        ? "This browser does not support microphone calls"
-        : "Couldn't reach the microphone or the room"
+        ? "This browser does not support calls"
+        : "Couldn't reach the microphone/camera or the room"
     );
   }
 }
@@ -530,14 +834,19 @@ export async function acceptCall() {
     failCall("The call offer expired — ask them to call again");
     return;
   }
+  // The SDP itself is authoritative: if the peer negotiated video, open the
+  // camera even when this client somehow missed the room's callMode field.
+  const callMode: CallMode = state.mode === "video" || /(^|\r?\n)m=video /.test(pendingOffer.data) ? "video" : "voice";
   const generation = callGeneration;
   role = "callee";
   peer = { id: state.peerId, name: state.peerName ?? "Listener" };
-  state.set({ status: "connecting", micOn: true, error: null });
+  mode = callMode;
+  setCallSignalingUrgent(true);
+  state.set({ status: "connecting", mode: callMode, micOn: true, error: null });
   try {
     const conn = createPeerConnection();
     pc = conn;
-    await attachMic(conn, generation);
+    await attachMedia(conn, callMode, generation);
     if (generation !== callGeneration) return;
     const offer = pendingOffer;
     pendingOffer = null;
@@ -547,18 +856,19 @@ export async function acceptCall() {
     console.error("acceptCall failed", error);
     failCall(
       error instanceof Error && error.message === "unsupported"
-        ? "This browser does not support microphone calls"
-        : "Couldn't open your microphone"
+        ? "This browser does not support calls"
+        : "Couldn't open your microphone/camera"
     );
   }
 }
 
-/** Decline a ringing call without opening the microphone. */
+/** Decline a ringing call without opening the microphone or camera. */
 export async function declineCall() {
   const state = V();
   if (state.status !== "ringing" || !state.peerId) return;
   await sendSignal("bye", state.peerId, "", { leave: true });
   pendingOffer = null;
+  setCallSignalingUrgent(false);
   resetStore();
 }
 
@@ -579,14 +889,34 @@ export function toggleMic() {
   V().set({ micOn: next, speaking: next ? V().speaking : false });
 }
 
+/** Turn the local camera on/off without renegotiating (the track stays live). */
+export function toggleCam() {
+  if (!camTrack) {
+    toast("Camera unavailable", "No camera was available when this call started", "warn");
+    return;
+  }
+  const next = !V().camOn;
+  camTrack.enabled = next;
+  V().set({ camOn: next });
+}
+
+/** Video calls keep the song at full volume; this is the optional duck switch. */
+export function toggleMusicDuck() {
+  const next = !V().musicDucked;
+  setMusicDuck(next);
+  V().set({ musicDucked: next });
+}
+
 /**
- * Mark the local seat as ringing because another member's voice presence
- * appeared. Driven by the room-state watcher in the VoiceCall UI.
+ * Mark the local seat as ringing because another member's call presence
+ * appeared. Driven by the room-state watcher in the call UI.
  */
-export function markRinging(peerId: string, peerName: string) {
+export function markRinging(peerId: string, peerName: string, callMode: CallMode = "voice") {
   if (V().status !== "idle") return;
   peer = { id: peerId, name: peerName };
-  V().set({ status: "ringing", peerId, peerName, error: null });
+  mode = callModeOf(callMode);
+  setCallSignalingUrgent(true);
+  V().set({ status: "ringing", mode, peerId, peerName, error: null });
 }
 
 /** A ringing call vanished (cancelled before we accepted). */
@@ -594,6 +924,8 @@ export function cancelRinging() {
   if (V().status !== "ringing") return;
   pendingOffer = null;
   peer = null;
+  mode = "voice";
+  setCallSignalingUrgent(false);
   resetStore();
 }
 
@@ -604,7 +936,7 @@ export function resetVoiceCall() {
   resetStore();
 }
 
-/** Clear a stale server-side voice presence for this seat after a reload. */
+/** Clear a stale server-side call presence for this seat after a reload. */
 export async function clearStaleVoicePresence() {
   const session = useRoom.getState().session;
   if (!session) return;

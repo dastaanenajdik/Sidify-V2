@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import {
+  callModeOf,
   memberByToken,
   normalizeCode,
   queueSignal,
@@ -20,12 +21,13 @@ const KINDS = new Set(["offer", "answer", "candidate", "bye"]);
 /**
  * POST /api/rooms/{code}/signal  (header: x-room-token)
  * Body: { kind: "offer"|"answer"|"candidate"|"bye", to?: memberId, data?: string,
- *         join?: boolean, leave?: boolean }
+ *         join?: boolean, leave?: boolean, mode?: "voice"|"video" }
  *
  * The WebRTC signaling relay. It rides the same room document + token auth as
  * chat: envelopes are stored on the room and collected by the recipient's
- * regular 500ms poll. `join`/`leave` flip the sender's voice-call presence so
- * the other seat sees an incoming call / a hang-up even before SDP arrives.
+ * regular 500ms poll. `join`/`leave` flip the sender's call presence so the
+ * other seat sees an incoming call / a hang-up even before SDP arrives; the
+ * first `join` also records whether this is a voice or a 4K video call.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ code: string }> }) {
   const code = normalizeCode((await params).code);
@@ -43,6 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
   const data = typeof body.data === "string" ? body.data : "";
   const joining = body.join === true;
   const leaving = body.leave === true || kind === "bye";
+  const mode = callModeOf(body.mode);
 
   const now = Date.now();
   let me: ReturnType<typeof memberByToken> = null;
@@ -53,7 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
       me = memberByToken(room, token);
       if (!me) return false;
       const touched = touch(room, me.id, now);
-      if (joining) setVoicePresence(room, me.id, true);
+      if (joining) setVoicePresence(room, me.id, true, mode);
       if (leaving) setVoicePresence(room, me.id, false);
       // Queued after the presence flip so a hang-up bye survives the purge of
       // older envelopes and still reaches the other seat on their next poll.

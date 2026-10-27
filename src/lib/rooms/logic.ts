@@ -30,9 +30,14 @@ export const ROOM_LIMITS = {
   chatMessages: 80,
   chatMessageLength: 300,
   /** WebRTC signaling envelopes kept per room while a call is being set up. */
-  voiceSignals: 40,
-  /** SDP blobs are a few KB; leave headroom for trickled candidates bundled late. */
-  signalDataLength: 20_000,
+  voiceSignals: 64,
+  /**
+   * A 4K offer lists every supported video codec, its fmtp parameters and the
+   * transport's ICE candidates; it is comfortably larger than an audio-only
+   * SDP. ~3x a real 4K description, without letting the ephemeral room row
+   * grow without bound. Keep enough headroom that the relay never truncates.
+   */
+  signalDataLength: 48_000,
 } as const;
 
 /** Six characters; no I, L or O, so a code read aloud can't be misheard. */
@@ -82,6 +87,14 @@ export interface RoomChatMessage {
   replyTo?: { id: string; by: string; text: string } | null;
 }
 
+/** Which media a 1:1 room call carries. Voice calls duck the music; video calls do not. */
+export type CallMode = "voice" | "video";
+
+/** Defensive parsing of the mode sent by a client (older clients send nothing). */
+export function callModeOf(value: unknown): CallMode {
+  return value === "video" ? "video" : "voice";
+}
+
 /** WebRTC signaling envelope, relayed through the room's existing polling transport. */
 export type RoomSignalKind = "offer" | "answer" | "candidate" | "bye";
 
@@ -119,8 +132,10 @@ export interface RoomState {
   startedBy: string;
   activity: RoomActivity[];
   chat: RoomChatMessage[];
-  /** Member ids currently in the voice call. Ephemeral, like the chat. */
+  /** Member ids currently in the call (voice or video). Ephemeral, like the chat. */
   voiceCall: string[];
+  /** Media of the current call, set by its first participant. Defaults to voice. */
+  callMode?: CallMode;
   /** Signaling messages waiting to be collected by their recipient. */
   signals: RoomSignal[];
 }
@@ -263,6 +278,7 @@ export function newRoom(opts: {
     activity: [{ at: opts.now, by: host.name, text: "started the room" }],
     chat: [],
     voiceCall: [],
+    callMode: "voice",
     signals: [],
     tokens: { [host.id]: opts.token },
     emptySince: null,
@@ -300,8 +316,9 @@ export function publicRoom(rec: RoomRecord): RoomState {
     // Existing in-memory/database room records created before chat was added
     // remain readable and simply start with an empty chat history.
     chat: rec.chat ?? [],
-    // Voice call state was added later too; older records default to an empty call.
+    // Call state was added later too; older records default to an idle voice call.
     voiceCall: rec.voiceCall ?? [],
+    callMode: callModeOf(rec.callMode),
     signals: rec.signals ?? [],
   };
 }
@@ -373,24 +390,37 @@ export function removeMember(rec: RoomRecord, memberId: string, now: number, rea
     // Room chat is ephemeral: discard it as soon as the last listener goes offline.
     rec.chat = [];
     rec.voiceCall = [];
+    rec.callMode = "voice";
     rec.signals = [];
   }
   bump(rec);
 }
 
-/* -------------------------------- voice call ------------------------------- */
+/* -------------------------------- room calls ------------------------------- */
 
-/** Flip a member's voice-call presence. No-op (returns false) when unchanged. */
-export function setVoicePresence(rec: RoomRecord, memberId: string, on: boolean): boolean {
+/**
+ * Flip a member's call-seat presence. The first seat to join sets the media
+ * mode for the whole 1:1 call (`callMode`), so the recipient's room poll knows
+ * whether to ring as a voice or a video call before any SDP is applied.
+ * No-op (returns false) when unchanged.
+ */
+export function setVoicePresence(rec: RoomRecord, memberId: string, on: boolean, mode?: CallMode): boolean {
   rec.voiceCall ??= [];
   const present = rec.voiceCall.includes(memberId);
   if (on === present) return false;
   rec.voiceCall = on ? [...rec.voiceCall, memberId] : rec.voiceCall.filter((id) => id !== memberId);
-  if (!on) {
+  if (on) {
+    // The caller's `join` envelope arrives first; a late-joining/legacy client
+    // that omits the mode simply starts a normal voice call.
+    if (rec.voiceCall.length === 1) rec.callMode = callModeOf(mode ?? "voice");
+  } else {
     // Leaving a call frees every pending signal addressed to or from this seat.
     rec.signals = (rec.signals ?? []).filter((s) => s.from !== memberId && s.to !== memberId);
     // With nobody left in the call, every remaining envelope is stale.
-    if (rec.voiceCall.length === 0) rec.signals = [];
+    if (rec.voiceCall.length === 0) {
+      rec.signals = [];
+      rec.callMode = "voice";
+    }
   }
   bump(rec);
   return true;
