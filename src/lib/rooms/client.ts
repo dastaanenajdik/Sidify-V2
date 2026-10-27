@@ -49,6 +49,8 @@ interface RoomClientState {
   presence: Record<string, number>;
   /** A persisted room seat can be explicitly resumed after leaving the app. */
   resumePrompt: boolean;
+  /** Latest chat message id the local viewer has read — sent as a read receipt. */
+  seenChatId: string | null;
   set: (p: Partial<RoomClientState>) => void;
 }
 
@@ -63,11 +65,18 @@ export const useRoom = create<RoomClientState>()(
       needsTap: false,
       presence: {},
       resumePrompt: false,
+      seenChatId: null,
       set: (p) => set(p),
     }),
     { name: "sidify-room", skipHydration: true, partialize: (s) => ({ session: s.session }) }
   )
 );
+
+/** Record which chat message the local viewer has read (drives read receipts). */
+export function markSeen(chatId: string | null) {
+  if (R().seenChatId === chatId) return;
+  R().set({ seenChatId: chatId });
+}
 
 const R = () => useRoom.getState();
 
@@ -131,14 +140,28 @@ async function call<T = Record<string, unknown>>(path: string, init?: RequestIni
   const token = R().session?.token;
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (token) headers["x-room-token"] = token;
-  const res = await fetch(path, { ...init, headers: { ...headers, ...(init?.headers as Record<string, string>) }, cache: "no-store" });
-  let data = {} as T;
+  // Every request gets a hard timeout. Without this, a stalled connection (or a
+  // server that accepts but never replies) makes `await fetch` hang forever —
+  // which is exactly what left a chat message stuck on "Sending…".
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    data = (await res.json()) as T;
-  } catch {
-    /* empty */
+    const res = await fetch(path, {
+      ...init,
+      headers: { ...headers, ...(init?.headers as Record<string, string>) },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    let data = {} as T;
+    try {
+      data = (await res.json()) as T;
+    } catch {
+      /* empty */
+    }
+    return { status: res.status, data };
+  } finally {
+    clearTimeout(timeout);
   }
-  return { status: res.status, data };
 }
 
 type RoomReply = {
@@ -392,7 +415,11 @@ async function pollOnce() {
   const t0 = Date.now();
   let res: { status: number; data: RoomReply };
   try {
-    res = await call<RoomReply>(`/api/rooms/${session.code}?since=${lastSeq}`);
+    const seen = R().seenChatId;
+    const url = seen
+      ? `/api/rooms/${session.code}?since=${lastSeq}&seen=${encodeURIComponent(seen)}`
+      : `/api/rooms/${session.code}?since=${lastSeq}`;
+    res = await call<RoomReply>(url);
   } catch {
     failures++;
     if (failures > 1) R().set({ status: "reconnecting" });
@@ -484,7 +511,7 @@ function cleanup(message?: string) {
   stopSync();
   lastSeq = 0;
   samples.length = 0;
-  R().set({ session: null, room: null, status: "idle", needsTap: false, presence: {}, rttMs: null, resumePrompt: false });
+  R().set({ session: null, room: null, status: "idle", needsTap: false, presence: {}, rttMs: null, resumePrompt: false, seenChatId: null });
   usePlayer.getState().set({ isLoading: false, tiers: {} });
   if (message) toast(message, "Your music keeps playing here", "info");
 }
@@ -607,14 +634,14 @@ export function dismissPreviousRoom() {
   void leaveRoom({ quiet: true });
 }
 
-export async function sendRoomChat(text: string, id?: string): Promise<boolean> {
+export async function sendRoomChat(text: string, id?: string, replyToId?: string | null): Promise<boolean> {
   const { session } = R();
   const message = text.trim().slice(0, 300);
   if (!session || !message) return false;
   try {
     const { status, data } = await call<RoomReply>(`/api/rooms/${session.code}/chat`, {
       method: "POST",
-      body: JSON.stringify({ text: message, id }),
+      body: JSON.stringify({ text: message, id, replyToId: replyToId ?? undefined }),
     });
     if (status === 404 || data.ended) {
       cleanup("This room has ended");
@@ -634,6 +661,54 @@ export async function sendRoomChat(text: string, id?: string): Promise<boolean> 
     toast("Couldn't send your message", "Check your connection and try again", "warn");
     return false;
   }
+}
+
+/** Edit a message you sent. Returns true when the server accepted it. */
+export async function editRoomChat(messageId: string, text: string): Promise<boolean> {
+  const { session } = R();
+  const message = text.trim().slice(0, 300);
+  if (!session || !message) return false;
+  try {
+    const { status, data } = await call<RoomReply>(`/api/rooms/${session.code}/chat/${messageId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ text: message }),
+    });
+    if (status === 404 || data.ended) {
+      cleanup("This room has ended");
+      return false;
+    }
+    if (status === 403 && data.removed) {
+      cleanup("You were removed from the room");
+      return false;
+    }
+    if (status >= 400) {
+      toast(data.error || "Couldn't edit that message", undefined, "warn");
+      return false;
+    }
+    if (data.room) receive(data.room, "chat");
+    return true;
+  } catch {
+    toast("Couldn't edit that message", "Check your connection and try again", "warn");
+    return false;
+  }
+}
+
+/**
+ * Wait (polling local room state) until a sent message shows up, or give up.
+ * Used by the composer so a message never lingers on "Sending…": we keep the
+ * optimistic bubble only until the server (echo or next poll) confirms it.
+ */
+export function waitForRoomChatMessage(id: string, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      const chat = R().room?.chat ?? [];
+      if (chat.some((m) => m.id === id)) return resolve(true);
+      if (Date.now() - start > timeoutMs) return resolve(false);
+      setTimeout(tick, 150);
+    };
+    tick();
+  });
 }
 
 export async function sendControl(action: ControlAction): Promise<boolean> {

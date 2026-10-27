@@ -56,6 +56,8 @@ export interface RoomMember {
   name: string;
   joinedAt: number;
   lastSeen: number;
+  /** Latest chat message id this member has scrolled past / read (read receipts). */
+  readUpTo?: string;
 }
 
 export interface RoomActivity {
@@ -70,6 +72,10 @@ export interface RoomChatMessage {
   memberId: string;
   by: string;
   text: string;
+  /** Set when the sender edits the message after sending. */
+  edited?: boolean;
+  /** A quoted message this one replies to, resolved server-side. */
+  replyTo?: { id: string; by: string; text: string } | null;
 }
 
 /** What every member sees. */
