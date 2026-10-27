@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowDown,
   Check,
@@ -34,6 +34,42 @@ const ROOM_EMOJIS = [
   "🙌", "👏", "🫶", "❤️", "🔥", "✨", "🎵",
   "🎧", "🎤", "🎉", "💯", "👍", "👎", "🤘",
 ];
+
+// Turn bare URLs in chat text into clickable links. Trailing punctuation that
+// is usually just sentence-ending (., !, ), …) is kept outside the link.
+const URL_RE = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+const TRAILING_PUNCT = /[.,;:!?)\]}'"`]+$/;
+
+function linkify(text: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(text)) !== null) {
+    const raw = match[0];
+    const trail = raw.match(TRAILING_PUNCT)?.[0] ?? "";
+    const core = raw.slice(0, raw.length - trail.length);
+    if (match.index > last) nodes.push(text.slice(last, match.index));
+    const href = core.startsWith("http") ? core : `https://${core}`;
+    nodes.push(
+      <a
+        key={`link-${key++}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(event) => event.stopPropagation()}
+        className="break-words text-accent underline underline-offset-2 hover:opacity-80"
+      >
+        {core}
+      </a>
+    );
+    if (trail) nodes.push(<span key={`trail-${key++}`}>{trail}</span>);
+    last = match.index + raw.length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
 
 function RoomLyricsBackdrop({
   track,
@@ -343,7 +379,7 @@ export default function RoomChatPanel({
                   {message.replyTo && (
                     <div className="mb-1.5 rounded-[10px] border-l-2 border-accent/60 bg-black/10 py-1 pl-2 pr-2 text-[11px]">
                       <span className="font-semibold text-fg">{mine ? "You" : message.replyTo.by}</span>
-                      <p className="line-clamp-2 text-fg-2">{message.replyTo.text}</p>
+                      <p className="line-clamp-2 break-words text-fg-2">{linkify(message.replyTo.text)}</p>
                     </div>
                   )}
                   {isEditing ? (
@@ -402,7 +438,7 @@ export default function RoomChatPanel({
                         onClick={() => mine && startEditing(message)}
                         className={cx("break-words text-[13px] leading-[1.45] text-fg", mine && "cursor-pointer")}
                       >
-                        {message.text}
+                        {linkify(message.text)}
                       </p>
                     </>
                   )}
