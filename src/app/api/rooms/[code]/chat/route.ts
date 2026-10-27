@@ -13,8 +13,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
   const token = req.headers.get("x-room-token");
   let text = "";
   let messageId = "";
+  let replyToId = "";
   try {
-    const body = (await req.json()) as { text?: unknown; id?: unknown };
+    const body = (await req.json()) as { text?: unknown; id?: unknown; replyToId?: unknown };
+    const replyToRaw = typeof body.replyToId === "string" ? body.replyToId : "";
+    replyToId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(replyToRaw) ? replyToRaw : "";
     text = typeof body.text === "string" ? body.text.replace(/\s+/g, " ").trim().slice(0, ROOM_LIMITS.chatMessageLength) : "";
     messageId = typeof body.id === "string" && /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(body.id) ? body.id : randomUUID();
   } catch {
@@ -35,7 +38,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
       const chat = (room.chat ??= []);
       const alreadySent = chat.some((message) => message.id === messageId && message.memberId === me!.id);
       if (!alreadySent) {
-        chat.push({ id: messageId, at: now, memberId: me.id, by: me.name, text });
+        const replied = replyToId ? chat.find((message) => message.id === replyToId) ?? null : null;
+        chat.push({
+          id: messageId,
+          at: now,
+          memberId: me.id,
+          by: me.name,
+          text,
+          replyTo: replied ? { id: replied.id, by: replied.by, text: replied.text.slice(0, 140) } : null,
+        });
         room.chat = chat.slice(-ROOM_LIMITS.chatMessages);
         room.seq++;
       }
