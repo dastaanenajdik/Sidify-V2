@@ -1,5 +1,5 @@
 import { NextRequest, after } from "next/server";
-import { currentOf, memberByToken, needsFill, normalizeCode, sweep, touch, type RoomMember } from "@/lib/rooms/logic";
+import { currentOf, memberByToken, needsFill, normalizeCode, sweep, takeSignals, touch, type RoomMember, type RoomSignal } from "@/lib/rooms/logic";
 import { roomStore } from "@/lib/rooms/store";
 import { fillAutoplay, json, roomPayload } from "@/lib/rooms/server";
 
@@ -20,6 +20,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ code
   const since = Number(req.nextUrl.searchParams.get("since") || 0);
   const now = Date.now();
   let me: RoomMember | null = null;
+  let incoming: RoomSignal[] = [];
 
   let rec;
   try {
@@ -27,7 +28,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ code
       const swept = sweep(r, now);
       me = memberByToken(r, token);
       const touched = me ? touch(r, me.id, now) : false;
-      return swept || touched;
+      // Deliver any WebRTC envelopes addressed to this seat and clear them.
+      if (me) incoming = takeSignals(r, me.id);
+      return swept || touched || incoming.length > 0;
     });
   } catch (e) {
     console.error("room read failed", e);
@@ -58,8 +61,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ code
     return json({
       changed: false,
       presence: rec.members.map((m) => [m.id, Math.max(0, now - m.lastSeen)]),
+      signals: incoming,
       serverMs: Date.now(),
     });
   }
-  return json(roomPayload(rec, me, { changed: true }));
+  return json(roomPayload(rec, me, { changed: true, signals: incoming }));
 }

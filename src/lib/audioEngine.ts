@@ -134,6 +134,24 @@ function createDeck(i: number): Deck {
   return { el, filters, postGain, trackId: null };
 }
 
+/**
+ * Multiplier applied to every music output while a room voice call is live,
+ * so the caller's voice stays intelligible under the shared playback. 1 = no
+ * ducking; the voice engine flips this via setMusicDuck().
+ */
+let musicDuck = 1;
+
+export function setMusicDuck(on: boolean) {
+  const next = on ? 0.22 : 1;
+  if (next === musicDuck) return;
+  musicDuck = next;
+  applySettings();
+}
+
+export function isMusicDucked() {
+  return musicDuck < 1;
+}
+
 export function applySettings() {
   const s = S();
   const p = P();
@@ -144,10 +162,10 @@ export function applySettings() {
       d.el.playbackRate = p.speed;
     }
     const normFactor = s.normalization ? 0.82 : 1;
-    master!.gain.setTargetAtTime(p.volume * normFactor, actx.currentTime, 0.03);
+    master!.gain.setTargetAtTime(p.volume * normFactor * musicDuck, actx.currentTime, 0.08);
     panner!.pan.setTargetAtTime(s.balance, actx.currentTime, 0.03);
   }
-  ytController.setVolume(p.volume);
+  ytController.setVolume(p.volume * musicDuck);
   ytController.setRate(p.speed);
 }
 

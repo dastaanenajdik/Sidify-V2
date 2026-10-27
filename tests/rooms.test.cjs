@@ -176,3 +176,78 @@ test('tracks are sanitised: bad ids, missing titles and odd artwork are rejected
   assert.equal(t.durationMs, 0);
   assert.equal(L.cleanName('   '), 'Listener');
 });
+
+/* ------------------------------- voice calls ------------------------------ */
+
+test('voice call: presence flips, is idempotent and purges signals on leave', () => {
+  const rec = room();
+  const seq0 = rec.seq;
+  assert.deepEqual(rec.voiceCall, []);
+  assert.deepEqual(rec.signals, []);
+
+  assert.equal(L.setVoicePresence(rec, 'host', true), true);
+  assert.deepEqual(rec.voiceCall, ['host']);
+  assert.ok(rec.seq > seq0);
+  const seq1 = rec.seq;
+  assert.equal(L.setVoicePresence(rec, 'host', true), false, 'already present is a no-op');
+  assert.equal(rec.seq, seq1);
+
+  L.setVoicePresence(rec, 'guest', true);
+  const sig = { id: 's1', at: 1_000_100, from: 'host', to: 'guest', kind: 'offer', data: 'sdp' };
+  assert.ok(L.queueSignal(rec, sig));
+  assert.equal(L.takeSignals(rec, 'host').length, 0, 'only the recipient can collect');
+  const mine = L.takeSignals(rec, 'guest');
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].id, 's1');
+  assert.equal(L.takeSignals(rec, 'guest').length, 0, 'collecting removes the envelope');
+
+  L.queueSignal(rec, { id: 's2', at: 1_000_101, from: 'guest', to: 'host', kind: 'answer', data: 'sdp' });
+  L.setVoicePresence(rec, 'host', false);
+  assert.deepEqual(rec.voiceCall, ['guest']);
+  assert.equal(rec.signals.length, 0, 'leaving frees every envelope to/from the seat');
+
+  L.queueSignal(rec, { id: 's3', at: 1_000_102, from: 'guest', to: 'host', kind: 'bye', data: '' });
+  L.setVoicePresence(rec, 'guest', false);
+  assert.deepEqual(rec.voiceCall, []);
+  assert.deepEqual(rec.signals, [], 'the last seat leaving purges every stale envelope');
+});
+
+test('voice signals: kinds, seats and payload size are validated, and the buffer is capped', () => {
+  const rec = room();
+  const base = { id: 's', at: 1, from: 'host', to: 'guest', data: 'd' };
+  assert.equal(L.queueSignal(rec, { ...base, kind: 'nope' }), null);
+  assert.equal(L.queueSignal(rec, { ...base, kind: 'offer', from: 'ghost' }), null);
+  assert.equal(L.queueSignal(rec, { ...base, kind: 'offer', to: 'host' }), null, 'cannot signal yourself');
+  assert.equal(L.queueSignal(rec, { ...base, kind: 'candidate', data: '' }), null);
+  assert.ok(L.queueSignal(rec, { ...base, kind: 'bye', data: '' }), 'a hang-up needs no payload');
+  assert.equal(L.queueSignal(rec, { ...base, kind: 'candidate', data: 'x'.repeat(20_001) }), null);
+  assert.ok(L.queueSignal(rec, { ...base, kind: 'candidate', data: 'x'.repeat(20_000) }));
+
+  for (let i = 0; i < 45; i++) {
+    L.queueSignal(rec, { id: `q${i}`, at: 10 + i, from: 'host', to: 'guest', kind: 'candidate', data: String(i) });
+  }
+  assert.equal(rec.signals.length, L.ROOM_LIMITS.voiceSignals);
+  assert.equal(rec.signals[rec.signals.length - 1].id, 'q44', 'oldest envelopes drop first');
+});
+
+test('voice call: removing a member clears their seat and pending signals', () => {
+  const rec = room();
+  L.setVoicePresence(rec, 'host', true);
+  L.setVoicePresence(rec, 'guest', true);
+  L.queueSignal(rec, { id: 'a', at: 2, from: 'host', to: 'guest', kind: 'offer', data: 'sdp' });
+  L.queueSignal(rec, { id: 'b', at: 3, from: 'guest', to: 'host', kind: 'answer', data: 'sdp' });
+  assert.equal(rec.signals.length, 2);
+
+  L.removeMember(rec, 'guest', 1_000_500, 'left');
+  assert.deepEqual(rec.voiceCall, ['host']);
+  assert.equal(rec.signals.length, 0);
+});
+
+test('voice call: publicRoom defaults voice state for older records', () => {
+  const rec = room();
+  delete rec.voiceCall;
+  delete rec.signals;
+  const pub = L.publicRoom(rec);
+  assert.deepEqual(pub.voiceCall, []);
+  assert.deepEqual(pub.signals, []);
+});
