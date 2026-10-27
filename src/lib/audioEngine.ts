@@ -135,14 +135,15 @@ function createDeck(i: number): Deck {
 }
 
 /**
- * Multiplier applied to every music output while a room voice call is live,
- * so the caller's voice stays intelligible under the shared playback. 1 = no
- * ducking; the voice engine flips this via setMusicDuck().
+ * Multiplier applied to every music output while a room call is live. Voice
+ * calls duck the shared playback to 22% so speech stays intelligible; video
+ * calls deliberately leave it at 1 so the song keeps playing at full volume.
+ * 1 = no ducking; the call engine flips this via setMusicDuck().
  */
 let musicDuck = 1;
 
-export function setMusicDuck(on: boolean) {
-  const next = on ? 0.22 : 1;
+export function setMusicDuck(on: boolean, level = 0.22) {
+  const next = on ? level : 1;
   if (next === musicDuck) return;
   musicDuck = next;
   applySettings();

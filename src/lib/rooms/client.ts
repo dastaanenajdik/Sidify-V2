@@ -186,15 +186,28 @@ type RoomReply = {
 type IncomingSignalHandler = (signals: RoomSignal[]) => void;
 let signalHandler: IncomingSignalHandler | null = null;
 
-/** The voice-call engine registers here so poll-delivered signals reach it. */
+/** The call engine registers here so poll-delivered signals reach it. */
 export function setIncomingSignalHandler(fn: IncomingSignalHandler | null) {
   signalHandler = fn;
+}
+
+/**
+ * WebRTC's offer/answer/ICE envelopes ride this poll. During call setup (and
+ * only then) the engine asks for ~60ms polls instead of 500ms, so SDP and
+ * trickled candidates are exchanged in one round trip's worth of time rather
+ * than a second or more. Normal sync cadence resumes as soon as the call is
+ * live or torn down.
+ */
+export function setCallSignalingUrgent(on: boolean) {
+  urgentUntil = on ? Date.now() + 30_000 : 0;
+  if (on && R().session && syncing) schedulePoll(0);
 }
 
 /* ------------------------------- sync state -------------------------------- */
 
 let lastSeq = 0;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let urgentUntil = 0;
 let reconcileTimer: ReturnType<typeof setInterval> | null = null;
 let startTimer: ReturnType<typeof setTimeout> | null = null;
 let holdUntil = 0;
@@ -468,7 +481,9 @@ function schedulePoll(delay: number) {
     if (!R().session) return;
     const visible = typeof document === "undefined" || document.visibilityState === "visible";
     const base = visible ? 500 : 2500;
-    schedulePoll(failures ? Math.min(6000, base * (1 + failures)) : base);
+    const urgent = visible && urgentUntil > Date.now();
+    const delay = failures ? Math.min(6000, base * (1 + failures)) : urgent ? 60 : base;
+    schedulePoll(delay);
   }, delay);
 }
 
@@ -511,6 +526,7 @@ function startSync() {
 
 function stopSync() {
   syncing = false;
+  urgentUntil = 0;
   setRoomBridge(null);
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;

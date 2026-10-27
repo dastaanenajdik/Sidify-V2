@@ -220,14 +220,19 @@ test('voice signals: kinds, seats and payload size are validated, and the buffer
   assert.equal(L.queueSignal(rec, { ...base, kind: 'offer', to: 'host' }), null, 'cannot signal yourself');
   assert.equal(L.queueSignal(rec, { ...base, kind: 'candidate', data: '' }), null);
   assert.ok(L.queueSignal(rec, { ...base, kind: 'bye', data: '' }), 'a hang-up needs no payload');
-  assert.equal(L.queueSignal(rec, { ...base, kind: 'candidate', data: 'x'.repeat(20_001) }), null);
-  assert.ok(L.queueSignal(rec, { ...base, kind: 'candidate', data: 'x'.repeat(20_000) }));
+  const limit = L.ROOM_LIMITS.signalDataLength;
+  assert.equal(L.queueSignal(rec, { ...base, kind: 'candidate', data: 'x'.repeat(limit + 1) }), null);
+  assert.ok(
+    L.queueSignal(rec, { ...base, kind: 'candidate', data: 'x'.repeat(limit) }),
+    'a 4K offer with every video codec fits in one envelope'
+  );
 
-  for (let i = 0; i < 45; i++) {
+  const n = L.ROOM_LIMITS.voiceSignals + 5;
+  for (let i = 0; i < n; i++) {
     L.queueSignal(rec, { id: `q${i}`, at: 10 + i, from: 'host', to: 'guest', kind: 'candidate', data: String(i) });
   }
   assert.equal(rec.signals.length, L.ROOM_LIMITS.voiceSignals);
-  assert.equal(rec.signals[rec.signals.length - 1].id, 'q44', 'oldest envelopes drop first');
+  assert.equal(rec.signals[rec.signals.length - 1].id, `q${n - 1}`, 'oldest envelopes drop first');
 });
 
 test('voice call: removing a member clears their seat and pending signals', () => {
@@ -246,10 +251,42 @@ test('voice call: removing a member clears their seat and pending signals', () =
 test('voice call: publicRoom defaults voice state for older records', () => {
   const rec = room();
   delete rec.voiceCall;
+  delete rec.callMode;
   delete rec.signals;
   const pub = L.publicRoom(rec);
   assert.deepEqual(pub.voiceCall, []);
+  assert.equal(pub.callMode, 'voice', 'records from before video calls ring as voice calls');
   assert.deepEqual(pub.signals, []);
+});
+
+test('video calls: the first seat sets callMode and the last seat leaving resets it', () => {
+  const rec = room();
+  assert.equal(L.callModeOf(undefined), 'voice', 'legacy clients start voice calls');
+  assert.equal(L.callModeOf('video'), 'video');
+  assert.equal(L.callModeOf('nonsense'), 'voice');
+
+  L.setVoicePresence(rec, 'host', true, 'video');
+  assert.equal(rec.callMode, 'video', 'caller publishes that this is a 4K video call');
+  assert.equal(L.publicRoom(rec).callMode, 'video', 'the recipient sees it on their next poll');
+
+  L.setVoicePresence(rec, 'guest', true, 'voice');
+  assert.equal(rec.callMode, 'video', 'a late/legacy answerer cannot downgrade the call mode');
+
+  L.setVoicePresence(rec, 'host', false);
+  assert.equal(rec.callMode, 'video', 'mode survives while one seat is still in the call');
+  L.setVoicePresence(rec, 'guest', false);
+  assert.equal(rec.callMode, 'voice', 'mode is cleared for the next call');
+  assert.deepEqual(rec.signals, []);
+});
+
+test('video calls: removing the last member clears callMode', () => {
+  const rec = room();
+  L.setVoicePresence(rec, 'host', true, 'video');
+  L.setVoicePresence(rec, 'guest', true, 'video');
+  L.removeMember(rec, 'guest', 1_000_500, 'left');
+  L.removeMember(rec, 'host', 1_000_600, 'left');
+  assert.equal(rec.callMode, 'voice');
+  assert.deepEqual(rec.voiceCall, []);
 });
 
 test('voice presence watcher: ringing out must not end while the peer is still in the room', () => {

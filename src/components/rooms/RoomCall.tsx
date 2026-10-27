@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Loader2, Mic, MicOff, Phone, PhoneOff } from "lucide-react";
+import { Loader2, Mic, MicOff, Phone, PhoneOff, Video } from "lucide-react";
 import { useRoom } from "@/lib/rooms/client";
 import {
   acceptCall,
@@ -19,16 +19,20 @@ import {
 import { decideVoicePresenceAction, type RoomState } from "@/lib/rooms/logic";
 import { useUi } from "@/store/ui";
 import { cx } from "@/lib/format";
+import { VideoCallLive } from "./VideoStage";
 
 /**
- * Drives the 1:1 voice call from room presence (room.voiceCall) and renders
- * the call bar under the room hero. Signaling rides the room poll, so this
- * only reacts to state — it never opens a connection of its own.
+ * Drives the 1:1 room call — voice or 4K video — from room presence
+ * (room.voiceCall / room.callMode) and renders the call panel under the room
+ * hero. Signaling rides the room poll, so this only reacts to state; it never
+ * opens a connection of its own.
  */
-export function VoiceCallController({ room, you }: { room: RoomState; you: string }) {
+export function RoomCallController({ room, you }: { room: RoomState; you: string }) {
   const status = useVoice((s) => s.status);
+  const mode = useVoice((s) => s.mode);
   const peerId = useVoice((s) => s.peerId);
   const session = useRoom((s) => s.session);
+  const callMode = room.callMode ?? "voice";
 
   // Connect the room poll's signal delivery to the WebRTC engine.
   useEffect(() => mountVoiceEngine(), []);
@@ -53,9 +57,9 @@ export function VoiceCallController({ room, you }: { room: RoomState; you: strin
         void clearStaleVoicePresence();
         break;
       case "ring": {
-        // Incoming call: another seat's voice presence appeared while we are idle.
+        // Incoming call: another seat's call presence appeared while we are idle.
         const caller = room.members.find((m) => m.id !== you && voiceCall.includes(m.id));
-        if (caller) markRinging(caller.id, caller.name);
+        if (caller) markRinging(caller.id, caller.name, callMode);
         break;
       }
       case "cancel-ring":
@@ -64,7 +68,7 @@ export function VoiceCallController({ room, you }: { room: RoomState; you: strin
         break;
       case "end-left-room":
       case "end-left-call":
-        // Backstop for a missed bye: the peer's seat or voice presence vanished.
+        // Backstop for a missed bye: the peer's seat or call presence vanished.
         resetVoiceCall();
         useUi.getState().pushToast({
           title: "Call ended",
@@ -75,53 +79,70 @@ export function VoiceCallController({ room, you }: { room: RoomState; you: strin
       case "none":
         break;
     }
-  }, [room.voiceCall, room.members, status, you, peerId]);
+  }, [room.voiceCall, room.members, room.callMode, status, you, peerId, callMode]);
 
   const other = room.members.find((m) => m.id !== you) ?? null;
 
   return (
-    <section aria-label="Voice call" className="overflow-hidden rounded-[18px] bg-raised ring-1 ring-edge">
-      {status === "idle" && (
-        <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
-          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand/15 text-brand">
-            <Phone size={18} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[14px] font-semibold">Voice call</p>
-            <p className="truncate text-[12px] text-fg-2">
-              {other ? `Talk with ${other.name} — music dips automatically while you chat` : "Waiting for someone to join the room"}
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={!other}
-            onClick={() => other && void startCall(other.id, other.name)}
-            className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full bg-[#1faf55] px-4 text-[13.5px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-          >
-            <Phone size={16} /> Start call
-          </button>
-        </div>
-      )}
-
-      {status === "ringing" && <RingingBar />}
-      {(status === "requesting" || status === "connecting") && <PendingBar connecting={status === "connecting"} />}
-      {status === "live" && <LiveBar />}
+    <section aria-label="Room call" className="overflow-hidden rounded-[18px] bg-raised ring-1 ring-edge">
+      {status === "idle" && <IdleBar other={other} />}
+      {status === "ringing" && <RingingBar video={mode === "video"} />}
+      {(status === "requesting" || status === "connecting") && <PendingBar connecting={status === "connecting"} video={mode === "video"} />}
+      {status === "live" && (mode === "video" ? <VideoCallLive /> : <LiveBar />)}
     </section>
   );
 }
 
-function RingingBar() {
+function IdleBar({ other }: { other: { id: string; name: string } | null }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand/15 text-brand">
+        <Video size={18} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[14px] font-semibold">Call</p>
+        <p className="truncate text-[12px] text-fg-2">
+          {other ? `Talk with ${other.name} — voice or 4K video, the song keeps playing` : "Waiting for someone to join the room"}
+        </p>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={!other}
+          onClick={() => other && void startCall(other.id, other.name, "voice")}
+          className="inline-flex h-10 items-center gap-2 rounded-full bg-fill-2 px-3.5 text-[13px] font-bold transition-opacity hover:opacity-80 disabled:opacity-40"
+        >
+          <Phone size={15} /> Voice
+        </button>
+        <button
+          type="button"
+          disabled={!other}
+          onClick={() => other && void startCall(other.id, other.name, "video")}
+          className="inline-flex h-10 items-center gap-2 rounded-full bg-[#1faf55] px-3.5 text-[13px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+        >
+          <Video size={15} /> Video · 4K
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RingingBar({ video }: { video: boolean }) {
   const peerName = useVoice((s) => s.peerName);
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
       <span className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#1faf55]/15 text-[#1faf55]">
-        <Phone size={18} />
+        {video ? <Video size={18} /> : <Phone size={18} />}
         <span className="absolute -top-0.5 -right-0.5 h-3 w-3 animate-ping rounded-full bg-[#1faf55]/70" />
         <span className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-[#1faf55]" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[14px] font-semibold">{peerName ?? "Someone"} is calling…</p>
-        <p className="text-[12px] text-fg-2">Your mic stays off until you accept</p>
+        <p className="truncate text-[14px] font-semibold">
+          {peerName ?? "Someone"} is {video ? "video calling" : "calling"}…
+        </p>
+        <p className="text-[12px] text-fg-2">
+          {video ? "4K camera · your mic and camera stay off until you accept" : "Your mic stays off until you accept"}
+        </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <button
@@ -138,14 +159,14 @@ function RingingBar() {
           aria-label="Accept call"
           className="grid h-11 w-11 place-items-center rounded-full bg-[#1faf55] text-white transition-transform hover:scale-105 active:scale-95"
         >
-          <Phone size={18} />
+          {video ? <Video size={18} /> : <Phone size={18} />}
         </button>
       </div>
     </div>
   );
 }
 
-function PendingBar({ connecting }: { connecting: boolean }) {
+function PendingBar({ connecting, video }: { connecting: boolean; video: boolean }) {
   const peerName = useVoice((s) => s.peerName);
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
@@ -153,8 +174,12 @@ function PendingBar({ connecting }: { connecting: boolean }) {
         <Loader2 size={18} className="animate-spin" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[14px] font-semibold">{connecting ? `Connecting with ${peerName ?? ""}…` : `Ringing ${peerName ?? ""}…`}</p>
-        <p className="text-[12px] text-fg-2">{connecting ? "Exchanging secure audio" : "Free peer-to-peer voice · no call charges"}</p>
+        <p className="truncate text-[14px] font-semibold">
+          {connecting ? `Connecting with ${peerName ?? ""}…` : `Ringing ${peerName ?? ""}…`}
+        </p>
+        <p className="text-[12px] text-fg-2">
+          {video ? "4K peer-to-peer · low latency · music keeps playing" : "Free peer-to-peer voice · no call charges"}
+        </p>
       </div>
       <button
         type="button"
@@ -196,7 +221,7 @@ function LiveBar() {
       <div className="flex shrink-0 items-center gap-2">
         <button
           type="button"
-          onClick={() => toggleMic()}
+          onClick={toggleMic}
           aria-label={micOn ? "Mute microphone" : "Unmute microphone"}
           aria-pressed={!micOn}
           className={cx(
@@ -219,8 +244,8 @@ function LiveBar() {
   );
 }
 
-/** Small phone glyph with a talking pulse, used in the room's People list. */
-export function VoicePresenceBadge({ memberId }: { memberId: string }) {
+/** Small call glyph with a talking pulse, used in the room's People list. */
+export function CallPresenceBadge({ memberId }: { memberId: string }) {
   const room = useRoom((s) => s.room);
   const session = useRoom((s) => s.session);
   const status = useVoice((s) => s.status);
@@ -228,19 +253,20 @@ export function VoicePresenceBadge({ memberId }: { memberId: string }) {
   const speaking = useVoice((s) => s.speaking);
   const peerSpeaking = useVoice((s) => s.peerSpeaking);
   if (!room || !(room.voiceCall ?? []).includes(memberId)) return null;
+  const video = room.callMode === "video";
   const isMe = session?.memberId === memberId;
   const talking = isMe ? speaking : memberId === peerId && status === "live" && peerSpeaking;
   return (
     <span
-      aria-label={talking ? "Speaking now" : "In voice call"}
+      aria-label={talking ? "Speaking now" : video ? "In video call" : "In voice call"}
       className={cx(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-bold",
         talking ? "bg-[#1faf55]/15 text-[#1faf55]" : "bg-fill text-fg-2"
       )}
     >
       <span className={cx("h-1.5 w-1.5 rounded-full", talking ? "animate-pulse bg-[#1faf55]" : "bg-fg-2")} />
-      <Phone size={11} />
-      Voice
+      {video ? <Video size={11} /> : <Phone size={11} />}
+      {video ? "Video" : "Voice"}
     </span>
   );
 }

@@ -18,7 +18,7 @@ import { cx, formatTime, timeAgo } from "@/lib/format";
 import MeshBackdrop from "@/components/MeshBackdrop";
 import QueueList from "@/components/player/QueueList";
 import RoomChatPanel from "@/components/rooms/RoomChatPanel";
-import { VoiceCallController, VoicePresenceBadge } from "@/components/rooms/VoiceCall";
+import { RoomCallController, CallPresenceBadge } from "@/components/rooms/RoomCall";
 import { Artwork, Button, ButtonLink, EmptyState, IconButton, Sheet, Skeleton, Switch } from "@/components/ui";
 import { BackwardGlyph, ForwardGlyph, PauseGlyph, PeopleGlyph, PlayGlyph } from "@/components/icons";
 import type { Track } from "@/lib/types";
@@ -272,7 +272,7 @@ function RoomView({ room, you }: { room: RoomState; you: string }) {
       </div>
 
       <div className="mx-4 mt-4 space-y-4 desk:mx-8 desk:mt-6">
-        <VoiceCallController room={room} you={you} />
+        <RoomCallController room={room} you={you} />
         <RoomChatPanel room={room} you={you} feedClassName="max-h-[230px] min-h-[100px] desk:max-h-[280px]" />
       </div>
 
@@ -313,7 +313,7 @@ function RoomView({ room, you }: { room: RoomState; you: string }) {
                         <span className="truncate">{m.name}</span>
                         {m.id === you && <span className="rounded-full bg-fill-2 px-1.5 py-[1px] text-[10px] font-bold text-fg-2">You</span>}
                         {m.id === room.hostId && <Crown size={13} className="shrink-0 text-[#f5c451]" aria-label="Host" />}
-                        <VoicePresenceBadge memberId={m.id} />
+                        <CallPresenceBadge memberId={m.id} />
                       </div>
                       <div className="text-[12px] text-fg-2">{away ? "Away — their spot is held" : m.id === room.hostId ? "Host" : `Joined ${timeAgo(m.joinedAt)}`}</div>
                     </div>
