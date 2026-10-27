@@ -92,6 +92,12 @@ let pendingCandidates: RTCIceCandidateInit[] = [];
 let pendingOffer: RoomSignal | null = null;
 let ringTimer: ReturnType<typeof setTimeout> | null = null;
 let restartAttempted = false;
+/**
+ * Bumped on every teardown so an async start/accept flow that was awaiting
+ * (mic prompt, SDP, fetch) knows it belongs to a dead call and bails quietly
+ * instead of touching a closed peer connection or re-opening the mic.
+ */
+let callGeneration = 0;
 
 let meterCtx: AudioContext | null = null;
 let localAnalyser: AnalyserNode | null = null;
@@ -135,8 +141,14 @@ async function openMicrophone(): Promise<MediaStream> {
   }
 }
 
-async function attachMic(peerConn: RTCPeerConnection) {
+async function attachMic(peerConn: RTCPeerConnection, generation: number) {
   const stream = await openMicrophone();
+  if (generation !== callGeneration) {
+    // The call was torn down while the permission prompt was open: release
+    // the stream the user just granted so no mic light stays on.
+    stream.getTracks().forEach((track) => track.stop());
+    throw new Error("stale");
+  }
   localStream = stream;
   micTrack = stream.getAudioTracks()[0] ?? null;
   if (micTrack && "contentHint" in micTrack) micTrack.contentHint = "speech";
@@ -248,7 +260,8 @@ async function handleOffer(sig: RoomSignal) {
   await flushCandidates(pc);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
-  await sendSignal("answer", sig.from, answer.sdp ?? "", { join: true });
+  const delivered = await sendNegotiation("answer", sig.from, answer.sdp ?? "", true);
+  if (!delivered) throw new Error("signaling");
 }
 
 async function handleAnswer(sig: RoomSignal) {
@@ -332,21 +345,30 @@ function ensureMeterContext(): AudioContext {
 }
 
 function setupLocalMeter(stream: MediaStream) {
-  const ctx = ensureMeterContext();
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 512;
-  ctx.createMediaStreamSource(stream).connect(analyser);
-  localAnalyser = analyser;
-  startMeterLoop();
+  try {
+    const ctx = ensureMeterContext();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    localAnalyser = analyser;
+    startMeterLoop();
+  } catch (error) {
+    // Speaking indicators are optional; a missing AudioContext must not kill the call.
+    console.warn("local voice meter unavailable", error);
+  }
 }
 
 function setupRemoteMeter(stream: MediaStream) {
-  const ctx = ensureMeterContext();
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 512;
-  ctx.createMediaStreamSource(stream).connect(analyser);
-  remoteAnalyser = analyser;
-  startMeterLoop();
+  try {
+    const ctx = ensureMeterContext();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    remoteAnalyser = analyser;
+    startMeterLoop();
+  } catch (error) {
+    console.warn("remote voice meter unavailable", error);
+  }
 }
 
 function level(analyser: AnalyserNode | null): number {
@@ -404,6 +426,8 @@ function resetStore() {
 }
 
 function teardown() {
+  // Invalidate any start/accept flow still awaiting a mic or fetch below us.
+  callGeneration++;
   if (ringTimer) {
     clearTimeout(ringTimer);
     ringTimer = null;
@@ -456,24 +480,38 @@ function failCall(message: string) {
   toast("Voice call unavailable", message, "warn");
 }
 
+/** POST an offer/answer once, with a single retry for cold starts/flaky mobile networks. */
+async function sendNegotiation(kind: "offer" | "answer", to: string, sdp: string, join: boolean): Promise<boolean> {
+  let ok = await sendSignal(kind, to, sdp, join ? { join: true } : undefined);
+  if (!ok) {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    ok = await sendSignal(kind, to, sdp, join ? { join: true } : undefined);
+  }
+  return ok;
+}
+
 /** Outgoing call from the room's "Start voice call" button. */
 export async function startCall(peerId: string, peerName: string) {
   const session = useRoom.getState().session;
   if (!session || V().status !== "idle") return;
   if (peerId === session.memberId) return;
+  const generation = callGeneration;
   role = "caller";
   peer = { id: peerId, name: peerName };
   V().set({ status: "requesting", peerId, peerName, micOn: true, error: null, reconnecting: false });
   try {
     const conn = createPeerConnection();
     pc = conn;
-    await attachMic(conn);
+    await attachMic(conn, generation);
+    if (generation !== callGeneration) return;
     const offer = await conn.createOffer();
     await conn.setLocalDescription(offer);
-    const ok = await sendSignal("offer", peerId, offer.sdp ?? "", { join: true });
+    const ok = await sendNegotiation("offer", peerId, offer.sdp ?? "", true);
+    if (generation !== callGeneration) return;
     if (!ok) throw new Error("signaling");
     ringTimer = setTimeout(() => failCall("No answer — they may be away"), RING_TIMEOUT_MS);
   } catch (error) {
+    if (generation !== callGeneration) return;
     console.error("startCall failed", error);
     failCall(
       error instanceof Error && error.message === "unsupported"
@@ -487,19 +525,31 @@ export async function startCall(peerId: string, peerName: string) {
 export async function acceptCall() {
   const state = V();
   if (state.status !== "ringing" || !state.peerId) return;
+  // The offer must be waiting already; without it negotiation can never start.
+  if (!pendingOffer) {
+    failCall("The call offer expired — ask them to call again");
+    return;
+  }
+  const generation = callGeneration;
   role = "callee";
   peer = { id: state.peerId, name: state.peerName ?? "Listener" };
   state.set({ status: "connecting", micOn: true, error: null });
   try {
     const conn = createPeerConnection();
     pc = conn;
-    await attachMic(conn);
+    await attachMic(conn, generation);
+    if (generation !== callGeneration) return;
     const offer = pendingOffer;
     pendingOffer = null;
     if (offer) await handleOffer(offer);
   } catch (error) {
+    if (generation !== callGeneration) return;
     console.error("acceptCall failed", error);
-    failCall("Couldn't open your microphone");
+    failCall(
+      error instanceof Error && error.message === "unsupported"
+        ? "This browser does not support microphone calls"
+        : "Couldn't open your microphone"
+    );
   }
 }
 

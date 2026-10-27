@@ -16,7 +16,7 @@ import {
   toggleMic,
   useVoice,
 } from "@/lib/rooms/voice";
-import type { RoomState } from "@/lib/rooms/logic";
+import { decideVoicePresenceAction, type RoomState } from "@/lib/rooms/logic";
 import { useUi } from "@/store/ui";
 import { cx } from "@/lib/format";
 
@@ -40,32 +40,40 @@ export function VoiceCallController({ room, you }: { room: RoomState; you: strin
 
   useEffect(() => {
     const voiceCall = room.voiceCall ?? [];
-    const others = room.members.filter((m) => m.id !== you && voiceCall.includes(m.id));
-    const iAmListed = voiceCall.includes(you);
-
-    // Reload recovery: our seat is still listed server-side but the engine is
-    // fresh and nobody else is calling — clear the stale presence.
-    if (iAmListed && status === "idle" && others.length === 0) {
-      void clearStaleVoicePresence();
-      return;
-    }
-    // Incoming call: another seat's voice presence appeared while we are idle.
-    if (status === "idle" && others.length > 0) {
-      markRinging(others[0].id, others[0].name);
-      return;
-    }
-    // They cancelled before we answered.
-    if (status === "ringing" && peerId && !voiceCall.includes(peerId)) {
-      cancelRinging();
-      return;
-    }
-    // Backstop for a missed bye: the peer's seat or voice presence vanished.
-    if ((status === "requesting" || status === "connecting" || status === "live") && peerId) {
-      const stillThere = room.members.some((m) => m.id === peerId) && voiceCall.includes(peerId);
-      if (!stillThere) {
-        resetVoiceCall();
-        useUi.getState().pushToast({ title: "Call ended", desc: "The other listener left the call", kind: "info" });
+    const action = decideVoicePresenceAction({
+      status,
+      peerId,
+      you,
+      members: room.members,
+      voiceCall,
+    });
+    switch (action) {
+      case "clear-stale":
+        // Reload recovery: our seat is still listed server-side with a fresh engine.
+        void clearStaleVoicePresence();
+        break;
+      case "ring": {
+        // Incoming call: another seat's voice presence appeared while we are idle.
+        const caller = room.members.find((m) => m.id !== you && voiceCall.includes(m.id));
+        if (caller) markRinging(caller.id, caller.name);
+        break;
       }
+      case "cancel-ring":
+        // They cancelled before we answered.
+        cancelRinging();
+        break;
+      case "end-left-room":
+      case "end-left-call":
+        // Backstop for a missed bye: the peer's seat or voice presence vanished.
+        resetVoiceCall();
+        useUi.getState().pushToast({
+          title: "Call ended",
+          desc: action === "end-left-room" ? "The other listener left the room" : "The other listener left the call",
+          kind: "info",
+        });
+        break;
+      case "none":
+        break;
     }
   }, [room.voiceCall, room.members, status, you, peerId]);
 

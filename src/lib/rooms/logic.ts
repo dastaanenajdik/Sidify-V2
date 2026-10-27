@@ -422,6 +422,55 @@ export function takeSignals(rec: RoomRecord, memberId: string): RoomSignal[] {
   return mine;
 }
 
+/** Lifecycle phases the room-presence watcher has to react to. */
+export type VoiceWatchStatus = "idle" | "ringing" | "requesting" | "connecting" | "live";
+
+export type VoicePresenceAction =
+  | "none"
+  | "clear-stale"
+  | "ring"
+  | "cancel-ring"
+  | "end-left-room"
+  | "end-left-call";
+
+/**
+ * Pure decision behind the VoiceCall UI's room-presence watcher. Keeping it
+ * framework-free makes the ringing/teardown rules unit-testable.
+ *
+ * Key rule: while we are `requesting` (outgoing ring) the peer is NOT in the
+ * voice call until they accept, so their absence from `voiceCall` is expected.
+ * The call only ends there if the peer's whole room seat disappears — a
+ * decline otherwise arrives as a `bye` signal.
+ */
+export function decideVoicePresenceAction(opts: {
+  status: VoiceWatchStatus;
+  peerId: string | null;
+  you: string;
+  members: Pick<RoomMember, "id" | "name">[];
+  voiceCall: string[];
+}): VoicePresenceAction {
+  const { status, peerId, you, members, voiceCall } = opts;
+  const others = members.filter((m) => m.id !== you && voiceCall.includes(m.id));
+  const iAmListed = voiceCall.includes(you);
+
+  // Reload recovery: our seat is still listed server-side with a fresh engine.
+  if (iAmListed && status === "idle" && others.length === 0) return "clear-stale";
+  // Incoming call: another seat's voice presence appeared while we are idle.
+  if (status === "idle" && others.length > 0) return "ring";
+  // They cancelled before we answered.
+  if (status === "ringing" && peerId && !voiceCall.includes(peerId)) return "cancel-ring";
+  // Once negotiated, a missing presence or seat means the call is over.
+  if ((status === "connecting" || status === "live") && peerId) {
+    if (!members.some((m) => m.id === peerId)) return "end-left-room";
+    if (!voiceCall.includes(peerId)) return "end-left-call";
+  }
+  // Outgoing ring: wait for accept/bye; only the peer leaving the room ends it.
+  if (status === "requesting" && peerId && !members.some((m) => m.id === peerId)) {
+    return "end-left-room";
+  }
+  return "none";
+}
+
 /** Heartbeat. Returns true when the record needs writing back. */
 export function touch(rec: RoomRecord, memberId: string, now: number): boolean {
   const m = rec.members.find((x) => x.id === memberId);
