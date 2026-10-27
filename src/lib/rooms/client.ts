@@ -15,6 +15,7 @@ import {
   newlyLeftMembers,
   normalizeCode,
   type ControlAction,
+  type RoomSignal,
   type RoomState,
   type RoomTrack,
 } from "./logic";
@@ -174,9 +175,21 @@ type RoomReply = {
   error?: string;
   changed?: boolean;
   presence?: [string, number][];
+  /** WebRTC signaling envelopes collected for this seat. */
+  signals?: RoomSignal[];
   ended?: boolean;
   removed?: boolean;
 };
+
+/* --------------------------- voice signal routing -------------------------- */
+
+type IncomingSignalHandler = (signals: RoomSignal[]) => void;
+let signalHandler: IncomingSignalHandler | null = null;
+
+/** The voice-call engine registers here so poll-delivered signals reach it. */
+export function setIncomingSignalHandler(fn: IncomingSignalHandler | null) {
+  signalHandler = fn;
+}
 
 /* ------------------------------- sync state -------------------------------- */
 
@@ -436,6 +449,7 @@ async function pollOnce() {
   }
   failures = 0;
   sample(t0, t1, res.data.serverMs);
+  if (res.data.signals?.length) signalHandler?.(res.data.signals);
   if (res.data.changed === false) {
     const presence: Record<string, number> = {};
     for (const [id, ago] of res.data.presence ?? []) presence[id] = ago;

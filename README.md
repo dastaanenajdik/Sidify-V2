@@ -18,7 +18,7 @@ Drizzle ORM + PostgreSQL · `youtubei.js` (InnerTube extraction) · PWA service 
 | **Now Playing** | Full-screen player whose backdrop is a mesh of colours sampled from the artwork. The cover eases down when paused; lyrics and the queue take the artwork's place (their own column on wide screens). Capsule for playback options (video mode, speed, sleep timer, equalizer, stats for nerds) and Listen Together. |
 | **Lyrics** | Timed lines in big type: the sung line lit with a soft wipe, the rest dimmed and blurred by distance; tap a line to seek, scroll to browse. Per-song timing offset, plain/timed switch, copy, and a **share card** (pick up to four lines → image). Lyrics finder in the Library. |
 | **Up next & AutoPlay** | Queue in sections — *Now playing*, *Next in queue*, *Next from …* and *AutoPlay* — with drag to reorder. AutoPlay lines up similar songs (YouTube Music's own radio) *before* the queue runs out, so what plays next is always visible. "Start radio" from any song. |
-| **Listen Together** | Rooms with a six-character code (no I/L/O), invite link and QR. Up to 5 people (host can raise it to 10), host-only control, remove members, host hand-over, shared queue, room AutoPlay, activity log. Devices share one server clock (round-trip-corrected) and correct drift, so playback stays aligned. |
+| **Listen Together** | Rooms with a six-character code (no I/L/O), invite link and QR. Up to 5 people (host can raise it to 10), host-only control, remove members, host hand-over, shared queue, room AutoPlay, activity log. Devices share one server clock (round-trip-corrected) and correct drift, so playback stays aligned. **1:1 voice calls** live inside every room: browser-to-browser WebRTC (Opus HD, echo cancellation, noise suppression), free public STUN, mute, live speaking indicators — and the shared music automatically ducks while you talk. |
 | **Recommendations** | Home: Top picks (your mix, song radio from your last play, top-artist radio), Quick picks, Recently played, New releases, Trending, From your likes. Explore: new releases, charts and mood / genre tiles. |
 | **Movies & Series** | `/movies` and `/series`: featured backdrop hero, trending / new / top-rated / popular shelves, a **Free to watch** shelf of public-domain films, genre · year · language · sort filters, search, poster cards with a local watchlist. Detail pages carry official trailers, seasons and episodes, "more like this", and a real player — TMDb/JustWatch links for licensed titles, the Internet Archive's own player plus its download options for free films. Catalogue releases show **one row per movie / episode** with **Try Play (beta)**, **Play with VLC** and **Download** (Play with VLC opens a sheet that loads stream links across all qualities automatically so any link opens VLC in one real tap; Download picks quality on demand); series get **season tabs**, each holding its own episodes and complete-season packs. |
 | **Replay** | Minutes listened, top songs, top artists, streak and listening hours — counted on the device, shown as wallet-style cards. |
@@ -80,6 +80,22 @@ when both sites share that store — either both deployments use the **same**
 **same** deployment/process (the same in-memory Map). If it joined, that sharing
 is why; a fully separate deployment with its own (or no) database would answer
 “No room with that code”.
+
+### Voice calls (1:1)
+
+The voice call is pure **peer-to-peer WebRTC** — audio never flows through our
+servers, so there is no media bandwidth bill. Each room document gains two
+ephemeral fields: `voiceCall` (the member ids currently in the call, which
+drives the incoming-call UI) and `signals` (SDP offers/answers and ICE
+candidates). `POST /api/rooms/{code}/signal` appends an envelope; the regular
+500ms room poll collects envelopes addressed to the caller and deletes them in
+the same read — no WebSocket, no second service, works with both the Postgres
+and the in-memory store. NAT traversal uses free public STUN (Google +
+Cloudflare); on networks where peer-to-peer is blocked, a TURN server can be
+added to `ICE_CONFIG` in `src/lib/rooms/voice.ts` without touching anything
+else. Microphone capture requests echo cancellation, noise suppression and
+48 kHz fullband Opus (capped at 64 kbps), and while a call is live
+`setMusicDuck()` lowers the shared music to 22% so speech stays clear.
 
 ---
 

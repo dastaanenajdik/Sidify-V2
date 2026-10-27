@@ -29,6 +29,10 @@ export const ROOM_LIMITS = {
   activity: 30,
   chatMessages: 80,
   chatMessageLength: 300,
+  /** WebRTC signaling envelopes kept per room while a call is being set up. */
+  voiceSignals: 40,
+  /** SDP blobs are a few KB; leave headroom for trickled candidates bundled late. */
+  signalDataLength: 20_000,
 } as const;
 
 /** Six characters; no I, L or O, so a code read aloud can't be misheard. */
@@ -78,6 +82,21 @@ export interface RoomChatMessage {
   replyTo?: { id: string; by: string; text: string } | null;
 }
 
+/** WebRTC signaling envelope, relayed through the room's existing polling transport. */
+export type RoomSignalKind = "offer" | "answer" | "candidate" | "bye";
+
+export interface RoomSignal {
+  id: string;
+  at: number;
+  from: string;
+  to: string;
+  kind: RoomSignalKind;
+  /** SDP for offer/answer, or a JSON-encoded ICE candidate. */
+  data: string;
+}
+
+export const SIGNAL_KINDS: readonly RoomSignalKind[] = ["offer", "answer", "candidate", "bye"];
+
 /** What every member sees. */
 export interface RoomState {
   code: string;
@@ -100,6 +119,10 @@ export interface RoomState {
   startedBy: string;
   activity: RoomActivity[];
   chat: RoomChatMessage[];
+  /** Member ids currently in the voice call. Ephemeral, like the chat. */
+  voiceCall: string[];
+  /** Signaling messages waiting to be collected by their recipient. */
+  signals: RoomSignal[];
 }
 
 /** Server-side record: the public state plus member tokens and housekeeping. */
@@ -239,6 +262,8 @@ export function newRoom(opts: {
     startedBy: host.name,
     activity: [{ at: opts.now, by: host.name, text: "started the room" }],
     chat: [],
+    voiceCall: [],
+    signals: [],
     tokens: { [host.id]: opts.token },
     emptySince: null,
     lastFillAt: 0,
@@ -275,6 +300,9 @@ export function publicRoom(rec: RoomRecord): RoomState {
     // Existing in-memory/database room records created before chat was added
     // remain readable and simply start with an empty chat history.
     chat: rec.chat ?? [],
+    // Voice call state was added later too; older records default to an empty call.
+    voiceCall: rec.voiceCall ?? [],
+    signals: rec.signals ?? [],
   };
 }
 
@@ -329,6 +357,9 @@ export function removeMember(rec: RoomRecord, memberId: string, now: number, rea
   const tokens = { ...rec.tokens };
   delete tokens[memberId];
   rec.tokens = tokens;
+  // Drop any voice-call seat and pending signals the departed member owned.
+  rec.voiceCall = (rec.voiceCall ?? []).filter((id) => id !== memberId);
+  rec.signals = (rec.signals ?? []).filter((s) => s.from !== memberId && s.to !== memberId);
   // Timeouts can be caused by a temporarily suspended browser; do not make
   // that look like an explicit departure in the activity/chat feed.
   if (reason !== "timed out") log(rec, now, m.name, reason === "left" ? "left" : "was removed");
@@ -341,8 +372,54 @@ export function removeMember(rec: RoomRecord, memberId: string, now: number, rea
     rec.emptySince = now;
     // Room chat is ephemeral: discard it as soon as the last listener goes offline.
     rec.chat = [];
+    rec.voiceCall = [];
+    rec.signals = [];
   }
   bump(rec);
+}
+
+/* -------------------------------- voice call ------------------------------- */
+
+/** Flip a member's voice-call presence. No-op (returns false) when unchanged. */
+export function setVoicePresence(rec: RoomRecord, memberId: string, on: boolean): boolean {
+  rec.voiceCall ??= [];
+  const present = rec.voiceCall.includes(memberId);
+  if (on === present) return false;
+  rec.voiceCall = on ? [...rec.voiceCall, memberId] : rec.voiceCall.filter((id) => id !== memberId);
+  if (!on) {
+    // Leaving a call frees every pending signal addressed to or from this seat.
+    rec.signals = (rec.signals ?? []).filter((s) => s.from !== memberId && s.to !== memberId);
+    // With nobody left in the call, every remaining envelope is stale.
+    if (rec.voiceCall.length === 0) rec.signals = [];
+  }
+  bump(rec);
+  return true;
+}
+
+/**
+ * Queue a WebRTC signaling envelope for its recipient. Returns null when the
+ * envelope is malformed or references a seat that is not in the room.
+ */
+export function queueSignal(rec: RoomRecord, signal: RoomSignal): RoomSignal | null {
+  if (!SIGNAL_KINDS.includes(signal.kind)) return null;
+  if (typeof signal.data !== "string" || signal.data.length > ROOM_LIMITS.signalDataLength) return null;
+  // A hang-up ("bye") carries no payload; every other envelope needs SDP/ICE content.
+  if (signal.kind !== "bye" && signal.data.length === 0) return null;
+  const seats = new Set(rec.members.map((m) => m.id));
+  if (!seats.has(signal.from) || !seats.has(signal.to) || signal.from === signal.to) return null;
+  rec.signals ??= [];
+  rec.signals = [...rec.signals, signal].slice(-ROOM_LIMITS.voiceSignals);
+  bump(rec);
+  return signal;
+}
+
+/** Collect (and remove) the signals addressed to one member. */
+export function takeSignals(rec: RoomRecord, memberId: string): RoomSignal[] {
+  const mine = (rec.signals ?? []).filter((s) => s.to === memberId);
+  if (!mine.length) return [];
+  rec.signals = (rec.signals ?? []).filter((s) => s.to !== memberId);
+  bump(rec);
+  return mine;
 }
 
 /** Heartbeat. Returns true when the record needs writing back. */
