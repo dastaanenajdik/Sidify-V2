@@ -49,8 +49,10 @@ import type { MediaReleaseItem } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { cx } from "@/lib/format";
 import { useMounted } from "@/lib/useMounted";
+import { isJwConfigured } from "@/lib/media/jwPlayer";
 import { BetaBadge } from "./BetaBadge";
 import { ExternalPlayerLinks } from "./ExternalPlayerLinks";
+import { JwTryPlayPlayer, type JwTryPlayHandle } from "./JwTryPlayPlayer";
 import { VlcPlayButton } from "./VlcPlayButton";
 import type { WatchTarget } from "./watch";
 
@@ -79,11 +81,21 @@ export function BetaPlayerSheet({
   onOpenVlc?: (target: WatchTarget) => void;
   onDownload: (target: WatchTarget) => void;
 }) {
-  const playerRef = useRef<BetaPlayerHandle | null>(null);
+  const playerRef = useRef<BetaPlayerHandle | JwTryPlayHandle | null>(null);
   const close = useCallback(() => {
     playerRef.current?.stop();
     onClose();
   }, [onClose]);
+
+  // Player route: JW Player when the deployment provides its library
+  // (`NEXT_PUBLIC_JWPLAYER_LIBRARY_URL`), otherwise the built-in Shaka
+  // player below. Both consume the exact same resolved links — only the
+  // playback engine changes. Exclusive (vault) releases keep the built-in
+  // engine: that section's player path is unchanged.
+  const useJw = Boolean(
+    target && isJwConfigured() && !target.releases.some((release) => release.mirrors.some((mirror) => mirror.source === "vault"))
+  );
+  const Player = useJw ? JwTryPlayPlayer : BetaPlayer;
 
   return (
     <Sheet
@@ -93,12 +105,13 @@ export function BetaPlayerSheet({
       subtitle={
         <span className="inline-flex items-center gap-1.5">
           Try Play <BetaBadge />
+          {useJw ? <span className="text-fg-3">· JW Player</span> : null}
         </span>
       }
       width={960}
     >
       {target && (
-        <BetaPlayer
+        <Player
           key={target.key}
           ref={playerRef}
           target={target}

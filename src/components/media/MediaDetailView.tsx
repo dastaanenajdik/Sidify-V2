@@ -42,6 +42,7 @@ import { cx, formatBytes } from "@/lib/format";
 import { BetaBadge } from "./BetaBadge";
 import { ExclusiveBadge } from "./ExclusiveBadge";
 import { PosterCard, isExclusiveTitle, posterShelfClass } from "./PosterCard";
+import { TelegramDownloadButton } from "./TelegramDownloadButton";
 import { VlcPlayButton } from "./VlcPlayButton";
 import { useResumePoint } from "./useResumePoint";
 import { MovieWatchSection, SeasonTabsSection } from "./WatchSections";
@@ -300,6 +301,11 @@ export default function MediaDetailView({
                       >
                         <Download size={16} aria-hidden="true" /> Download
                       </button>
+                      <TelegramDownloadButton
+                        target={movieTarget}
+                        iconSize={16}
+                        className="h-11 px-5 text-[15px] bg-[#229ED9] text-white hover:bg-[#1f8fc4]"
+                      />
                     </>
                   ) : hasSeasonTabs ? (
                     <a

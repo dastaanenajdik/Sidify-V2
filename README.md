@@ -161,6 +161,7 @@ Environment variables:
 | `TMDB_READ_ACCESS_TOKEN` / `TMDB_API_KEY` | optional | Official TMDb metadata credentials (used when `MEDIA_PROVIDER=tmdb` or `merged`) |
 | `TMDB_LANGUAGE`, `TMDB_REGION` | optional | Metadata language (default `en-US`) and availability region (default `IN`) |
 | `MEDIA_PLAYBACK_MANIFEST` | optional | JSON map of verified HTTPS HLS/MP4/WebM URLs, `{"movie/<slug>":[{"url":"https://…","type":"hls"}]}` |
+| `NEXT_PUBLIC_JWPLAYER_LIBRARY_URL` | optional | Your JW Dashboard player library URL — when set, Try Play on movies/series runs on JW Player (same resolved links; unset keeps the built-in Shaka player) |
 
 ---
 

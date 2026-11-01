@@ -250,8 +250,29 @@ export function parseGeneratorLinks(
     const candidate = sanitizePublicHttpsUrl(rawHref, context.baseUrl);
     if (!candidate) return;
 
-    // Skip Telegram links/redirectors and raw .zip buttons on generator pages unless user opened a pack
-    if (/t\.me|telegram|\/tg\/go\b/i.test(candidate) || /\btelegram\b/i.test(text)) return;
+    // "Download From Telegram" is a real per-file download route the mirror
+    // generator offers (a `/tg/go?…` hand-off into Telegram for this exact
+    // release) — keep it, labelled as its own delivery. Community/"join"
+    // Telegram links stay filtered: they are ads, not this file.
+    const isTelegramDownload =
+      /\/tg\/go\b/i.test(candidate) || (/download/i.test(text) && /\btelegram\b/i.test(text));
+    if (isTelegramDownload) {
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        out.push({
+          server: "Telegram",
+          url: candidate,
+          playable: false,
+          delivery: "telegram",
+          container: detectContainer(context.fileName || "") || "FILE",
+          unsupportedReason: "Opens Telegram to download this file — it is not a playable stream.",
+        });
+      }
+      return;
+    }
+
+    // Skip other Telegram links and raw .zip buttons on generator pages unless user opened a pack
+    if (/t\.me|telegram/i.test(candidate) || /\btelegram\b/i.test(text)) return;
     if (/\.zip(?:$|[?#])/i.test(candidate) && !/\.zip\b/i.test(context.fileName || "")) return;
 
     let finalUrl = candidate;

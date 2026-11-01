@@ -18,6 +18,7 @@ import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { formatPlaybackTime } from "@/lib/media/resumePoints";
 import { cx } from "@/lib/format";
 import { BetaBadge } from "./BetaBadge";
+import { TelegramDownloadButton } from "./TelegramDownloadButton";
 import { VlcPlayButton } from "./VlcPlayButton";
 import { useResumePoint } from "./useResumePoint";
 import type { WatchTarget } from "./watch";
@@ -79,6 +80,9 @@ export function WatchActions({
         <button type="button" onClick={onDownload} className={cx(base, "bg-fill-2 text-fg hover:bg-fill-3")}>
           <Download size={size === "md" ? 15 : 12} aria-hidden="true" /> Download
         </button>
+      )}
+      {canDownload && (
+        <TelegramDownloadButton target={target} iconSize={size === "md" ? 15 : 12} className={base} />
       )}
     </div>
   );
