@@ -18,9 +18,12 @@ import { Button, EmptyState, SectionHeader, Shelf, Skeleton } from "@/components
 import { LogoMark } from "@/components/Logo";
 import { PeopleGlyph } from "@/components/icons";
 import { useRoomSummary } from "@/lib/rooms/client";
+import { useMediaBrowse } from "@/lib/media/hooks";
+import { PosterCard, posterShelfClass } from "@/components/media/PosterCard";
 import { useMounted } from "@/lib/useMounted";
 
 export default function HomePage() {
+  const movies = useMediaBrowse("movie", { sort: "trending" });
   const region = useSettings((s) => s.region);
   const name = useSettings((s) => s.profileName);
   const ef = useSettings((s) => s.explicitFilter);
@@ -133,6 +136,13 @@ export default function HomePage() {
         )}
       </section>
 
+      <section className="mb-9" aria-label="Movie recommendations">
+        <SectionHeader title="Movies recommended for you" href="/movies" />
+        {movies.isPending ? <div className="flex gap-3 px-4 desk:px-8">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="aspect-[2/3] w-28 shrink-0 rounded-[10px]" />)}</div> : movies.data?.pages[0]?.items.length ? <Shelf>{movies.data.pages[0].items.slice(0, 12).map((movie) => <PosterCard key={`${movie.kind}:${movie.slug}`} title={movie} className={posterShelfClass} />)}</Shelf> : <p className="px-4 text-sm text-fg-3 desk:px-8">Movie recommendations are unavailable right now. <Link href="/movies" className="underline">Browse movies</Link></p>}
+      </section>
+
+      <RoomInvite />
+
       {failed && (
         <EmptyState
           icon={<RefreshCw size={26} />}
@@ -163,8 +173,6 @@ export default function HomePage() {
           </Shelf>
         </section>
       )}
-
-      <RoomInvite />
 
       {recommended.length > 0 && (
         <section className="mb-9">

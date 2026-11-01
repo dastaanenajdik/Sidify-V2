@@ -1,5 +1,7 @@
 "use client";
 
+import { BUFFERING_TIP } from "./PlayerControls";
+
 import { useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { AlertCircle, Download, Loader2, RotateCcw, RotateCw, SkipForward, VolumeX } from "lucide-react";
 import { MediaApiError, mediaApi } from "@/lib/media/client";
@@ -642,9 +644,7 @@ export function JwTryPlayPlayer({
       )}
 
       <p className="mt-3 text-[11.5px] leading-relaxed text-fg-3">
-        Powered by JW Player: audio language, subtitles and quality are in the player&apos;s own settings (gear icon).
-        Starts with the best quality that plays with sound here and steps down if a link won&apos;t play. Remembers
-        where you stopped.
+        {BUFFERING_TIP}
       </p>
     </div>
   );

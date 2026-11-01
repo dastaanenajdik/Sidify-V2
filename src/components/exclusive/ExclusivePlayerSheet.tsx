@@ -4,11 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
-  Captions,
-  ChevronDown,
   ExternalLink,
-  Gauge,
-  Languages,
   Loader2,
   RotateCcw,
   Volume2,
@@ -33,6 +29,7 @@ import { formatPlaybackTime, loadResumePoint, resumePosition, saveResumePoint } 
 import type { MediaKind, MediaTitle, PlaybackSource } from "@/lib/media/types";
 import { Button } from "@/components/ui";
 import { mediaHref } from "@/components/media/PosterCard";
+import { PlayerControls, BUFFERING_TIP } from "@/components/media/PlayerControls";
 import { ExclusiveBadge } from "@/components/media/ExclusiveBadge";
 import { cx } from "@/lib/format";
 
@@ -98,7 +95,6 @@ export function ExclusivePlayerSheet({
   const [audio, setAudio] = useState<ShakaAudioTrackOption[]>([]);
   const [text, setText] = useState<ShakaTextTrackOption[]>([]);
   const [video, setVideo] = useState<ShakaVideoQualityOption[]>([]);
-  const [autoQuality, setAutoQuality] = useState(true);
   const [health, setHealth] = useState<AudioHealth>("unknown");
   const [audioNote, setAudioNote] = useState<string | null>(null);
   const [stats, setStats] = useState<{ height: number; width: number; buffer: number; dropped: number; bandwidth: number } | null>(null);
@@ -196,7 +192,6 @@ export function ExclusivePlayerSheet({
         }
         handleRef.current = handle;
         setStatus("ready");
-        setAutoQuality(true);
         void videoEl.play().catch(() => {
           /* autoplay may be blocked; the native controls remain */
         });
@@ -347,23 +342,6 @@ export function ExclusivePlayerSheet({
     setReloadNonce((value) => value + 1);
   };
 
-  const pickQuality = (height: number | "auto") => {
-    const handle = handleRef.current;
-    if (!handle) return;
-    handle.selectVideoQuality(height);
-    setAutoQuality(height === "auto");
-  };
-
-  const pickAudio = (trackId: number) => {
-    handleRef.current?.selectAudioTrack(trackId);
-    setAudioNote(null);
-    setHealth("unknown");
-  };
-
-  const pickText = (trackId: number | null) => {
-    void handleRef.current?.selectTextTrack(trackId);
-  };
-
   const retry = () => {
     startAtRef.current = videoRef.current?.currentTime ?? startAtRef.current;
     setReloadNonce((value) => value + 1);
@@ -408,7 +386,6 @@ export function ExclusivePlayerSheet({
           <video
             ref={videoRef}
             key={`${source?.url ?? "none"}-${reloadNonce}`}
-            controls
             playsInline
             preload="metadata"
             poster={title?.backdrop ?? title?.poster ?? undefined}
@@ -416,6 +393,8 @@ export function ExclusivePlayerSheet({
           >
             Your browser cannot play this media stream.
           </video>
+
+          {status === "ready" && <PlayerControls key={`${source?.url ?? "none"}-${reloadNonce}`} videoRef={videoRef} handleRef={handleRef} audio={audio} text={text} video={video} />}
 
           {status === "loading" && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/45">
@@ -495,48 +474,6 @@ export function ExclusivePlayerSheet({
             )}
 
             <div className="flex flex-wrap items-center gap-2">
-              <Menu label="Quality" icon={<Gauge size={14} aria-hidden="true" />} active={autoQuality ? "Auto" : qualityLabel(video)}>
-                <MenuItem onClick={() => pickQuality("auto")} selected={autoQuality}>
-                  Auto (adaptive)
-                </MenuItem>
-                {video.map((entry) => (
-                  <MenuItem key={entry.id} onClick={() => pickQuality(entry.height ?? 0)} selected={!autoQuality && entry.active}>
-                    {entry.height ? `${entry.height}p` : "Unknown"}
-                    {entry.bandwidth ? ` · ${Math.round(entry.bandwidth / 1000)} kbps` : ""}
-                  </MenuItem>
-                ))}
-                {video.length === 0 && <MenuItem disabled>No quality ladder exposed</MenuItem>}
-              </Menu>
-
-              <Menu
-                label="Audio"
-                icon={<Languages size={14} aria-hidden="true" />}
-                active={audio.find((track) => track.active)?.label ?? (audio.length ? "Track 1" : "—")}
-              >
-                {audio.map((track) => (
-                  <MenuItem key={track.id} onClick={() => pickAudio(track.id)} selected={track.active}>
-                    {describeAudioTrack(track)}
-                  </MenuItem>
-                ))}
-                {audio.length === 0 && <MenuItem disabled>No separate audio tracks</MenuItem>}
-              </Menu>
-
-              <Menu
-                label="Subtitles"
-                icon={<Captions size={14} aria-hidden="true" />}
-                active={text.find((track) => track.active)?.label ?? "Off"}
-              >
-                <MenuItem onClick={() => pickText(null)} selected={!text.some((track) => track.active)}>
-                  Off
-                </MenuItem>
-                {text.map((track) => (
-                  <MenuItem key={track.id} onClick={() => pickText(track.id)} selected={track.active}>
-                    {track.label}
-                  </MenuItem>
-                ))}
-                {text.length === 0 && <MenuItem disabled>No subtitles in this stream</MenuItem>}
-              </Menu>
-
               <span
                 className={cx(
                   "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-semibold",
@@ -573,9 +510,7 @@ export function ExclusivePlayerSheet({
             )}
 
             <p className="text-[12px] leading-relaxed text-fg-3">
-              Adaptive DASH/HLS through Shaka Player, relayed same-origin so the collection&apos;s signed CDN
-              authorisation survives. Audio and picture are separate tracks: if a surround track is silent in this
-              browser, pick a stereo track above — the watchdog does it automatically first.
+              {BUFFERING_TIP}
             </p>
           </div>
 
@@ -623,11 +558,6 @@ export function ExclusivePlayerSheet({
 
 /* ------------------------------- controls -------------------------------- */
 
-function qualityLabel(video: ShakaVideoQualityOption[]): string {
-  const active = video.find((entry) => entry.active);
-  return active?.height ? `${active.height}p` : "—";
-}
-
 function MiniTitle({ title }: { title: MediaTitle }) {
   return (
     <Link
@@ -647,69 +577,6 @@ function MiniTitle({ title }: { title: MediaTitle }) {
       </div>
       <p className="mt-1 truncate text-[11.5px] font-medium">{title.title}</p>
     </Link>
-  );
-}
-
-function Menu({
-  label,
-  icon,
-  active,
-  children,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  active: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <details className="group/menu relative">
-      <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-full bg-fill px-3 text-[12px] font-semibold text-fg-2 hover:bg-fill-2 hover:text-fg">
-        {icon}
-        <span className="text-fg-3">{label}</span>
-        <span className="max-w-[110px] truncate text-fg">{active}</span>
-        <ChevronDown size={12} aria-hidden="true" className="text-fg-3 transition-transform group-open/menu:rotate-180" />
-      </summary>
-      <div
-        role="menu"
-        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-[260px] w-[220px] overflow-y-auto rounded-[10px] bg-raised p-1 shadow-[0_18px_50px_-12px_rgba(0,0,0,0.8)] ring-1 ring-edge"
-      >
-        {children}
-      </div>
-    </details>
-  );
-}
-
-function MenuItem({
-  children,
-  onClick,
-  selected,
-  disabled,
-}: {
-  children: React.ReactNode;
-  onClick?: () => void;
-  selected?: boolean;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitemradio"
-      aria-checked={Boolean(selected)}
-      disabled={disabled}
-      onClick={(event) => {
-        if (disabled) return;
-        onClick?.();
-        event.currentTarget.closest("details")?.removeAttribute("open");
-      }}
-      className={cx(
-        "flex w-full items-center justify-between gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px]",
-        disabled ? "cursor-default text-fg-3" : "text-fg-2 hover:bg-fill-2 hover:text-fg",
-        selected && "font-semibold text-fg"
-      )}
-    >
-      <span className="min-w-0 truncate">{children}</span>
-      {selected && <span aria-hidden="true">✓</span>}
-    </button>
   );
 }
 

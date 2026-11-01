@@ -1,11 +1,12 @@
 "use client";
 
+import { PlayerControls, BUFFERING_TIP } from "./PlayerControls";
+
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   Bookmark,
-  Captions,
   Check,
   Copy,
   Download,
@@ -32,6 +33,7 @@ import type {
   ShakaAudioTrackOption,
   ShakaPlaybackHandle,
   ShakaTextTrackOption,
+  ShakaVideoQualityOption,
 } from "@/lib/media/shakaPlayer";
 import type { MediaDetail, PlaybackSource } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
@@ -446,7 +448,7 @@ function MediaStreamPlayer({
   videoRef: React.RefObject<HTMLVideoElement | null>;
   shakaHandleRef: React.RefObject<ShakaPlaybackHandle | null>;
   onModeChange: (url: string, mode: StreamShakaMode) => void;
-  onTracksChange: (tracks: { audio: ShakaAudioTrackOption[]; text: ShakaTextTrackOption[] }) => void;
+  onTracksChange: (tracks: { audio: ShakaAudioTrackOption[]; text: ShakaTextTrackOption[]; video: ShakaVideoQualityOption[] }) => void;
   onStreamError: (url: string, message: string) => void;
 }) {
   useEffect(() => {
@@ -535,7 +537,7 @@ function MediaStreamPlayer({
       abortCtrl.abort();
       window.clearTimeout(timer);
       window.clearTimeout(audioMonitorTimer);
-      onTracksChange({ audio: [], text: [] });
+      onTracksChange({ audio: [], text: [], video: [] });
       const activeHandle = shakaHandleRef.current;
       shakaHandleRef.current = null;
       if (activeHandle) {
@@ -548,7 +550,6 @@ function MediaStreamPlayer({
     <video
       key={source.url}
       ref={videoRef}
-      controls
       playsInline
       preload="metadata"
       poster={poster}
@@ -699,6 +700,7 @@ function PlaybackSection({
   const [streamModes, setStreamModes] = useState<Record<string, StreamShakaMode>>({});
   const [audioTracks, setAudioTracks] = useState<ShakaAudioTrackOption[]>([]);
   const [textTracks, setTextTracks] = useState<ShakaTextTrackOption[]>([]);
+  const [videoTracks, setVideoTracks] = useState<ShakaVideoQualityOption[]>([]);
   const streamVideoRef = useRef<HTMLVideoElement | null>(null);
   const shakaHandleRef = useRef<ShakaPlaybackHandle | null>(null);
   const downloads = detail.downloads ?? [];
@@ -721,9 +723,10 @@ function PlaybackSection({
   }, []);
 
   const handleTracksChange = useCallback(
-    ({ audio, text }: { audio: ShakaAudioTrackOption[]; text: ShakaTextTrackOption[] }) => {
+    ({ audio, text, video }: { audio: ShakaAudioTrackOption[]; text: ShakaTextTrackOption[]; video: ShakaVideoQualityOption[] }) => {
       setAudioTracks(audio);
       setTextTracks(text);
+      setVideoTracks(video);
     },
     [],
   );
@@ -811,7 +814,7 @@ function PlaybackSection({
 
   return (
     <section id="play" aria-labelledby="authorized-playback" className="px-4 desk:px-8">
-      <div className="overflow-hidden rounded-[16px] bg-black ring-1 ring-edge">
+      <div className="relative overflow-hidden rounded-[16px] bg-black ring-1 ring-edge">
         {embed ? (
           <iframe
             src={source.url}
@@ -831,7 +834,9 @@ function PlaybackSection({
             onStreamError={handleStreamError}
           />
         )}
+        {!embed && <PlayerControls key={source.url} videoRef={streamVideoRef} handleRef={shakaHandleRef} audio={audioTracks} text={textTracks} video={videoTracks} />}
       </div>
+      {!embed && <p className="mt-3 text-[11.5px] leading-relaxed text-fg-3">{BUFFERING_TIP}</p>}
       {!embed && (
         <StreamExtras
           videoRef={streamVideoRef}
@@ -839,61 +844,6 @@ function PlaybackSection({
           sourceUrl={source.url}
           title={title.title}
         />
-      )}
-
-      {!embed && audioTracks.length > 1 && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2">
-            <Languages size={13} aria-hidden="true" /> Audio
-          </span>
-          {audioTracks.map((track) => (
-            <button
-              key={track.id}
-              type="button"
-              aria-pressed={track.active}
-              onClick={() => shakaHandleRef.current?.selectAudioTrack(track.id)}
-              className={cx(
-                "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
-                track.active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
-              )}
-            >
-              {track.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {!embed && textTracks.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2">
-            <Captions size={13} aria-hidden="true" /> Subtitles
-          </span>
-          <button
-            type="button"
-            aria-pressed={textTracks.every((t) => !t.active)}
-            onClick={() => void shakaHandleRef.current?.selectTextTrack(null)}
-            className={cx(
-              "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
-              textTracks.every((t) => !t.active) ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
-            )}
-          >
-            Off
-          </button>
-          {textTracks.map((track) => (
-            <button
-              key={track.id}
-              type="button"
-              aria-pressed={track.active}
-              onClick={() => void shakaHandleRef.current?.selectTextTrack(track.id)}
-              className={cx(
-                "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
-                track.active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
-              )}
-            >
-              {track.label}
-            </button>
-          ))}
-        </div>
       )}
 
       {failureMessage && (
