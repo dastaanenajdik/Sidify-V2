@@ -739,6 +739,8 @@ export async function attachShakaPlayback(
   const removeCrossOriginProxy = installPlayerCrossOriginProxy(player, proxyOrigin);
   const sessionId = nextSessionId++;
   let destroyed = false;
+  let playbackLoaded = false;
+  let pendingNetworkError: ShakaErrorEvent | null = null;
 
   const preferredLangs = options.preferredAudioLanguages?.length
     ? options.preferredAudioLanguages
@@ -758,9 +760,11 @@ export async function attachShakaPlayback(
     },
     streaming: {
       ignoreTextStreamFailures: true,
-      bufferingGoal: 20,
-      rebufferingGoal: 2,
-      bufferBehind: 30,
+      // Keep roughly 90 seconds ahead when bandwidth and device memory allow.
+      // Start/resume after a modest cushion rather than waiting for the whole goal.
+      bufferingGoal: 90,
+      rebufferingGoal: 8,
+      bufferBehind: 20,
       stallEnabled: true,
       stallThreshold: 1.5,
       stallSkip: 0.1,
@@ -795,8 +799,37 @@ export async function attachShakaPlayback(
       // Shaka handles RECOVERABLE errors internally; do not jump links
       return;
     }
-    options.onFatalError?.(classifyShakaError(detail));
+    const failure = classifyShakaError(detail);
+    // Do not throw away already-buffered video just because the next segment
+    // failed. Report the error when this contiguous buffered range is exhausted.
+    if (failure.kind === "network" && playbackLoaded && bufferedAhead() > 1) {
+      pendingNetworkError = failure;
+      return;
+    }
+    pendingNetworkError = null;
+    options.onFatalError?.(failure);
   };
+
+  const bufferedAhead = (): number => {
+    try {
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= video.currentTime && video.buffered.end(i) >= video.currentTime) {
+          return video.buffered.end(i) - video.currentTime;
+        }
+      }
+    } catch { /* A browser may not expose a buffered range yet. */ }
+    return 0;
+  };
+  const flushPendingError = () => {
+    if (destroyed || !pendingNetworkError) return;
+    if (video.ended) { pendingNetworkError = null; return; }
+    if (bufferedAhead() > 1) return;
+    const error = pendingNetworkError;
+    pendingNetworkError = null;
+    options.onFatalError?.(error);
+  };
+  const bufferEvents = ["timeupdate", "waiting", "seeked", "ended"] as const;
+  bufferEvents.forEach((event) => video.addEventListener(event, flushPendingError));
 
   player.addEventListener("error", onErrorEvent);
   player.addEventListener("trackschanged", emitTracks);
@@ -806,6 +839,8 @@ export async function attachShakaPlayback(
   const teardown = async () => {
     if (destroyed) return;
     destroyed = true;
+    pendingNetworkError = null;
+    bufferEvents.forEach((event) => video.removeEventListener(event, flushPendingError));
     removeCrossOriginProxy();
     player.removeEventListener("error", onErrorEvent);
     player.removeEventListener("trackschanged", emitTracks);
@@ -862,6 +897,7 @@ export async function attachShakaPlayback(
     throw err;
   }
 
+  playbackLoaded = true;
   emitTracks();
 
   const getLoadModeKind = (): "shaka-mse" | "shaka-src" => {

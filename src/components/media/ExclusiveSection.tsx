@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, RefreshCw, Search, Sparkles, X } from "lucide-react";
@@ -214,7 +216,7 @@ export function ExclusiveSection() {
                         )}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-semibold">{item.title}</span>
+                        <span className="block truncate text-[13px] font-semibold">{mediaDisplayText(item.title, "Movie")}</span>
                         <span className="block truncate text-[11.5px] text-fg-2">
                           {[item.year, item.kind === "series" ? "Series" : "Film", item.genres[0]?.name].filter(Boolean).join(" · ")}
                         </span>

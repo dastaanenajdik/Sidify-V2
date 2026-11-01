@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, ChevronRight, Copy, Download, ExternalLink, Loader2, Send } from "lucide-react";
 import { Sheet } from "@/components/ui";
@@ -33,7 +35,7 @@ export function QualityPickerSheet({ target, onClose }: { target: WatchTarget | 
     <Sheet
       open={Boolean(target)}
       onClose={onClose}
-      title={target ? `Download · ${target.heading}` : undefined}
+      title={target ? `Download · ${mediaDisplayText(target.heading, "Movie")}` : undefined}
       subtitle="Choose a quality"
       width={600}
     >
@@ -235,7 +237,7 @@ function QualityRow({ release, onPick }: { release: MediaReleaseItem; onPick: ()
         </span>
         {chips.length > 0 && <span className="mt-1 block text-[12px] text-fg-2">{chips.join(" · ")}</span>}
         {release.languages && <span className="block text-[11.5px] text-fg-3">{release.languages}</span>}
-        <span className="mt-0.5 line-clamp-1 block text-[11.5px] break-all text-fg-3">{release.fileName}</span>
+        <span className="mt-0.5 line-clamp-1 block text-[11.5px] break-all text-fg-3">{mediaDisplayText(release.fileName, "File")}</span>
       </span>
       <ChevronRight size={17} className="shrink-0 text-fg-3" aria-hidden="true" />
     </button>
@@ -251,7 +253,7 @@ function ReleaseSummary({ release }: { release: MediaReleaseItem }) {
         {release.size && <span className="text-[13px] font-semibold text-fg">{release.size}</span>}
         {chips.length > 0 && <span className="text-[12px] text-fg-2">{chips.join(" · ")}</span>}
       </div>
-      <p className="mt-1 text-[11.5px] break-all text-fg-3">{release.fileName}</p>
+      <p className="mt-1 text-[11.5px] break-all text-fg-3">{mediaDisplayText(release.fileName, "File")}</p>
     </div>
   );
 }
@@ -282,14 +284,14 @@ function LinkList({ links, title, release }: { links: ResolvedMirrorLink[]; titl
               className="flex flex-wrap items-center justify-between gap-2 rounded-[12px] bg-fill/60 px-3 py-2.5"
             >
               <span className="flex min-w-0 items-center gap-1.5">
-                <span className="truncate text-[13.5px] font-semibold text-fg">{link.server}</span>
+                <span className="truncate text-[13.5px] font-semibold text-fg">{mediaDisplayText(link.server, "Download server")}</span>
                 {link.container && (
                   <span className="rounded bg-fill-2 px-1.5 py-0.5 text-[10.5px] font-bold text-fg-2 uppercase">
                     {link.container}
                   </span>
                 )}
               </span>
-              <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+              <span className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
                 {canStreamLink && (
                   <VlcPlayButton
                     url={link.url}
@@ -304,9 +306,9 @@ function LinkList({ links, title, release }: { links: ResolvedMirrorLink[]; titl
                     href={link.url}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full bg-[#229ED9] px-3.5 text-[12.5px] font-semibold whitespace-nowrap text-white hover:opacity-90"
+                    className="inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-full bg-[#229ED9] px-3.5 py-2 text-left text-[12.5px] leading-snug font-semibold text-white hover:opacity-90"
                   >
-                    <Send size={13} aria-hidden="true" /> Download from Telegram{telegramBracket ? ` ${telegramBracket}` : ""}
+                    <Send size={13} className="shrink-0" aria-hidden="true" /> <span className="min-w-0 break-words">Download from Telegram{telegramBracket ? ` ${telegramBracket}` : ""}</span>
                   </a>
                 ) : (
                   <a
@@ -322,7 +324,7 @@ function LinkList({ links, title, release }: { links: ResolvedMirrorLink[]; titl
                 <button
                   type="button"
                   onClick={() => void copy(link.url)}
-                  aria-label={`Copy ${link.server} link`}
+                  aria-label={`Copy ${mediaDisplayText(link.server, "Download server")} link`}
                   className={cx(
                     "inline-flex h-8 items-center gap-1 rounded-full bg-fill-2 px-3 text-[12.5px] font-semibold text-fg hover:bg-fill-3"
                   )}

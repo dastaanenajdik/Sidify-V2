@@ -10,7 +10,7 @@
     "window-controls-overlay",
     "standalone"
   ],
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "theme_color": "#000000",
   "background_color": "#000000",
   "categories": [

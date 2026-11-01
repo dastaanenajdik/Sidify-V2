@@ -70,6 +70,9 @@ function createFakeVideo() {
     removeEventListener(type, fn) {
       listeners.get(type)?.delete(fn);
     },
+    dispatch(type) {
+      for (const fn of listeners.get(type) ?? []) fn({ type });
+    },
     removeAttribute(attr) {
       this.removedAttributes.push(attr);
     },
@@ -341,6 +344,9 @@ test('dynamic Shaka Player lifecycle creates a fresh shaka.Player per <video> el
 
   // Verify processSrcEqualMetadata is disabled so progressive MP4s never pre-fetch whole files into memory
   assert.equal(handleA1.player.configured[0].streaming.processSrcEqualMetadata, false);
+  assert.equal(handleA1.player.configured[0].streaming.bufferingGoal, 90);
+  assert.equal(handleA1.player.configured[0].streaming.rebufferingGoal, 8);
+  assert.equal(handleA1.player.configured[0].streaming.bufferBehind, 20);
   assert.equal(handleA1.player.configured[0].abr.allowAudioFallback, true);
 
   // Attaching a new stream to videoA destroys its previous Shaka instance and creates a brand-new one
@@ -763,4 +769,38 @@ test('classifyShakaError distinguishes recoverable vs critical and network vs de
   assert.equal(fatals[0].kind, 'network');
 
   await handle.destroy();
+});
+
+
+test('network failures preserve buffered playback until the current range runs out', async () => {
+  const mock = createMockShakaRuntime();
+  const video = createFakeVideo();
+  video.currentTime = 10;
+  video.buffered = { length: 1, start: () => 0, end: () => 40 };
+  const errors = [];
+  const handle = await ShakaPlayer.attachShakaPlayback(video, { url: 'https://cdn.example.com/movie.m3u8', streamType: 'hls', loader: mock.loader, onFatalError: (error) => errors.push(error) });
+  handle.player.emit('error', { severity: 2, category: 1, code: 1001, message: 'offline' });
+  assert.equal(errors.length, 0);
+  video.currentTime = 39.5;
+  video.dispatch('timeupdate');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].kind, 'network');
+  video.dispatch('waiting');
+  assert.equal(errors.length, 1, 'fallback is triggered only once');
+  await handle.destroy();
+});
+
+test('decode errors remain immediate and destroyed sessions discard deferred network errors', async () => {
+  const mock = createMockShakaRuntime();
+  const video = createFakeVideo();
+  video.buffered = { length: 1, start: () => 0, end: () => 40 };
+  const errors = [];
+  const handle = await ShakaPlayer.attachShakaPlayback(video, { url: 'https://cdn.example.com/movie.m3u8', streamType: 'hls', loader: mock.loader, onFatalError: (error) => errors.push(error) });
+  handle.player.emit('error', { severity: 2, category: 3, code: 3016, message: 'decode' });
+  assert.equal(errors[0].kind, 'decode');
+  handle.player.emit('error', { severity: 2, category: 1, code: 1001, message: 'offline' });
+  await handle.destroy();
+  video.currentTime = 40;
+  video.dispatch('waiting');
+  assert.equal(errors.length, 1);
 });

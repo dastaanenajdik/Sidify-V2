@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
@@ -354,7 +356,7 @@ export function ExclusivePlayerSheet({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`Playing ${title?.title ?? fallbackTitle ?? "exclusive title"}`}
+        aria-label={`Playing ${mediaDisplayText(title?.title ?? fallbackTitle, "exclusive title")}`}
         className="fade-up relative w-full max-w-[1120px] overflow-hidden bg-surface ring-1 ring-edge desk:rounded-[18px]"
       >
         <header className="flex items-start gap-3 px-4 py-3 desk:px-6">
@@ -364,10 +366,10 @@ export function ExclusivePlayerSheet({
               <span className="text-[11px] font-bold tracking-[0.08em] text-fg-3 uppercase">Now playing</span>
             </div>
             <h2 className="mt-1 truncate text-[20px] font-extrabold tracking-[-0.4px] desk:text-[24px]">
-              {title?.title ?? fallbackTitle ?? "Loading…"}
+              {mediaDisplayText(title?.title ?? fallbackTitle, "Loading…")}
             </h2>
             <p className="mt-0.5 truncate text-[12.5px] text-fg-2">
-              {[title?.year, title?.genres?.[0]?.name, source?.label && `Stream ${source.label}`].filter(Boolean).join(" · ") ||
+              {[title?.year, title?.genres?.[0]?.name, source?.label && `Stream ${mediaDisplayText(source.label, "Video")}`].filter(Boolean).join(" · ") ||
                 "Exclusive collection"}
             </p>
           </div>
@@ -382,19 +384,19 @@ export function ExclusivePlayerSheet({
           </button>
         </header>
 
-        <div className="relative aspect-video w-full bg-black">
+        <div className="sidify-video-frame relative aspect-video w-full bg-black">
           <video
             ref={videoRef}
             key={`${source?.url ?? "none"}-${reloadNonce}`}
             playsInline
-            preload="metadata"
+            preload="auto"
             poster={title?.backdrop ?? title?.poster ?? undefined}
             className="h-full w-full bg-black"
           >
             Your browser cannot play this media stream.
           </video>
 
-          {status === "ready" && <PlayerControls key={`${source?.url ?? "none"}-${reloadNonce}`} videoRef={videoRef} handleRef={handleRef} audio={audio} text={text} video={video} />}
+          <PlayerControls visible={status === "ready"} key={`${source?.url ?? "none"}-${reloadNonce}`} videoRef={videoRef} handleRef={handleRef} audio={audio} text={text} video={video} />
 
           {status === "loading" && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/45">
@@ -465,7 +467,7 @@ export function ExclusivePlayerSheet({
                         index === sourceIndex ? "bg-primary text-on-primary" : "bg-fill text-fg-2 hover:bg-fill-2 hover:text-fg"
                       )}
                     >
-                      {entry.label || entry.type.toUpperCase()}
+                      {mediaDisplayText(entry.label, entry.type.toUpperCase())}
                       {entry.container ? ` · ${entry.container}` : ""}
                     </button>
                   ))}
@@ -563,7 +565,7 @@ function MiniTitle({ title }: { title: MediaTitle }) {
     <Link
       href={mediaHref(title)}
       className="group/mini w-[104px] shrink-0"
-      title={title.title}
+      title={mediaDisplayText(title.title, "Movie")}
     >
       <div className="relative aspect-[2/3] overflow-hidden rounded-[8px] bg-raised ring-1 ring-edge">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -575,7 +577,7 @@ function MiniTitle({ title }: { title: MediaTitle }) {
           className="h-full w-full object-cover transition-transform group-hover/mini:scale-105"
         />
       </div>
-      <p className="mt-1 truncate text-[11.5px] font-medium">{title.title}</p>
+      <p className="mt-1 truncate text-[11.5px] font-medium">{mediaDisplayText(title.title, "Movie")}</p>
     </Link>
   );
 }
