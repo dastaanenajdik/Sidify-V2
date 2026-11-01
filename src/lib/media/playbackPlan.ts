@@ -148,7 +148,7 @@ export function streamCandidates(links: readonly ResolvedMirrorLink[]): StreamCa
   const ranked: (StreamCandidate & { order: number })[] = [];
 
   links.forEach((link, order) => {
-    if (!link || link.delivery === "external") return;
+    if (!link || link.delivery === "external" || link.delivery === "telegram") return;
     if (ARCHIVE_CONTAINERS.has(String(link.container || "").toUpperCase())) return;
     if (typeof link.url !== "string" || !/^https:\/\//i.test(link.url)) return;
     const url = inlineStreamUrl(link.url);
@@ -179,6 +179,65 @@ export function streamCandidates(links: readonly ResolvedMirrorLink[]): StreamCa
 /** Direct download links (no landing pages), in resolver order. */
 export function downloadLinks(links: readonly ResolvedMirrorLink[]): ResolvedMirrorLink[] {
   return links.filter((link) => link && link.delivery !== "external" && /^https:\/\//i.test(link.url));
+}
+
+/** A resolved link that hands the file over through Telegram ("Download From Telegram"). */
+export function isTelegramLink(link: Pick<ResolvedMirrorLink, "delivery" | "url" | "server"> | null | undefined): boolean {
+  if (!link || typeof link.url !== "string") return false;
+  return link.delivery === "telegram" || /\/tg\/go\b/i.test(link.url);
+}
+
+/** Only the Telegram hand-off links, in resolver order. */
+export function telegramLinks(links: readonly ResolvedMirrorLink[]): ResolvedMirrorLink[] {
+  return links.filter((link) => isTelegramLink(link) && /^https:\/\//i.test(link.url));
+}
+
+const RELEASE_LANGUAGE_NAMES = [
+  "Hindi",
+  "English",
+  "Tamil",
+  "Telugu",
+  "Malayalam",
+  "Kannada",
+  "Bengali",
+  "Punjabi",
+  "Marathi",
+  "Urdu",
+  "Korean",
+  "Japanese",
+  "Chinese",
+  "Spanish",
+  "French",
+  "German",
+  "Russian",
+  "Arabic",
+] as const;
+
+/** Audio language(s) to print next to a release: its parsed label, else names found in the file name. */
+export function releaseLanguageLabel(release: Pick<MediaReleaseItem, "languages" | "fileName" | "title">): string {
+  const parsed = String(release.languages || "").trim();
+  if (parsed) return parsed;
+  const haystack = `${release.fileName || ""} ${release.title || ""}`;
+  const found = RELEASE_LANGUAGE_NAMES.filter((name) => new RegExp(`\\b${name}\\b`, "i").test(haystack));
+  return found.join(" / ");
+}
+
+/**
+ * The release the on-page "Download from Telegram" button acts on: the best
+ * downloadable quality whose mirrors belong to the main catalogue (the
+ * Telegram hand-off only exists on that catalogue's generators). `null`
+ * when the button must not render at all — e.g. exclusive (vault) titles,
+ * whose pages share these components, stay exactly as they were.
+ */
+export function telegramRelease(releases: readonly MediaReleaseItem[]): MediaReleaseItem | null {
+  return downloadableReleases(releases).find((release) => release.mirrors.some((mirror) => mirror.source !== "vault")) ?? null;
+}
+
+/** `"(1080p · Hindi / English)"` for the Telegram button, or just `"(1080p)"` / `""`. */
+export function telegramReleaseBracket(release: MediaReleaseItem | null | undefined): string {
+  if (!release) return "";
+  const parts = [release.quality?.trim(), releaseLanguageLabel(release)].filter(Boolean) as string[];
+  return parts.length ? `(${parts.join(" · ")})` : "";
 }
 
 /**
@@ -231,7 +290,7 @@ export function externalPlayerLinks(links: readonly ResolvedMirrorLink[]): Exter
   })[] = [];
 
   links.forEach((link, order) => {
-    if (!link || link.delivery === "external") return;
+    if (!link || link.delivery === "external" || link.delivery === "telegram") return;
     if (ARCHIVE_CONTAINERS.has(String(link.container || "").toUpperCase())) return;
     if (!isSafeHttpsMediaUrl(link.url)) return;
     if (seen.has(link.url)) return;

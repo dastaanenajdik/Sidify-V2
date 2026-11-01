@@ -433,6 +433,29 @@ test('streamCandidates keep direct files + HLS, drop landing pages/archives, ded
   assert.equal(Plan.inlineStreamUrl('https://cdn.example.com/a.mkv?download'), 'https://cdn.example.com/a.mkv?download');
 });
 
+test('Telegram links are downloads only: never stream/VLC candidates, bracket carries quality + language', () => {
+  const telegram = link('https://hubcloud.ist/tg/go?id=abc', { server: 'Telegram', delivery: 'telegram', container: 'MKV' });
+  const file = link('https://fsl.example.net/Show.mkv');
+
+  assert.equal(Plan.isTelegramLink(telegram), true);
+  assert.equal(Plan.isTelegramLink(file), false);
+  assert.deepEqual(Plan.telegramLinks([file, telegram]).map((l) => l.server), ['Telegram']);
+  assert.deepEqual(Plan.streamCandidates([telegram, file]).map((c) => c.server), ['FSL Server'], 'Telegram is never attempted in the player');
+  assert.deepEqual(Plan.externalPlayerLinks([telegram, file]).map((l) => l.server), ['FSL Server'], 'Telegram is never a VLC URL');
+  assert.deepEqual(Plan.downloadLinks([file, telegram]).map((l) => l.server), ['FSL Server', 'Telegram'], '…but it does show in the download picker');
+
+  const hindi = release({ quality: '1080p', fileName: 'Show.1080p.Hindi.English.mkv', languages: 'Hindi / English' });
+  assert.equal(Plan.telegramRelease([hindi])?.id, hindi.id);
+  assert.equal(Plan.telegramReleaseBracket(hindi), '(1080p · Hindi / English)');
+  const unnamed = release({ quality: '720p', fileName: 'Show.720p.Tamil.mkv' });
+  assert.equal(Plan.releaseLanguageLabel(unnamed), 'Tamil', 'language falls back to the file name');
+  const vaultOnly = release({
+    quality: '1080p',
+    mirrors: [{ id: 'v1', label: 'Vault', shortUrl: 'https://cdn.example.com/v.mkv', host: 'cdn.example.com', source: 'vault' }],
+  });
+  assert.equal(Plan.telegramRelease([vaultOnly]), null, 'exclusive (vault) titles get no Telegram button');
+});
+
 test('classifyMediaError separates file-level (decode) from server-level (network) failures', () => {
   assert.equal(Plan.classifyMediaError(3, false), 'decode');
   assert.equal(Plan.classifyMediaError(4, true), 'decode');

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, ChevronRight, Copy, Download, ExternalLink, Loader2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, ChevronRight, Copy, Download, ExternalLink, Loader2, Send } from "lucide-react";
 import { Sheet } from "@/components/ui";
 import { copyText } from "@/lib/clipboard";
 import { MediaApiError, mediaApi } from "@/lib/media/client";
@@ -11,7 +11,9 @@ import {
   downloadableReleases,
   externalPlayerLink,
   isArchiveRelease,
+  isTelegramLink,
   landingPageUrl,
+  telegramReleaseBracket,
 } from "@/lib/media/playbackPlan";
 import { hintChips, parseReleaseHints } from "@/lib/media/releaseHints";
 import type { MediaReleaseItem, ResolvedMirrorLink } from "@/lib/media/types";
@@ -204,7 +206,7 @@ function QualityPicker({ target }: { target: WatchTarget }) {
           </div>
         )}
 
-        {state.phase === "done" && <LinkList links={state.links} title={target.mediaTitle} />}
+        {state.phase === "done" && <LinkList links={state.links} title={target.mediaTitle} release={selected} />}
       </div>
     </div>
   );
@@ -254,9 +256,10 @@ function ReleaseSummary({ release }: { release: MediaReleaseItem }) {
   );
 }
 
-function LinkList({ links, title }: { links: ResolvedMirrorLink[]; title: string }) {
+function LinkList({ links, title, release }: { links: ResolvedMirrorLink[]; title: string; release: MediaReleaseItem }) {
   const pushToast = useUi((s) => s.pushToast);
   const preferred = externalPlayerLink(links)?.url;
+  const telegramBracket = telegramReleaseBracket(release);
 
   const copy = async (url: string) => {
     try {
@@ -271,7 +274,8 @@ function LinkList({ links, title }: { links: ResolvedMirrorLink[]; title: string
     <div className="space-y-3">
       <ul className="space-y-1.5" aria-label="Download links">
         {links.map((link) => {
-          const canStreamLink = !isArchiveRelease({ container: link.container });
+          const viaTelegram = isTelegramLink(link);
+          const canStreamLink = !viaTelegram && !isArchiveRelease({ container: link.container });
           return (
             <li
               key={link.url}
@@ -295,15 +299,26 @@ function LinkList({ links, title }: { links: ResolvedMirrorLink[]; title: string
                     className="inline-flex h-8 items-center gap-1.5 rounded-full bg-fill-2 px-3 text-[12.5px] font-semibold text-fg transition-colors hover:bg-fill-3"
                   />
                 )}
-                <a
-                  href={link.url}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  download
-                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-semibold text-on-primary hover:opacity-90"
-                >
-                  <Download size={13} aria-hidden="true" /> Download
-                </a>
+                {viaTelegram ? (
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full bg-[#229ED9] px-3.5 text-[12.5px] font-semibold whitespace-nowrap text-white hover:opacity-90"
+                  >
+                    <Send size={13} aria-hidden="true" /> Download from Telegram{telegramBracket ? ` ${telegramBracket}` : ""}
+                  </a>
+                ) : (
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    download
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-semibold text-on-primary hover:opacity-90"
+                  >
+                    <Download size={13} aria-hidden="true" /> Download
+                  </a>
+                )}
                 <button
                   type="button"
                   onClick={() => void copy(link.url)}

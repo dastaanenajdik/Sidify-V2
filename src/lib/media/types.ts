@@ -124,7 +124,12 @@ export interface ResolvedMirrorLink {
   /** True ONLY when verified as a browser-compatible stream (`mp4`, `webm`, `hls`, `dash`). */
   playable: boolean;
   streamType?: "hls" | "dash" | "mp4" | "webm";
-  delivery: "stream" | "download" | "external";
+  /**
+   * `telegram` is the mirror generator's "Download From Telegram" hand-off
+   * (`/tg/go?…`): it opens Telegram to fetch the same file. It is a download
+   * route only — never a stream candidate, never an external-player URL.
+   */
+  delivery: "stream" | "download" | "external" | "telegram";
   container?: string;
   codecNote?: string;
   unsupportedReason?: string;

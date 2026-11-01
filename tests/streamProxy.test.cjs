@@ -92,7 +92,7 @@ test('shouldProxyCrossOriginMediaUrl routes real 4KHDHub mirror CDNs via /api/me
   }
 });
 
-test('parseGeneratorLinks filters out "Download From Telegram" (/tg/go) links while preserving FSL, 10Gbps, and PixelServer', () => {
+test('parseGeneratorLinks returns "Download From Telegram" (/tg/go) as its own delivery, while preserving FSL, 10Gbps, and PixelServer and dropping join-Telegram ads', () => {
   const html = `
     <div class="buttons">
       <a href="https://87bc29edda9ac0f5591377cf744d9a37.r2.cloudflarestorage.com/hub/Ep01.mkv">Download [FSL Server]</a>
@@ -109,12 +109,17 @@ test('parseGeneratorLinks filters out "Download From Telegram" (/tg/go) links wh
     baseUrl: 'https://gamerxyt.com/hubcloud.php',
   });
 
-  assert.equal(links.length, 3);
+  assert.equal(links.length, 4);
   assert.deepEqual(
     links.map((l) => l.server),
-    ['FSL Server', 'Download [Server : 10Gbps]', 'PixelServer'],
+    ['FSL Server', 'Download [Server : 10Gbps]', 'PixelServer', 'Telegram'],
   );
-  assert.ok(links.every((l) => !/\/tg\/go|telegram/i.test(l.url)));
+  const telegram = links[3];
+  assert.equal(telegram.url, 'https://hubcloud.ist/tg/go?id=a2Rla1poaTRZY2dUWg==');
+  assert.equal(telegram.delivery, 'telegram');
+  assert.equal(telegram.playable, false, 'Telegram hand-off is never a playable stream');
+  // The plain "Join Telegram" t.me ad never comes through.
+  assert.ok(links.every((l) => !/t\.me|telegram\.(me|org)/i.test(l.url)));
 });
 
 test('proxyMediaStreamRequest streams bounded 206 Partial Content ranges, caps open-ended ranges, and follows validated 302 redirects', async () => {
