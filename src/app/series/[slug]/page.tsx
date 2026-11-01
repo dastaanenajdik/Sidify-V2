@@ -1,3 +1,4 @@
+import { mediaDisplayText } from "@/lib/media/displayText";
 import { cache } from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -44,14 +45,15 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const detail = await load(slug).catch(() => null);
   if (!detail) return { title: "Series not found" };
   const { title } = detail;
-  const description = title.overview?.slice(0, 155) || `${title.title}${title.year ? ` (${title.year})` : ""} on Sidify.`;
+  const displayTitle = mediaDisplayText(title.title, "Movie");
+  const description = mediaDisplayText(title.overview).slice(0, 155) || `${displayTitle}${title.year ? ` (${title.year})` : ""} on Sidify.`;
   return {
-    title: `${title.title}${title.year ? ` (${title.year})` : ""}`,
+    title: `${displayTitle}${title.year ? ` (${title.year})` : ""}`,
     description,
     alternates: { canonical: `/series/${title.slug}` },
     openGraph: {
       type: "video.tv_show",
-      title: title.title,
+      title: displayTitle,
       description,
       url: `/series/${title.slug}`,
       images: title.poster ? [{ url: title.poster }] : undefined,

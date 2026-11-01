@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { PlayerControls, BUFFERING_TIP } from "./PlayerControls";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -173,7 +175,7 @@ export default function MediaDetailView({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={poster}
-                  alt={`${title.title} poster`}
+                  alt={`${mediaDisplayText(title.title, "Movie")} poster`}
                   decoding="async"
                   onError={() => setPosterBroken(true)}
                   className="aspect-[2/3] w-full object-cover"
@@ -215,9 +217,9 @@ export default function MediaDetailView({
                   )}
                 </div>
                 <h1 className="text-[30px] leading-[1.05] font-extrabold tracking-[-0.7px] desk:text-[46px] desk:tracking-[-1.2px]">
-                  {title.title}
+                  {mediaDisplayText(title.title, "Movie")}
                 </h1>
-                {title.tagline && <p className="mt-1.5 text-[14px] text-white/70 italic">“{title.tagline}”</p>}
+                {title.tagline && <p className="mt-1.5 text-[14px] text-white/70 italic">“{mediaDisplayText(title.tagline)}”</p>}
                 {meta.length > 0 && (
                   <p className="mt-2 text-[12px] font-semibold tracking-[0.05em] text-white/60 uppercase">{meta.join(" · ")}</p>
                 )}
@@ -239,7 +241,7 @@ export default function MediaDetailView({
                     ) : null}
                   </p>
                 )}
-                <p className="mt-3 max-w-[680px] text-[14px] leading-relaxed text-white/85 desk:text-[15px]">{title.overview}</p>
+                <p className="mt-3 max-w-[680px] text-[14px] leading-relaxed text-white/85 desk:text-[15px]">{mediaDisplayText(title.overview)}</p>
 
                 <div className="mt-5 flex flex-wrap items-center gap-2.5">
                   {onRetry && allPlayback.length === 0 && (
@@ -413,7 +415,7 @@ export default function MediaDetailView({
       {/* Sheets live outside the animated <article>: its `fade-up` transform animation would
           otherwise become the containing block of the sheets' `position: fixed` overlay. */}
       {trailerOpen && (
-        <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={title.title} />
+        <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={mediaDisplayText(title.title, "Movie")} />
       )}
       {vlcTarget && <VlcPickerSheet target={vlcTarget} onClose={closeVlc} />}
       {downloadTarget && <QualityPickerSheet target={downloadTarget} onClose={closeDownload} />}
@@ -551,7 +553,7 @@ function MediaStreamPlayer({
       key={source.url}
       ref={videoRef}
       playsInline
-      preload="metadata"
+      preload="auto"
       poster={poster}
       onError={(e) => {
         const el = e.currentTarget;
@@ -562,7 +564,7 @@ function MediaStreamPlayer({
           );
         }
       }}
-      className="aspect-video w-full bg-black"
+      className="aspect-video h-full w-full bg-black object-contain"
     >
       Your browser cannot play this media stream natively.
     </video>
@@ -765,14 +767,14 @@ function PlaybackSection({
             <>
               <ul className="mt-3 flex flex-wrap gap-2">
                 {links.map((link) => (
-                  <li key={`${link.name}-${link.url}`}>
+                  <li key={`${mediaDisplayText(link.name, "Watch")}-${link.url}`}>
                     <a
                       href={link.url}
                       target="_blank"
                       rel="noreferrer noopener"
                       className="inline-flex items-center gap-1.5 rounded-full bg-fill px-3.5 py-2 text-[13px] font-semibold transition-colors hover:bg-fill-2"
                     >
-                      {link.name}
+                      {mediaDisplayText(link.name, "Watch")}
                       {link.kind && <span className="text-[11px] font-medium text-fg-2">{link.kind}</span>}
                       <ExternalLink size={12} aria-hidden="true" />
                     </a>
@@ -814,11 +816,11 @@ function PlaybackSection({
 
   return (
     <section id="play" aria-labelledby="authorized-playback" className="px-4 desk:px-8">
-      <div className="relative overflow-hidden rounded-[16px] bg-black ring-1 ring-edge">
+      <div className="sidify-video-frame relative overflow-hidden rounded-[16px] bg-black ring-1 ring-edge">
         {embed ? (
           <iframe
             src={source.url}
-            title={`${title.title} — player`}
+            title={`${mediaDisplayText(title.title, "Movie")} — player`}
             allow="autoplay; fullscreen; encrypted-media"
             loading="lazy"
             className="aspect-video w-full bg-black"
@@ -842,7 +844,7 @@ function PlaybackSection({
           videoRef={streamVideoRef}
           resumeKey={`stream-${title.kind}-${title.slug}`}
           sourceUrl={source.url}
-          title={title.title}
+          title={mediaDisplayText(title.title, "Movie")}
         />
       )}
 
@@ -874,7 +876,7 @@ function PlaybackSection({
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <h2 id="authorized-playback" className="text-[13px] font-semibold text-fg-2">
-          {source.label || (embed ? "Embedded player" : "Browser stream")}
+          {mediaDisplayText(source.label, embed ? "Embedded player" : "Browser stream")}
         </h2>
         {!embed && activeMode && activeMode !== "unsupported" && (
           <span className="rounded-full bg-fill px-2.5 py-0.5 text-[11px] font-semibold text-fg-3">
@@ -896,11 +898,11 @@ function PlaybackSection({
                 index === boundedIndex ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
               )}
             >
-              {item.label ? `${index + 1}. ${item.label}` : index + 1}
+              {item.label ? `${index + 1}. ${mediaDisplayText(item.label, "Stream")}` : index + 1}
             </button>
           ))}
       </div>
-      {source.note && <p className="mt-1.5 max-w-[680px] text-[11.5px] leading-relaxed text-fg-3">{source.note}</p>}
+      {source.note && <p className="mt-1.5 max-w-[680px] text-[11.5px] leading-relaxed text-fg-3">{mediaDisplayText(source.note)}</p>}
 
       {downloads.length > 0 && (
         <div className="mt-3" aria-labelledby="downloads-heading">
@@ -917,7 +919,7 @@ function PlaybackSection({
                   className="inline-flex items-center gap-1.5 rounded-full bg-fill px-3.5 py-2 text-[13px] font-semibold transition-colors hover:bg-fill-2"
                 >
                   <Download size={13} aria-hidden="true" />
-                  {entry.label}
+                  {mediaDisplayText(entry.label, "Download")}
                   {entry.sizeBytes ? <span className="text-[11px] font-medium text-fg-2">{formatBytes(entry.sizeBytes)}</span> : null}
                 </a>
               </li>

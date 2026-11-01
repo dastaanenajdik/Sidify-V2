@@ -100,17 +100,18 @@ export function TelegramDownloadButton({
       aria-busy={busy || undefined}
       title={label}
       className={cx(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-full px-4 font-semibold transition-[background,opacity,transform] active:scale-[0.97] disabled:opacity-70",
+        "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full px-4 text-left font-semibold transition-[background,opacity,transform] active:scale-[0.97] disabled:opacity-70",
         className && /\bbg-/.test(className) ? undefined : "bg-fill-2 text-fg hover:bg-fill-3",
-        className
+        className,
+        "!h-auto min-h-8 py-2"
       )}
     >
       {busy ? (
-        <Loader2 size={iconSize} className="animate-spin" aria-hidden="true" />
+        <Loader2 size={iconSize} className="shrink-0 animate-spin" aria-hidden="true" />
       ) : (
-        <Send size={iconSize} aria-hidden="true" />
+        <Send size={iconSize} className="shrink-0" aria-hidden="true" />
       )}
-      <span className="whitespace-nowrap">{label}</span>
+      <span className="min-w-0 break-words leading-snug">{label}</span>
     </button>
   );
 }

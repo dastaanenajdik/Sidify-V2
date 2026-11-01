@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import Link from "next/link";
 import { useState } from "react";
 import { Film, Star, Tv } from "lucide-react";
@@ -32,7 +34,7 @@ function Row({ item }: { item: MediaTitle }) {
           className="aspect-[2/3] w-11 shrink-0 rounded-[6px] bg-raised object-cover ring-1 ring-edge"
         />
         <span className="min-w-0 flex-1">
-          <span className="line-clamp-2 text-[14px] leading-snug font-medium">{item.title}</span>
+          <span className="line-clamp-2 text-[14px] leading-snug font-medium">{mediaDisplayText(item.title, "Movie")}</span>
           <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[12px] text-fg-2">
             {exclusive && <ExclusiveBadge compact />}
             <KindIcon size={12} aria-hidden="true" />

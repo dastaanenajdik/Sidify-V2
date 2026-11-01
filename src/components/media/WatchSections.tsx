@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { useMemo, useState } from "react";
 import { Archive, Calendar, Clock, Download, Play, Star } from "lucide-react";
 import { Chips, SectionHeader } from "@/components/ui";
@@ -58,7 +60,7 @@ export function WatchActions({
     size === "md" ? "h-10 px-4 text-[14px]" : "h-8 px-3 text-[12.5px]"
   );
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
       {canPlay && (
         <button type="button" onClick={onPlay} className={cx(base, "bg-primary text-on-primary hover:opacity-90")}>
           <Play size={size === "md" ? 15 : 12} fill="currentColor" aria-hidden="true" />{" "}
@@ -108,7 +110,7 @@ export function MovieWatchSection({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <h2 id="watch-heading" className="t-title truncate">
-              {title.title}
+              {mediaDisplayText(title.title, "Movie")}
               {title.year ? ` (${title.year})` : ""}
             </h2>
             <p className="mt-0.5 text-[12.5px] text-fg-2">{summary(target.releases)}</p>
@@ -169,7 +171,7 @@ export function SeasonTabsSection({
             key={active.key}
             tab={active}
             slug={slug}
-            seriesTitle={title.title}
+            seriesTitle={mediaDisplayText(title.title, "Movie")}
             poster={poster}
             onPlay={onPlay}
             onVlc={onVlc}
@@ -313,7 +315,7 @@ function EpisodeRow({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className="text-[14px] font-medium">{episode.title}</span>
+            <span className="text-[14px] font-medium">{mediaDisplayText(episode.title, "Episode")}</span>
             {episode.runtimeMinutes ? (
               <span className="flex items-center gap-1 text-[11.5px] text-fg-3">
                 <Clock size={11} aria-hidden="true" /> {episode.runtimeMinutes} min

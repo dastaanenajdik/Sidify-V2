@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { memo, useState } from "react";
 import Link from "next/link";
 import { Bookmark, Star } from "lucide-react";
@@ -48,7 +50,7 @@ export const PosterCard = memo(function PosterCard({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={artwork}
-            alt={`${title.title} poster`}
+            alt={`${mediaDisplayText(title.title, "Movie")} poster`}
             loading={eager ? "eager" : "lazy"}
             decoding="async"
             draggable={false}
@@ -77,7 +79,7 @@ export const PosterCard = memo(function PosterCard({
           )}
         </div>
         <div className="mt-2 min-w-0">
-          <div className="truncate text-[14px] leading-snug font-medium">{title.title}</div>
+          <div className="truncate text-[14px] leading-snug font-medium">{mediaDisplayText(title.title, "Movie")}</div>
           {meta && <div className="truncate text-[12.5px] leading-snug text-fg-2">{meta}</div>}
         </div>
       </Link>
@@ -85,7 +87,7 @@ export const PosterCard = memo(function PosterCard({
       <button
         type="button"
         aria-pressed={saved}
-        aria-label={saved ? `Remove ${title.title} from watchlist` : `Add ${title.title} to watchlist`}
+        aria-label={saved ? `Remove ${mediaDisplayText(title.title, "Movie")} from watchlist` : `Add ${mediaDisplayText(title.title, "Movie")} to watchlist`}
         title={saved ? "In your watchlist" : "Add to watchlist"}
         onClick={() => toggle(title)}
         className={cx(

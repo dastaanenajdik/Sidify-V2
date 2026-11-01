@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { memo, useState } from "react";
 import Link from "next/link";
 import { Bookmark, Play, Star } from "lucide-react";
@@ -69,7 +71,7 @@ export const ExclusivePoster = memo(function ExclusivePoster({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={artwork}
-            alt={`${title.title} poster`}
+            alt={`${mediaDisplayText(title.title, "Movie")} poster`}
             loading={eager ? "eager" : "lazy"}
             decoding="async"
             draggable={false}
@@ -102,7 +104,7 @@ export const ExclusivePoster = memo(function ExclusivePoster({
           {onPlay && (
             <button
               type="button"
-              aria-label={`Play ${title.title}`}
+              aria-label={`Play ${mediaDisplayText(title.title, "Movie")}`}
               onClick={() => onPlay(title)}
               className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover/exp:opacity-100 focus-visible:opacity-100"
             >
@@ -114,7 +116,7 @@ export const ExclusivePoster = memo(function ExclusivePoster({
         </div>
 
         <div className="mt-2 min-w-0">
-          <div className="truncate text-[14px] leading-snug font-semibold">{title.title}</div>
+          <div className="truncate text-[14px] leading-snug font-semibold">{mediaDisplayText(title.title, "Movie")}</div>
           {meta && <div className="truncate text-[12.5px] leading-snug text-fg-2">{meta}</div>}
         </div>
       </Link>
@@ -122,7 +124,7 @@ export const ExclusivePoster = memo(function ExclusivePoster({
       <button
         type="button"
         aria-pressed={saved}
-        aria-label={saved ? `Remove ${title.title} from watchlist` : `Add ${title.title} to watchlist`}
+        aria-label={saved ? `Remove ${mediaDisplayText(title.title, "Movie")} from watchlist` : `Add ${mediaDisplayText(title.title, "Movie")} to watchlist`}
         onClick={() => toggle(title)}
         className={cx(
           "absolute top-2 right-2 z-10 grid h-8 w-8 place-items-center rounded-full opacity-0 backdrop-blur-md transition-[background,color,opacity] duration-150 group-hover/exp:opacity-100 focus-visible:opacity-100 active:scale-90",

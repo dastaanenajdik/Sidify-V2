@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import {
   AlertCircle,
@@ -59,7 +61,7 @@ import type { WatchTarget } from "./watch";
 export { BetaBadge };
 
 /** How long one link may take to parse headers/cues and show its first frame before trying the next one. */
-const ATTEMPT_TIMEOUT_MS = 25_000;
+const ATTEMPT_TIMEOUT_MS = 60_000;
 
 interface BetaPlayerHandle {
   stop: () => void;
@@ -101,7 +103,7 @@ export function BetaPlayerSheet({
     <Sheet
       open={Boolean(target)}
       onClose={close}
-      title={target?.heading}
+      title={mediaDisplayText(target?.heading, "Movie")}
       subtitle={
         <span className="inline-flex items-center gap-1.5">
           Try Play <BetaBadge />
@@ -156,7 +158,7 @@ function qualityLabel(release: MediaReleaseItem | undefined): string {
 function statusText(status: PlaybackStatus | null, checkingAudio = false): string {
   if (!status) return "Getting ready…";
   const q = qualityLabel(status.release);
-  const server = status.candidate ? ` · ${status.candidate.server}` : "";
+  const server = status.candidate ? ` · ${mediaDisplayText(status.candidate.server, "Stream")}` : "";
   switch (status.phase) {
     case "resolving":
       return `Getting the ${q} link…`;
@@ -787,7 +789,7 @@ function BetaPlayer({
 
   return (
     <div>
-      <div className="relative aspect-video w-full overflow-hidden rounded-[12px] bg-black ring-1 ring-edge">
+      <div className="sidify-video-frame relative aspect-video w-full overflow-hidden rounded-[12px] bg-black ring-1 ring-edge">
         <video
           ref={videoRef}
           playsInline
@@ -798,7 +800,7 @@ function BetaPlayer({
           Your browser cannot play this video.
         </video>
 
-        {outcome === "playing" && <PlayerControls videoRef={videoRef} handleRef={shakaHandleRef} audio={audioTracks} text={textTracks} video={videoTracks} releases={releases.map((release, index) => ({ label: chipLabel(release, index), selected: index === activeIndex, onSelect: () => begin(index, currentTime(), { pin: true }) }))} />}
+        <PlayerControls visible={outcome === "playing"} videoRef={videoRef} handleRef={shakaHandleRef} audio={audioTracks} text={textTracks} video={videoTracks} releases={releases.map((release, index) => ({ label: chipLabel(release, index), selected: index === activeIndex, onSelect: () => begin(index, currentTime(), { pin: true }) }))} />
 
         {outcome !== "playing" && (
           <div

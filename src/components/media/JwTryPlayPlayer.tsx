@@ -1,8 +1,10 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { BUFFERING_TIP } from "./PlayerControls";
 
-import { useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type Ref, type RefObject } from "react";
 import { AlertCircle, Download, Loader2, RotateCcw, RotateCw, SkipForward, VolumeX } from "lucide-react";
 import { MediaApiError, mediaApi } from "@/lib/media/client";
 import { redactUrl, reportMediaDiagnostic } from "@/lib/media/diagnostics";
@@ -63,7 +65,7 @@ function qualityLabel(release: MediaReleaseItem | undefined): string {
 function statusText(status: PlaybackStatus | null): string {
   if (!status) return "Getting ready…";
   const q = qualityLabel(status.release);
-  const server = status.candidate ? ` · ${status.candidate.server}` : "";
+  const server = status.candidate ? ` · ${mediaDisplayText(status.candidate.server, "Stream")}` : "";
   switch (status.phase) {
     case "resolving":
       return `Getting the ${q} link…`;
@@ -110,6 +112,7 @@ export function JwTryPlayPlayer({
   const [storedStart] = useState<number | null>(() => resumePosition(loadResumePoint(resumeKey)));
 
   const holderRef = useRef<HTMLDivElement | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
   const reactId = useId();
   const mountIdRef = useRef(`sidify-jw-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`);
   const playerRef = useRef<JwPlayerInstance | null>(null);
@@ -498,8 +501,9 @@ export function JwTryPlayPlayer({
 
   return (
     <div>
-      <div className="relative aspect-video w-full overflow-hidden rounded-[12px] bg-black ring-1 ring-edge">
+      <div ref={frameRef} className="sidify-video-frame relative aspect-video w-full overflow-hidden rounded-[12px] bg-black ring-1 ring-edge">
         <div ref={holderRef} className="h-full w-full bg-black" />
+        {outcome === "playing" && <JwLandscapePrompt frameRef={frameRef} />}
         {outcome !== "playing" && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/60 px-6 text-center text-white" aria-hidden="true">
             {outcome === "working" ? (
@@ -648,4 +652,53 @@ export function JwTryPlayPlayer({
       </p>
     </div>
   );
+}
+
+/** JW owns its control bar; offer the same mobile landscape behaviour without replacing it. */
+function JwLandscapePrompt({ frameRef }: { frameRef: RefObject<HTMLDivElement | null> }) {
+  const [show, setShow] = useState(true);
+  const locked = useRef(false);
+  const enter = async () => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    try {
+      if (frame.requestFullscreen) {
+        await frame.requestFullscreen();
+        const orientation = window.screen.orientation as ScreenOrientation & { lock?: (type: string) => Promise<void> };
+        try {
+          if (document.fullscreenElement === frame && orientation?.lock) {
+            await orientation.lock("landscape");
+            if (document.fullscreenElement === frame) locked.current = true;
+            else orientation.unlock?.();
+          }
+        } catch { /* browser does not support orientation locking */ }
+        setShow(false);
+      } else {
+        const video = frame.querySelector("video") as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+        if (!video?.webkitEnterFullscreen) throw new Error("Fullscreen unavailable");
+        video.webkitEnterFullscreen();
+        setShow(false);
+      }
+    } catch { setShow(true); }
+  };
+  const enterRef = useRef(enter);
+  useEffect(() => { enterRef.current = enter; });
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || !window.matchMedia?.("(pointer: coarse) and (max-width: 1024px)").matches) return;
+    if (window.navigator.userActivation?.isActive) void enterRef.current();
+    const onChange = () => {
+      if (document.fullscreenElement !== frame && locked.current) {
+        window.screen.orientation?.unlock?.();
+        locked.current = false;
+      }
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      if (locked.current) { window.screen.orientation?.unlock?.(); locked.current = false; }
+      if (document.fullscreenElement === frame) void document.exitFullscreen().catch(() => {});
+    };
+  }, [frameRef]);
+  return show ? <button type="button" onClick={() => void enter()} className="jw-landscape-prompt absolute top-2 right-2 z-20 rounded-lg bg-black/80 px-3 py-2 text-xs font-semibold text-white">Tap for fullscreen &amp; landscape</button> : null;
 }

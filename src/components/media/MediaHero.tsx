@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -80,13 +82,13 @@ export function MediaHero({ title }: { title: MediaTitle }) {
             </div>
 
             <h2 className="line-clamp-2 text-[32px] leading-[1.05] font-extrabold tracking-[-0.8px] desk:text-[46px] desk:tracking-[-1.2px]">
-              {title.title}
+              {mediaDisplayText(title.title, "Movie")}
             </h2>
             {meta.length > 0 && (
               <p className="mt-2 text-[12.5px] font-semibold tracking-[0.04em] text-white/65 uppercase">{meta.join(" · ")}</p>
             )}
             <p className="mt-3 line-clamp-3 max-w-[560px] text-[14px] leading-relaxed text-white/80 desk:text-[15px]">
-              {title.overview}
+              {mediaDisplayText(title.overview)}
             </p>
 
             <div className="mt-5 flex flex-wrap items-center gap-2.5">
@@ -108,7 +110,7 @@ export function MediaHero({ title }: { title: MediaTitle }) {
               <button
                 type="button"
                 aria-pressed={saved}
-                aria-label={saved ? `Remove ${title.title} from watchlist` : `Add ${title.title} to watchlist`}
+                aria-label={saved ? `Remove ${mediaDisplayText(title.title, "Movie")} from watchlist` : `Add ${mediaDisplayText(title.title, "Movie")} to watchlist`}
                 title={saved ? "In your watchlist" : "Add to watchlist"}
                 onClick={() => toggle(title)}
                 className={cx(
@@ -124,7 +126,7 @@ export function MediaHero({ title }: { title: MediaTitle }) {
       </div>
 
       {trailerOpen && (
-        <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={title.title} />
+        <TrailerSheet open={trailerOpen} onClose={() => setTrailerOpen(false)} trailer={title.trailer} title={mediaDisplayText(title.title, "Movie")} />
       )}
     </header>
   );

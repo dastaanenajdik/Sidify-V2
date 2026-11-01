@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { useState } from "react";
 import Link from "next/link";
 import { Bookmark, Check, Info, Play, Shuffle, Sparkles, Star } from "lucide-react";
@@ -89,7 +91,7 @@ export function ExclusiveHero({
         </div>
 
         <h1 className="mt-3 max-w-[820px] text-[34px] leading-[1.02] font-black tracking-[-1px] desk:text-[60px] desk:tracking-[-2px]">
-          {title.title}
+          {mediaDisplayText(title.title, "Movie")}
         </h1>
 
         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px] font-semibold text-white/80">
@@ -124,7 +126,7 @@ export function ExclusiveHero({
 
         {title.overview && (
           <p className="mt-3 line-clamp-3 max-w-[660px] text-[13.5px] leading-relaxed text-white/80 desk:text-[15px]">
-            {title.overview}
+            {mediaDisplayText(title.overview)}
           </p>
         )}
 

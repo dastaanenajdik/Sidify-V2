@@ -1,5 +1,7 @@
 "use client";
 
+import { mediaDisplayText } from "@/lib/media/displayText";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Copy, ExternalLink, FileDown, Loader2, Play, RotateCcw } from "lucide-react";
 import { Sheet } from "@/components/ui";
@@ -30,7 +32,7 @@ export function VlcPickerSheet({ target, onClose }: { target: WatchTarget | null
     <Sheet
       open={Boolean(target)}
       onClose={onClose}
-      title={target ? `Play with VLC · ${target.heading}` : undefined}
+      title={target ? `Play with VLC · ${mediaDisplayText(target.heading, "Movie")}` : undefined}
       subtitle="All qualities load below — tap any link to open and play in VLC"
       width={640}
     >
@@ -162,7 +164,7 @@ function QualityVlcCard({
         {release.languages && <span className="text-[11.5px] font-medium text-fg-3">{release.languages}</span>}
       </div>
 
-      <p className="mt-1 line-clamp-1 text-[11.5px] break-all text-fg-3">{release.fileName}</p>
+      <p className="mt-1 line-clamp-1 text-[11.5px] break-all text-fg-3">{mediaDisplayText(release.fileName, "File")}</p>
 
       <div className="mt-2.5">
         {entry.phase === "loading" ? (
@@ -262,7 +264,7 @@ function ServerVlcRow({ link, title }: { link: ExternalPlayerLink; title: string
           <a href={handoff.plan.href} rel="noreferrer noopener" className={primaryClass} title={handoff.plan.note}>
             <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
               <Play size={12} fill="currentColor" className="shrink-0" aria-hidden="true" />
-              <span className="truncate">Play in VLC · {link.server}</span>
+              <span className="truncate">Play in VLC · {mediaDisplayText(link.server, "Stream")}</span>
             </span>
           </a>
         ) : (
@@ -275,7 +277,7 @@ function ServerVlcRow({ link, title }: { link: ExternalPlayerLink; title: string
           >
             <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
               <FileDown size={13} className="shrink-0" aria-hidden="true" />
-              <span className="truncate">Play in VLC · {link.server}</span>
+              <span className="truncate">Play in VLC · {mediaDisplayText(link.server, "Stream")}</span>
             </span>
           </button>
         )}
@@ -292,7 +294,7 @@ function ServerVlcRow({ link, title }: { link: ExternalPlayerLink; title: string
         <button
           type="button"
           onClick={() => void copy()}
-          aria-label={`Copy ${link.server} stream link`}
+          aria-label={`Copy ${mediaDisplayText(link.server, "Stream")} stream link`}
           className={secondaryChip}
         >
           <Copy size={12} aria-hidden="true" /> Copy
