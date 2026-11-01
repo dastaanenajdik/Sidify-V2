@@ -63,8 +63,11 @@ test('the player exposes quality, audio and subtitle choice on top of Shaka', ()
   assert.match(PLAYER, /attachShakaPlayback/);
   assert.match(PLAYER, /getVideoQualities|selectVideoQuality/);
   assert.match(PLAYER, /selectAudioTrack/);
-  assert.match(PLAYER, /selectTextTrack/);
-  assert.match(PLAYER, /Auto \(adaptive\)/);
+  const controls = read('src/components/media/PlayerControls.tsx');
+  assert.match(PLAYER, /<PlayerControls/);
+  assert.match(controls, /selectTextTrack/);
+  assert.match(controls, /selectVideoQuality/);
+  assert.match(controls, /Auto \(adaptive\)/);
   assert.match(PLAYER, /preferredAudioLanguages/);
   assert.match(PLAYER, /Audio OK|Checking audio/);
   assert.match(PLAYER, /role="dialog"/);

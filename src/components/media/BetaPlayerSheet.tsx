@@ -3,9 +3,7 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import {
   AlertCircle,
-  Captions,
   Download,
-  Languages,
   Loader2,
   RotateCcw,
   RotateCw,
@@ -44,12 +42,14 @@ import {
   type ShakaErrorEvent,
   type ShakaPlaybackHandle,
   type ShakaTextTrackOption,
+  type ShakaVideoQualityOption,
 } from "@/lib/media/shakaPlayer";
 import type { MediaReleaseItem } from "@/lib/media/types";
 import { SOMETHING_WENT_WRONG } from "@/lib/media/userError";
 import { cx } from "@/lib/format";
 import { useMounted } from "@/lib/useMounted";
 import { isJwConfigured } from "@/lib/media/jwPlayer";
+import { PlayerControls, BUFFERING_TIP } from "./PlayerControls";
 import { BetaBadge } from "./BetaBadge";
 import { ExternalPlayerLinks } from "./ExternalPlayerLinks";
 import { JwTryPlayPlayer, type JwTryPlayHandle } from "./JwTryPlayPlayer";
@@ -245,6 +245,7 @@ function BetaPlayer({
   const [resumedFrom, setResumedFrom] = useState<number | null>(storedStart);
   const [audioTracks, setAudioTracks] = useState<ShakaAudioTrackOption[]>([]);
   const [textTracks, setTextTracks] = useState<ShakaTextTrackOption[]>([]);
+  const [videoTracks, setVideoTracks] = useState<ShakaVideoQualityOption[]>([]);
 
   useEffect(() => {
     capsRef.current = caps;
@@ -262,6 +263,7 @@ function BetaPlayer({
     liveUrlRef.current = null;
     setAudioTracks([]);
     setTextTracks([]);
+    setVideoTracks([]);
     if (handle) {
       void handle.destroy();
       return;
@@ -495,10 +497,11 @@ function BetaPlayer({
           fileName: release.fileName ?? release.title,
           startAt,
           signal,
-          onTracksChanged: ({ audio, text }) => {
+          onTracksChanged: ({ audio, text, video }) => {
             if (signal.aborted) return;
             setAudioTracks(audio);
             setTextTracks(text);
+            setVideoTracks(video);
           },
           onFatalError: (err) => {
             shakaFatal = err;
@@ -787,7 +790,6 @@ function BetaPlayer({
       <div className="relative aspect-video w-full overflow-hidden rounded-[12px] bg-black ring-1 ring-edge">
         <video
           ref={videoRef}
-          controls={outcome === "playing"}
           playsInline
           preload="auto"
           poster={target.poster}
@@ -795,6 +797,8 @@ function BetaPlayer({
         >
           Your browser cannot play this video.
         </video>
+
+        {outcome === "playing" && <PlayerControls videoRef={videoRef} handleRef={shakaHandleRef} audio={audioTracks} text={textTracks} video={videoTracks} releases={releases.map((release, index) => ({ label: chipLabel(release, index), selected: index === activeIndex, onSelect: () => begin(index, currentTime(), { pin: true }) }))} />}
 
         {outcome !== "playing" && (
           <div
@@ -929,83 +933,6 @@ function BetaPlayer({
             </div>
           )}
 
-          {outcome === "playing" && audioTracks.length > 1 && (
-            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              <span className="mr-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2">
-                <Languages size={13} aria-hidden="true" /> Audio
-              </span>
-              {audioTracks.map((track) => (
-                <button
-                  key={track.id}
-                  type="button"
-                  aria-pressed={track.active}
-                  onClick={() => shakaHandleRef.current?.selectAudioTrack(track.id)}
-                  className={cx(
-                    "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
-                    track.active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
-                  )}
-                >
-                  {track.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {outcome === "playing" && textTracks.length > 0 && (
-            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              <span className="mr-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-fg-2">
-                <Captions size={13} aria-hidden="true" /> Subtitles
-              </span>
-              <button
-                type="button"
-                aria-pressed={textTracks.every((t) => !t.active)}
-                onClick={() => void shakaHandleRef.current?.selectTextTrack(null)}
-                className={cx(
-                  "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
-                  textTracks.every((t) => !t.active) ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
-                )}
-              >
-                Off
-              </button>
-              {textTracks.map((track) => (
-                <button
-                  key={track.id}
-                  type="button"
-                  aria-pressed={track.active}
-                  onClick={() => void shakaHandleRef.current?.selectTextTrack(track.id)}
-                  className={cx(
-                    "h-7 rounded-full px-3 text-[12px] font-semibold transition-colors",
-                    track.active ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2"
-                  )}
-                >
-                  {track.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-[12.5px] font-semibold text-fg-2">
-              {outcome === "playing" ? statusText(status) : "Quality"}
-            </span>
-            {releases.map((release, index) => (
-              <button
-                key={release.id}
-                type="button"
-                aria-pressed={index === activeIndex}
-                onClick={() => begin(index, currentTime(), { pin: true })}
-                title={failures[index] === "no-audio" ? "No sound in this browser" : undefined}
-                className={cx(
-                  "h-7 rounded-full px-3 text-[12px] font-semibold tabular-nums transition-colors",
-                  index === activeIndex ? "bg-primary text-on-primary" : "bg-fill text-fg hover:bg-fill-2",
-                  failures[index] && index !== activeIndex && "text-fg-3 line-through"
-                )}
-              >
-                {chipLabel(release, index)}
-              </button>
-            ))}
-          </div>
-
           {outcome === "playing" && withoutSound && (
             <p className="mt-2 text-[12px] text-fg-2">
               Playing without sound — this browser can&apos;t decode the file&apos;s audio. VLC or the downloaded file
@@ -1081,8 +1008,7 @@ function BetaPlayer({
       )}
 
       <p className="mt-3 text-[11.5px] leading-relaxed text-fg-3">
-        Powered by Shaka Player: starts with the best quality that plays with sound here and steps down if a link
-        won&apos;t play. Remembers where you stopped. Your browser streams the file directly from the host.
+        {BUFFERING_TIP}
       </p>
     </div>
   );
