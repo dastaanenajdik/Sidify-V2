@@ -1,8 +1,10 @@
 {
   "id": "/",
-  "name": "Sidify",
+  "name": "Sidify — Free Music & Song Streaming",
   "short_name": "Sidify",
-  "description": "Sidify \u2014 full songs, synced lyrics, AutoPlay and Listen Together rooms.",
+  "description": "Sidify — free online music & song player with full songs, synced lyrics, smart song radio, Listen Together rooms, offline downloads and HD movies.",
+  "lang": "en",
+  "dir": "ltr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -25,10 +27,16 @@
   },
   "shortcuts": [
     {
-      "name": "Search",
+      "name": "Search Songs & Music",
       "short_name": "Search",
-      "description": "Find a song, album or artist",
+      "description": "Find any song, album, artist or movie",
       "url": "/search"
+    },
+    {
+      "name": "Explore Genres",
+      "short_name": "Explore",
+      "description": "Browse music moods, Bollywood, Punjabi, Pop & Lo-Fi",
+      "url": "/explore"
     },
     {
       "name": "Library",
@@ -39,7 +47,7 @@
     {
       "name": "Listen Together",
       "short_name": "Together",
-      "description": "Start or join a listening room",
+      "description": "Start or join a live listening room",
       "url": "/rooms"
     }
   ],

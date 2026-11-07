@@ -1,0 +1,9 @@
+/* TEAM */
+Product: Sidify — Free Music, Songs & Entertainment Hub
+Site: https://sidify.vercel.app
+Repository: https://github.com/dastaanenajdik/Sidify-V2
+
+/* SITE */
+Standards: HTML5, CSS3, TypeScript, Next.js App Router, PWA, Schema.org JSON-LD
+Components: React 19, Tailwind CSS, TanStack Query, Zustand, Shaka Player
+Language: English / Hindi (en-IN)
