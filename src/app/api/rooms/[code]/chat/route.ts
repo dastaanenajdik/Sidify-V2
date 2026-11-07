@@ -34,6 +34,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
       me = memberByToken(room, token);
       if (!me) return false;
       const touched = touch(room, me.id, now);
+      // Clear typing when a message is sent
+      let typingCleared = false;
+      if (me.typingUntil) {
+        delete me.typingUntil;
+        room.seq++;
+        typingCleared = true;
+      }
       // Older rooms may predate the chat field.
       const chat = (room.chat ??= []);
       const alreadySent = chat.some((message) => message.id === messageId && message.memberId === me!.id);
@@ -50,7 +57,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
         room.chat = chat.slice(-ROOM_LIMITS.chatMessages);
         room.seq++;
       }
-      return !alreadySent || touched;
+      return !alreadySent || touched || typingCleared;
     });
   } catch (error) {
     console.error("room chat failed", error);

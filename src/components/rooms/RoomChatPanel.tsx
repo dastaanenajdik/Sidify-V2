@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowDown,
   Check,
@@ -13,13 +13,10 @@ import {
   Smile,
   X,
 } from "lucide-react";
-import { editRoomChat, markSeen, sendRoomChat, waitForRoomChatMessage, useRoom } from "@/lib/rooms/client";
-import { ROOM_LIMITS, currentOf, type RoomChatMessage, type RoomState, type RoomTrack } from "@/lib/rooms/logic";
-import { useLyricsLookup } from "@/lib/lyricsClient";
+import { editRoomChat, markSeen, notifyTyping, sendRoomChat, sendRoomTyping, waitForRoomChatMessage } from "@/lib/rooms/client";
+import { ROOM_LIMITS, type RoomChatMessage, type RoomState } from "@/lib/rooms/logic";
 import { cx } from "@/lib/format";
 import { IconButton } from "@/components/ui";
-import { SyncedLyrics, lyricsAreSynced } from "@/components/player/LyricsPane";
-import { useSettings } from "@/store/settings";
 
 function createMessageId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -71,40 +68,6 @@ function linkify(text: string): ReactNode {
   return nodes;
 }
 
-function RoomLyricsBackdrop({
-  track,
-  visible,
-  onAvailability,
-}: {
-  track: RoomTrack;
-  visible: boolean;
-  onAvailability: (available: boolean) => void;
-}) {
-  const { loading, started, lines } = useLyricsLookup(track.title, track.artist, track.durationMs);
-  const reduceMotion = useSettings((state) => state.reduceMotion);
-  const hasSyncedLyrics = started && !loading && lyricsAreSynced(lines);
-
-  useEffect(() => {
-    onAvailability(hasSyncedLyrics);
-  }, [hasSyncedLyrics, onAvailability]);
-
-  if (!visible || !hasSyncedLyrics) return null;
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0 flex min-h-0 flex-col overflow-hidden opacity-[0.16]">
-      <SyncedLyrics
-        lines={lines}
-        offset={0}
-        fontSize={18}
-        onArt={false}
-        reduce={reduceMotion}
-        selecting={false}
-        picked={[]}
-        onPick={() => {}}
-      />
-    </div>
-  );
-}
-
 type ReplyTarget = { id: string; by: string; text: string };
 
 export default function RoomChatPanel({
@@ -130,8 +93,7 @@ export default function RoomChatPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [newMessageCount, setNewMessageCount] = useState(0);
-  const [lyricsAvailability, setLyricsAvailability] = useState<{ trackId: string; available: boolean }>({ trackId: "", available: false });
-  const [lyricsPreference, setLyricsPreference] = useState<{ trackId: string; show: boolean }>({ trackId: "", show: true });
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const caretRef = useRef({ start: 0, end: 0 });
@@ -140,13 +102,21 @@ export default function RoomChatPanel({
   const lastRoomCodeRef = useRef(room.code);
   const seenChatIdsRef = useRef<Set<string> | null>(null);
   const wasNearBottomRef = useRef(true);
-  const track = currentOf(room);
-  const trackId = track?.id;
-  const lyricsAvailable = !!trackId && lyricsAvailability.trackId === trackId && lyricsAvailability.available;
-  const showLyrics = !trackId || lyricsPreference.trackId !== trackId ? true : lyricsPreference.show;
-  const reportLyricsAvailability = useCallback((available: boolean) => {
-    if (trackId) setLyricsAvailability({ trackId, available });
-  }, [trackId]);
+
+  // Tick every second so typing indicators expire without waiting for next poll
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const typingPeers = useMemo(() => {
+    const names: string[] = [];
+    for (const m of room.members) {
+      if (m.id === you) continue;
+      if (m.typingUntil && m.typingUntil > nowTick) names.push(m.name);
+    }
+    return names;
+  }, [room.members, you, nowTick, room.seq]);
 
   const entries = useMemo(() => {
     const events = room.activity.map((event, i) => ({ kind: "activity" as const, key: `activity-${event.at}-${i}`, at: event.at, event }));
@@ -167,7 +137,7 @@ export default function RoomChatPanel({
   }, [room.chat]);
 
   // Highest chat index any *other* member has read up to. A message at or below
-  // this frontier has been seen by someone else → double tick.
+  // this frontier has been seen by someone else → double tick (green).
   const seenFrontier = useMemo(() => {
     let max = -1;
     for (const member of room.members) {
@@ -250,6 +220,8 @@ export default function RoomChatPanel({
     const next = `${draft.slice(0, start)}${emoji}${draft.slice(end)}`;
     if (next.length > ROOM_LIMITS.chatMessageLength) return;
     setDraft(next);
+    // typing after emoji insert
+    void notifyTyping(next.trim().length > 0);
     setEmojiOpen(false);
     requestAnimationFrame(() => {
       const input = inputRef.current;
@@ -273,6 +245,7 @@ export default function RoomChatPanel({
     setPendingMessage({ id, at: Date.now(), memberId: you, by: "", text, replyTo: replyingTo });
     setDraft("");
     setReplyTarget(null);
+    void sendRoomTyping(false);
     setSending(true);
     await sendRoomChat(text, id, replyingTo?.id ?? null);
     const delivered = await waitForRoomChatMessage(id, 2000);
@@ -303,46 +276,11 @@ export default function RoomChatPanel({
       glass ? "bar-glass shadow-[0_18px_55px_rgba(0,0,0,.24)] ring-1 ring-edge" : "bg-transparent shadow-none ring-0",
       className
     )}>
-      {track && (
-        <RoomLyricsBackdrop
-          key={track.id}
-          track={track}
-          visible={showLyrics}
-          onAvailability={reportLyricsAvailability}
-        />
-      )}
-      {(showHeader || lyricsAvailable) && (
+      {showHeader && (
         <div className="relative z-[1] flex shrink-0 flex-wrap items-center gap-2 border-b border-edge px-3.5 py-3">
-          {showHeader && (
-            <>
-              <MessageCircle size={17} className="shrink-0 text-accent" aria-hidden="true" />
-              <h2 className="min-w-0 flex-1 truncate text-[14px] font-semibold">Chat &amp; activity</h2>
-              <span className="hidden text-[11px] text-fg-2 sm:inline">Room members only</span>
-            </>
-          )}
-          {lyricsAvailable && trackId && (
-            <div className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-fill p-0.5" aria-label="Synced lyrics display">
-              <span className="px-1.5 text-[10px] font-medium text-fg-2">Lyrics</span>
-              <button
-                type="button"
-                aria-label="Show lyrics"
-                aria-pressed={showLyrics}
-                onClick={() => setLyricsPreference({ trackId, show: true })}
-                className={cx("rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors", showLyrics ? "bg-primary text-on-primary" : "text-fg-2 hover:bg-fill-2")}
-              >
-                Show
-              </button>
-              <button
-                type="button"
-                aria-label="Turn lyrics off"
-                aria-pressed={!showLyrics}
-                onClick={() => setLyricsPreference({ trackId, show: false })}
-                className={cx("rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors", !showLyrics ? "bg-primary text-on-primary" : "text-fg-2 hover:bg-fill-2")}
-              >
-                Off
-              </button>
-            </div>
-          )}
+          <MessageCircle size={17} className="shrink-0 text-accent" aria-hidden="true" />
+          <h2 className="min-w-0 flex-1 truncate text-[14px] font-semibold">Chat &amp; activity</h2>
+          <span className="hidden text-[11px] text-fg-2 sm:inline">Room members only</span>
         </div>
       )}
       <div
@@ -428,7 +366,7 @@ export default function RoomChatPanel({
                           <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-fg-2"><LoaderCircle size={11} className="animate-spin" /> Sending…</span>
                         ) : mine ? (
                           seen ? (
-                            <CheckCheck size={13} className="shrink-0 text-playing" aria-label="Seen" />
+                            <CheckCheck size={13} className="shrink-0 text-emerald-500" aria-label="Seen" />
                           ) : (
                             <Check size={12} className="shrink-0 text-fg-2" aria-label="Sent" />
                           )
@@ -484,6 +422,22 @@ export default function RoomChatPanel({
           <span>{newMessageCount}</span>
         </button>
       )}
+      {typingPeers.length > 0 && (
+        <div className="relative z-[1] flex items-center gap-2 border-t border-edge/60 bg-fill/40 px-3.5 py-2 text-[12px] text-fg-2">
+          <span className="flex items-center gap-1">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-fg-2 [animation-delay:0ms]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-fg-2 [animation-delay:150ms]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-fg-2 [animation-delay:300ms]" />
+          </span>
+          <span className="truncate">
+            {typingPeers.length === 1
+              ? `${typingPeers[0]} is typing…`
+              : typingPeers.length === 2
+                ? `${typingPeers[0]} and ${typingPeers[1]} are typing…`
+                : `${typingPeers[0]} and ${typingPeers.length - 1} others are typing…`}
+          </span>
+        </div>
+      )}
       {replyTarget && (
         <div className="relative z-[1] flex items-center gap-2 border-t border-edge bg-fill/60 px-3 py-2">
           <div className="min-w-0 flex-1 rounded-[10px] bg-fill-2 px-2.5 py-1.5">
@@ -529,14 +483,22 @@ export default function RoomChatPanel({
           ref={inputRef}
           value={draft}
           onChange={(event) => {
-            setDraft(event.target.value.slice(0, ROOM_LIMITS.chatMessageLength));
+            const next = event.target.value.slice(0, ROOM_LIMITS.chatMessageLength);
+            setDraft(next);
             caretRef.current = { start: event.target.selectionStart ?? 0, end: event.target.selectionEnd ?? 0 };
+            void notifyTyping(next.trim().length > 0);
           }}
           onSelect={(event) => {
             caretRef.current = { start: event.currentTarget.selectionStart ?? 0, end: event.currentTarget.selectionEnd ?? 0 };
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault();
+          }}
+          onBlur={() => {
+            // Small delay before clearing typing so quick focus switches don't flicker
+            setTimeout(() => {
+              if (!draft.trim()) void sendRoomTyping(false);
+            }, 800);
           }}
           maxLength={ROOM_LIMITS.chatMessageLength}
           placeholder="Write a message…"
