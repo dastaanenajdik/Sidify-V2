@@ -38,6 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ code
           const current = me.readUpTo ? r.chat.findIndex((m) => m.id === me!.readUpTo) : -1;
           if (target > current) {
             me.readUpTo = seenId;
+            r.seq++;
             seenAdvanced = true;
           }
         }

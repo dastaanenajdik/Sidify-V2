@@ -38,6 +38,8 @@ export const ROOM_LIMITS = {
    * grow without bound. Keep enough headroom that the relay never truncates.
    */
   signalDataLength: 48_000,
+  /** Typing indicator stays visible for this long after last keystroke */
+  typingTtlMs: 4_000,
 } as const;
 
 /** Six characters; no I, L or O, so a code read aloud can't be misheard. */
@@ -67,6 +69,8 @@ export interface RoomMember {
   lastSeen: number;
   /** Latest chat message id this member has scrolled past / read (read receipts). */
   readUpTo?: string;
+  /** Server ms until which this member is shown as typing */
+  typingUntil?: number;
 }
 
 export interface RoomActivity {
@@ -510,6 +514,35 @@ export function touch(rec: RoomRecord, memberId: string, now: number): boolean {
   return true;
 }
 
+export function setTyping(rec: RoomRecord, memberId: string, now: number, isTyping: boolean): boolean {
+  const m = rec.members.find((x) => x.id === memberId);
+  if (!m) return false;
+  if (isTyping) {
+    const next = now + ROOM_LIMITS.typingTtlMs;
+    if (m.typingUntil === next) return false;
+    m.typingUntil = next;
+    rec.seq++;
+    return true;
+  } else {
+    if (!m.typingUntil) return false;
+    delete m.typingUntil;
+    rec.seq++;
+    return true;
+  }
+}
+
+export function clearExpiredTyping(rec: RoomRecord, now: number): boolean {
+  let changed = false;
+  for (const m of rec.members) {
+    if (m.typingUntil && now > m.typingUntil) {
+      delete m.typingUntil;
+      changed = true;
+    }
+  }
+  if (changed) rec.seq++;
+  return changed;
+}
+
 /**
  * Housekeeping on every access: drop members who vanished, advance a track
  * nobody reported finishing, and mark the room dead when it's empty or old.
@@ -523,6 +556,7 @@ export function sweep(rec: RoomRecord, now: number): boolean {
       changed = true;
     }
   }
+  if (clearExpiredTyping(rec, now)) changed = true;
   if (!rec.members.length && rec.emptySince && now - rec.emptySince > ROOM_LIMITS.emptyTtlMs) {
     rec.dead = true;
     changed = true;

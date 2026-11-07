@@ -220,6 +220,9 @@ let syncing = false;
 let announcementHoldUntil = 0;
 let departureQueue: string[] = [];
 let announcingDeparture = false;
+let lastTypingSentAt = 0;
+let typingActive = false;
+let stopTypingTimer: ReturnType<typeof setTimeout> | null = null;
 
 function clearStart() {
   if (startTimer) clearTimeout(startTimer);
@@ -541,6 +544,12 @@ function cleanup(message?: string) {
   stopSync();
   lastSeq = 0;
   samples.length = 0;
+  typingActive = false;
+  lastTypingSentAt = 0;
+  if (stopTypingTimer) {
+    clearTimeout(stopTypingTimer);
+    stopTypingTimer = null;
+  }
   R().set({ session: null, room: null, status: "idle", needsTap: false, presence: {}, rttMs: null, resumePrompt: false, seenChatId: null });
   usePlayer.getState().set({ isLoading: false, tiers: {} });
   if (message) toast(message, "Your music keeps playing here", "info");
@@ -668,6 +677,8 @@ export async function sendRoomChat(text: string, id?: string, replyToId?: string
   const { session } = R();
   const message = text.trim().slice(0, 300);
   if (!session || !message) return false;
+  // Stop typing immediately when a message is sent
+  try { void sendRoomTyping(false); } catch {}
   try {
     const { status, data } = await call<RoomReply>(`/api/rooms/${session.code}/chat`, {
       method: "POST",
@@ -721,6 +732,46 @@ export async function editRoomChat(messageId: string, text: string): Promise<boo
     toast("Couldn't edit that message", "Check your connection and try again", "warn");
     return false;
   }
+}
+
+export async function sendRoomTyping(isTyping: boolean): Promise<void> {
+  const session = R().session;
+  if (!session) return;
+  const now = Date.now();
+  if (isTyping) {
+    // Throttle typing pings to avoid spamming the server
+    if (typingActive && now - lastTypingSentAt < 1500) return;
+    typingActive = true;
+    lastTypingSentAt = now;
+    if (stopTypingTimer) clearTimeout(stopTypingTimer);
+    // Auto-clear typing after TTL + small margin if user stops interacting
+    stopTypingTimer = setTimeout(() => {
+      typingActive = false;
+      void sendRoomTyping(false);
+    }, ROOM_LIMITS.typingTtlMs + 500);
+  } else {
+    if (!typingActive) return;
+    typingActive = false;
+    if (stopTypingTimer) {
+      clearTimeout(stopTypingTimer);
+      stopTypingTimer = null;
+    }
+  }
+  try {
+    const { status, data } = await call<RoomReply>(`/api/rooms/${session.code}/typing`, {
+      method: "POST",
+      body: JSON.stringify({ typing: isTyping }),
+    });
+    if (data?.room) receive(data.room, "chat");
+  } catch {
+    // typing is best-effort, ignore failures
+  }
+}
+
+export function notifyTyping(hasText: boolean) {
+  if (!R().session) return;
+  if (hasText) void sendRoomTyping(true);
+  else void sendRoomTyping(false);
 }
 
 /**
