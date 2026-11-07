@@ -1,13 +1,31 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { DEFAULT_OG_IMAGE, SITE_NAME } from "@/lib/seo";
 
-/**
- * Metadata-only layout: the page below is a client component, which cannot
- * export `metadata`, so the route title lives here instead (same pattern as
- * `src/app/app/layout.tsx`). The root layout's `%s · Sidify` template applies.
- */
 export const metadata: Metadata = {
-  title: "Explore",
+  title: "Explore Music Genres, Moods & Trending Songs",
+  description:
+    "Explore trending songs, new music releases, Bollywood hits, Punjabi songs, Pop, Hip-Hop, Lo-Fi beats, Workout, Chill and Romance mixes free on Sidify.",
+  keywords: [
+    "explore music",
+    "music genres",
+    "mood playlists",
+    "trending songs",
+    "Bollywood songs",
+    "Punjabi music",
+    "Lo-Fi beats",
+    "Sidify explore",
+  ],
+  alternates: { canonical: "/explore" },
+  openGraph: {
+    type: "website",
+    siteName: SITE_NAME,
+    title: "Explore Music Genres, Moods & Trending Songs · Sidify",
+    description:
+      "Browse 26+ music moods and genres — Bollywood, Punjabi, Pop, Hip-Hop, Lo-Fi, Workout & more on Sidify.",
+    url: "/explore",
+    images: [DEFAULT_OG_IMAGE],
+  },
 };
 
 export default function Layout({ children }: { children: ReactNode }) {

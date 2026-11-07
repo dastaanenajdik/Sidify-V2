@@ -40,6 +40,15 @@ const nextConfig: NextConfig = {
         headers: [{ key: "Cache-Control", value: "public, max-age=3600" }],
       },
       {
+        source: "/:file(robots\\.txt|sitemap\\.xml|llms\\.txt|humans\\.txt)",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=3600, stale-while-revalidate=86400",
+          },
+        ],
+      },
+      {
         // PWA/app icons and local cover art change only with a release. Next
         // serves `public/` with `max-age=0` by default, so repeat visits
         // revalidated (and on flaky networks re-downloaded) every icon and

@@ -50,6 +50,17 @@ function isApi(url) {
   return url.pathname.startsWith("/api/");
 }
 
+function isSeoOrCrawlerFile(url) {
+  return (
+    url.pathname === "/robots.txt" ||
+    url.pathname === "/sitemap.xml" ||
+    url.pathname === "/llms.txt" ||
+    url.pathname === "/humans.txt" ||
+    url.pathname.startsWith("/opengraph-image") ||
+    url.pathname.startsWith("/twitter-image")
+  );
+}
+
 function isStaticAsset(url) {
   return (
     url.pathname.startsWith("/_next/static/") ||
@@ -64,8 +75,8 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
 
-  // Never cache live API traffic (search, stream, library).
-  if (isApi(url)) return;
+  // Never cache live API traffic (search, stream, library) or SEO/crawler metadata endpoints.
+  if (isApi(url) || isSeoOrCrawlerFile(url)) return;
 
   // Never cache YouTube thumbnails/media or cross-origin requests.
   if (url.origin !== self.location.origin) return;

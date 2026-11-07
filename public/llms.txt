@@ -1,0 +1,23 @@
+# Sidify
+
+> Sidify is a free, ad-free online music and song streaming web player and Android app — built for playing full songs, reading real-time synced lyrics, discovering personalized Spotify-style mixes and song radio, listening together with friends in live rooms, and watching HD movies and series.
+
+## Official Links
+
+- Website: https://sidify.vercel.app/
+- Search Songs, Artists, Albums & Movies: https://sidify.vercel.app/search
+- Explore Music Genres & Moods: https://sidify.vercel.app/explore
+- Listen Together Rooms: https://sidify.vercel.app/rooms
+- Free Android App (APK): https://sidify.vercel.app/app
+- Movies Catalogue: https://sidify.vercel.app/movies
+- Series Catalogue: https://sidify.vercel.app/series
+- Exclusive Collection: https://sidify.vercel.app/exclusive
+- Sitemap: https://sidify.vercel.app/sitemap.xml
+
+## Core Music & Song Features
+
+- **Free Full-Song Music Streaming**: Instant playback of Hindi, Bollywood, Punjabi, English Pop, Hip-Hop, Rock, K-Pop, Lo-Fi, Devotional, and Classical songs in the browser with no sign-up or ads.
+- **Time-Synced Lyrics**: Word-for-word and line-by-line synchronized song lyrics with tap-to-seek and live translations.
+- **Personalized Mixes & Song Radio**: Smart AutoPlay radio, Quick Picks, Today's Hits, and personalized "Your Mix" playlists similar to modern streaming players like Spotify and Apple Music.
+- **Listen Together Rooms**: Create or join a room code to hear the exact same song at the exact same second with friends, complete with live chat and low-latency voice/video calls.
+- **Offline Downloads & Android App**: Save songs offline in the PWA or install the native Android APK featuring background playback and a 5-band studio equalizer.

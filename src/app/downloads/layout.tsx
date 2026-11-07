@@ -1,13 +1,11 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
-/**
- * Metadata-only layout: the page below is a client component, which cannot
- * export `metadata`, so the route title lives here instead (same pattern as
- * `src/app/app/layout.tsx`). The root layout's `%s · Sidify` template applies.
- */
 export const metadata: Metadata = {
   title: "Downloads",
+  description: "Offline songs saved to your device on Sidify.",
+  alternates: { canonical: "/downloads" },
+  robots: { index: false, follow: true },
 };
 
 export default function Layout({ children }: { children: ReactNode }) {

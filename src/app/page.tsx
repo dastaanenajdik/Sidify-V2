@@ -247,7 +247,81 @@ export default function HomePage() {
           ))}
         </div>
       )}
+
+      <HomeSeoFooter />
     </div>
+  );
+}
+
+const FEATURED_SEO_GENRES = [
+  { slug: "bollywood", label: "Bollywood Songs" },
+  { slug: "punjabi", label: "Punjabi Music" },
+  { slug: "pop", label: "Pop Hits" },
+  { slug: "hip-hop", label: "Hip-Hop" },
+  { slug: "lofi", label: "Lo-Fi Beats" },
+  { slug: "romance", label: "Romantic Songs" },
+  { slug: "workout", label: "Workout Music" },
+  { slug: "chill", label: "Chill Songs" },
+  { slug: "rock", label: "Rock Anthems" },
+  { slug: "party", label: "Party Songs" },
+  { slug: "k-pop", label: "K-Pop" },
+  { slug: "devotional", label: "Devotional Songs" },
+] as const;
+
+function HomeSeoFooter() {
+  return (
+    <footer
+      aria-label="About Sidify music and song streaming"
+      className="mt-12 border-t border-edge/60 px-4 pt-8 pb-4 text-[13px] leading-relaxed text-fg-3 desk:px-8"
+    >
+      <div className="max-w-4xl space-y-3">
+        <h2 className="text-[14px] font-semibold text-fg-2">
+          Sidify — Free Online Music &amp; Song Streaming Player
+        </h2>
+        <p>
+          Stream full songs and music online for free on <strong className="font-medium text-fg-2">Sidify</strong>.
+          Play Hindi, Bollywood, Punjabi and English songs ad-free with real-time synced lyrics, personalized mixes,
+          Spotify-style smart song radio, custom playlists, offline song downloads,{" "}
+          <Link href="/rooms" className="text-fg-2 underline-offset-2 hover:underline">
+            Listen Together rooms
+          </Link>
+          , the free{" "}
+          <Link href="/app" className="text-fg-2 underline-offset-2 hover:underline">
+            Sidify Android app
+          </Link>
+          , and HD{" "}
+          <Link href="/movies" className="text-fg-2 underline-offset-2 hover:underline">
+            movies
+          </Link>{" "}
+          &amp;{" "}
+          <Link href="/series" className="text-fg-2 underline-offset-2 hover:underline">
+            series
+          </Link>
+          .
+        </p>
+        <nav aria-label="Popular music categories and pages" className="flex flex-wrap gap-x-3 gap-y-1.5 pt-1">
+          <Link href="/search" className="text-fg-2 hover:text-fg hover:underline">
+            Search Songs
+          </Link>
+          <span aria-hidden="true">·</span>
+          <Link href="/explore" className="text-fg-2 hover:text-fg hover:underline">
+            Explore Music
+          </Link>
+          <span aria-hidden="true">·</span>
+          <Link href="/exclusive" className="text-fg-2 hover:text-fg hover:underline">
+            Exclusive Collection
+          </Link>
+          {FEATURED_SEO_GENRES.map((g) => (
+            <span key={g.slug} className="inline-flex items-center gap-3">
+              <span aria-hidden="true">·</span>
+              <Link href={`/explore/${g.slug}`} className="hover:text-fg-2 hover:underline">
+                {g.label}
+              </Link>
+            </span>
+          ))}
+        </nav>
+      </div>
+    </footer>
   );
 }
 
