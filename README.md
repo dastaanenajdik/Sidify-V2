@@ -163,6 +163,45 @@ Environment variables:
 | `MEDIA_PLAYBACK_MANIFEST` | optional | JSON map of verified HTTPS HLS/MP4/WebM URLs, `{"movie/<slug>":[{"url":"https://…","type":"hls"}]}` |
 | `NEXT_PUBLIC_JWPLAYER_LIBRARY_URL` | optional | Your JW Dashboard player library URL — when set, Try Play on movies/series runs on JW Player (same resolved links; unset keeps the built-in Shaka player) |
 
+### When the site says “This deployment is temporarily paused”
+
+That page is served by **Vercel itself**, not by this app — it never reaches a
+build of this repo, and no commit can create or clear it. It means the Vercel
+**team/account** is paused, almost always because a Hobby plan crossed a usage
+limit (Fluid Active CPU, Fast Data Transfer / edge requests) or a hold was placed
+on the account. Every deployment of every project on that account shows the same
+page, including a brand-new production deploy of this commit.
+
+To bring the site back:
+
+1. Open **Vercel → your team → Settings → Usage** (and **Billing**) and look for
+   the limit that is over 100% and the banner naming the paused state.
+2. Clear it — upgrade the team to **Pro**, raise the spend limit, or contact
+   Vercel support if the account was flagged. A Hobby team starts answering again
+   by itself only after the 30-day usage window rolls over; redeploying does not
+   resume it.
+3. After the team is un-paused, production comes back on its own. To ship the
+   latest commit immediately, **Redeploy** the newest Production deployment (or
+   push a commit — this repo deploys on every push to `main`).
+
+What this app does to stay inside a free quota (all of it already in place):
+
+- Catalogue routes (`/api/home`, `/api/search`, `/api/album/*`, `/api/artist/*`,
+  `/api/explore`, `/api/media/*`, `/api/lyrics`, `/api/stream` probe) answer with
+  `s-maxage` + `stale-while-revalidate`, so repeats are served by the CDN and
+  never re-run YouTube extraction on the function.
+- Repeat requests inside one page are deduplicated (`fetchJsonDedup`) and
+  debounced (search, 320 ms), and Listen Together polls back off to 2.5 s while
+  the tab is hidden.
+- The library is local-first: with no `DATABASE_URL`, likes/playlists/history
+  stay in the browser and `/api/health` still reports healthy.
+
+The one thing a free plan cannot avoid is audio itself: the Web Audio engine
+needs same-origin bytes, so every played second of a song passes through
+`/api/stream?play=1` and counts as Fast Data Transfer. If the site is paused for
+transfer repeatedly, that is the line to reduce (Vercel Pro, a smaller audio
+format, or self-hosting).
+
 ---
 
 ## Movies & Series

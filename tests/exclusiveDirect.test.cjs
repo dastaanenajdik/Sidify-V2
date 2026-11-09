@@ -659,11 +659,11 @@ test('the direct module never imports a server secret', () => {
   assert.doesNotMatch(source, /Buffer\./, 'no Node-only globals');
   assert.match(source, /^"use client";/m);
 
-  for (const module of ['vaultPlayback.ts', 'vaultStreamToken.ts']) {
-    const text = fs.readFileSync(path.join(SRC, 'lib/media', module), 'utf8');
-    assert.doesNotMatch(text, /Buffer\./, `${module} must run in a browser`);
-    assert.doesNotMatch(text, /node:/, `${module} must not import a Node built-in`);
-    assert.doesNotMatch(text, /createHmac|MEDIA_VAULT/, `${module} must not carry a secret`);
+  for (const file of ['vaultPlayback.ts', 'vaultStreamToken.ts']) {
+    const text = fs.readFileSync(path.join(SRC, 'lib/media', file), 'utf8');
+    assert.doesNotMatch(text, /Buffer\./, `${file} must run in a browser`);
+    assert.doesNotMatch(text, /node:/, `${file} must not import a Node built-in`);
+    assert.doesNotMatch(text, /createHmac|MEDIA_VAULT/, `${file} must not carry a secret`);
   }
 });
 

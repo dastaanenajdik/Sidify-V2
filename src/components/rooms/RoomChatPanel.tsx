@@ -116,6 +116,10 @@ export default function RoomChatPanel({
       if (m.typingUntil && m.typingUntil > nowTick) names.push(m.name);
     }
     return names;
+    // `seq` is deliberate even though it is not read above: a poll can deliver a new
+    // room snapshot with the same member array identity (an edited typing window),
+    // and keying on the sequence number is what makes the indicator track it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room.members, you, nowTick, room.seq]);
 
   const entries = useMemo(() => {

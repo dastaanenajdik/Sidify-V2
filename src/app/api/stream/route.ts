@@ -37,9 +37,13 @@ export async function GET(req: NextRequest) {
           audio_url: null,
           reason: "stream_unavailable",
         },
-        { status: 503 }
+        { status: 503, headers: { "cache-control": "no-store" } }
       );
     }
+    // The probe answer depends only on the video id — never on the visitor — so let
+    // Vercel's CDN hold it. `probeNative()` asks this once per track before a song
+    // starts; serving the repeats at the edge keeps InnerTube resolution (the most
+    // CPU-hungry thing this app does) off the function quota.
     return NextResponse.json({
       success: true,
       video_id: videoId,
@@ -53,6 +57,8 @@ export async function GET(req: NextRequest) {
       content_length: resolved.contentLength ?? null,
       bitrate:
         resolved.contentLength && resolved.duration ? Math.round((resolved.contentLength * 8) / resolved.duration) : null,
+    }, {
+      headers: { "cache-control": "public, s-maxage=600, stale-while-revalidate=1800" },
     });
   }
 
@@ -101,6 +107,6 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(
     { success: false, error: "stream_unavailable", video_id: videoId },
-    { status: 503 }
+    { status: 503, headers: { "cache-control": "no-store" } }
   );
 }
