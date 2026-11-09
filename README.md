@@ -165,24 +165,40 @@ Environment variables:
 
 ### When the site says “This deployment is temporarily paused”
 
-That page is served by **Vercel itself**, not by this app — it never reaches a
-build of this repo, and no commit can create or clear it. It means the Vercel
-**team/account** is paused, almost always because a Hobby plan crossed a usage
-limit (Fluid Active CPU, Fast Data Transfer / edge requests) or a hold was placed
-on the account. Every deployment of every project on that account shows the same
-page, including a brand-new production deploy of this commit.
+That page is served by **Vercel itself** (`503 DEPLOYMENT_PAUSED`), not by this
+app — the request never reaches a build of this repo, and no commit can create or
+clear it. Vercel's own status API is the quickest way to confirm it: a commit's
+status shows `Vercel — failure — Account is blocked`, and *every* deployment of
+every project on that team answers the same page, including a brand-new
+production deploy of the latest commit.
 
-To bring the site back:
+[Vercel's guide](https://vercel.com/kb/guide/why-is-my-account-deployment-blocked)
+lists four causes; check them in this order:
 
-1. Open **Vercel → your team → Settings → Usage** (and **Billing**) and look for
-   the limit that is over 100% and the banner naming the paused state.
-2. Clear it — upgrade the team to **Pro**, raise the spend limit, or contact
-   Vercel support if the account was flagged. A Hobby team starts answering again
-   by itself only after the 30-day usage window rolls over; redeploying does not
-   resume it.
-3. After the team is un-paused, production comes back on its own. To ship the
-   latest commit immediately, **Redeploy** the newest Production deployment (or
-   push a commit — this repo deploys on every push to `main`).
+1. **Spend Management** (Pro) — the team pauses production once a set spend is
+   reached. Team → *Settings → Billing → Spend Management*: raise the amount, then
+   open each paused project and **Resume** it (or call the REST
+   `unpause-a-project` endpoint). Raising the cap alone does not resume anything.
+2. **Usage limits / quotas** — Hobby's fair-use ranges for Fluid Active CPU, Fast
+   Data Transfer and edge requests. Team → *Settings → Usage* shows the line that
+   is over 100%. Upgrading to **Pro** or cutting the load resolves it; a Hobby team
+   otherwise only starts answering again after the 30-day window rolls over.
+3. **Policy / fair use** — Hobby is for **non-commercial personal use only**, and
+   a streaming app that proxies media is exactly what this rule is aimed at. Vercel
+   emails the account owner with the specifics; if that email exists, follow it,
+   otherwise the block stands and the project needs **Pro** or another host.
+4. **Platform incident or billing problem** — check
+   [vercel-status.com](https://www.vercel-status.com/) and *Settings → Billing*
+   for an unpaid invoice.
+
+After the team is un-paused, production serves by itself; to ship the newest commit
+immediately, **Redeploy** the latest Production deployment (or push to `main`).
+
+If the block is policy-based and upgrading is not an option, the app is a plain
+Node.js server and runs unchanged elsewhere — `npm ci && npm run build && npm start`
+on any container/VM host (Vercel-specific pieces are only `next.config.ts`'s
+`allowedDevOrigins` and the optional `VERCEL_GIT_COMMIT_SHA` readout), with
+`DATABASE_URL` optional as always.
 
 What this app does to stay inside a free quota (all of it already in place):
 
